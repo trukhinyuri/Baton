@@ -13,6 +13,11 @@ USAGE
   claude-profiles sync                          Share local Code sessions; inspect Cowork without copying it
   claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
   claude-profiles doctor [--json]               Read-only session, folder and Remote Control checks
+  claude-profiles cowork-history PROFILE [--json]
+                                                 List owned local Cowork tasks with actual readable history
+  claude-profiles workspace-info PATH [--json]    Verify saved context and show coverage and native links
+  claude-profiles workspace-export PATH --to NEW_FOLDER --revision N
+                                                 Export the reviewed revision; never uploads or sends it
   claude-profiles handoff --from PROFILE --to PROFILE --title TEXT --context FILE
                          [--folder PATH] [--source-url URL] [--open]
                                                  Save reviewed context for a new conversation; never sends it
@@ -115,6 +120,47 @@ do {
             else { try await manager.open(resolve(to).id) }
             if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
         }
+    case "cowork-history":
+        guard args.count >= 2 else { fail("cowork-history needs a source profile") }
+        let isMain = ["main", "claude"].contains(args[1].lowercased())
+        let profile = isMain ? nil : resolve(args[1])
+        let reader = CoworkHistory(dataDir: profile.map { manager.paths.dataDir(for: $0.id) } ?? manager.paths.mainDataDir,
+                                   profile: profile?.id ?? "main")
+        let inventory = try reader.inventory()
+        if args.contains("--json") {
+            struct Listing: Encodable { let entries: [CoworkHistory.Entry]; let issues: [String] }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            print(String(decoding: try encoder.encode(Listing(entries: inventory.entries, issues: inventory.issues)), as: UTF8.self))
+        } else {
+            print("Local Cowork history in \(profile?.label ?? "MAIN"); cloud-only tasks are not listed.")
+            for entry in inventory.entries { print("\(entry.id) · \(entry.title) · \(entry.organizationID)") }
+            for issue in inventory.issues { FileHandle.standardError.write(Data(("Unavailable: " + issue + "\n").utf8)) }
+        }
+    case "workspace-info":
+        guard args.count >= 2 else { fail("workspace-info needs a saved workspace folder") }
+        let snapshot = try ContinuityWorkspace(directory: URL(fileURLWithPath: args[1])).load()
+        if args.contains("--json") {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            print(String(decoding: try encoder.encode(snapshot), as: UTF8.self))
+        } else {
+            print("\(snapshot.title) · revision \(snapshot.revision) · \(snapshot.entries.count) captured entries")
+            print("Recorded active profile: \(snapshot.activeProfile). This record does not stop native cloud tasks.")
+            if snapshot.coverage.isEmpty { print("Coverage has not been assessed.") }
+            for item in snapshot.coverage { print("\(item.status.rawValue): \(item.component) — \(item.detail)") }
+            for gap in snapshot.limitations { print("Limitation: \(gap)") }
+            for (profile, url) in snapshot.mirrors.sorted(by: { $0.key < $1.key }) { print("\(profile): \(url.absoluteString)") }
+            print("Saved bytes verified. Destination access and actual context loading have not been checked by this command.")
+        }
+    case "workspace-export":
+        guard args.count >= 2, let destination = value(of: "--to", in: args),
+              let revisionText = value(of: "--revision", in: args), let revision = Int(revisionText), revision >= 0
+        else { fail("workspace-export needs PATH, --to NEW_FOLDER and --revision N from workspace-info") }
+        let package = try ContinuityWorkspace(directory: URL(fileURLWithPath: args[1]))
+            .export(to: URL(fileURLWithPath: destination), expectedRevision: revision)
+        print("Exported workspace \(package.workspaceID.uuidString) revision \(package.revision).")
+        print("Complete captured text: \(package.contextFile.path)")
+        print("All captured bytes: \(package.archiveFile.path)")
+        print("Review before sharing. No files were uploaded and no Claude message was sent.")
     case "refresh":
         try manager.refresh()
         print("Profiles are up to date with Claude Desktop.")

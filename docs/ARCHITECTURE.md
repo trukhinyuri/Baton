@@ -1,6 +1,6 @@
 # Architecture
 
-Claude Profiles is a thin layer around the official Claude Desktop app. It never changes how Claude talks to Anthropic; it only decides which data directory each Claude window uses and keeps a few local files consistent between them.
+Claude Profiles is a thin layer around the official Claude Desktop app. It never changes how Claude talks to Anthropic. It selects each window's data directory, synchronizes eligible local data, and can save explicitly selected context for a new native conversation in another account.
 
 ```text
                 ┌──────────────────────── Claude Profiles.app ────────────────────────┐
@@ -23,6 +23,8 @@ A profile is three things, all derived from a registry entry in `~/Library/Appli
 3. **Launcher.** A tiny app bundle whose executable is a shell script calling `claude-profiles open <id>`, with a fallback to `open -n -a <engine> --args --user-data-dir=<dir>`. Launchers can be kept in the Dock and are indexed by Spotlight. An engine opened directly starts without its data directory and shows the main app's account: that happens when a running profile window is kept with **Keep in Dock** and its icon is clicked later, or when macOS reopens windows at login. See [Windows opened without their profile](#windows-opened-without-their-profile).
 
 Engines are rebuilt when `CFBundleVersion` of the installed Claude differs from the clone’s and the profile isn’t running (`ProfileManager.refresh()` and on open).
+
+`EngineInstall` builds a sibling staging bundle with `clonefile` or a copy fallback. It checks the source and staged bundle's version, identifier, executable and code signature before replacement. An existing destination is exchanged atomically with the stage using `renamex_np(RENAME_SWAP)`, preserving the old engine until post-install validation succeeds. Failed validation exchanges it back; a failed rollback retains the previous bundle and reports its path. Only the installer's own staging bundle is disposable. The profile manager serializes engine changes and ensures the profile is closed. This engine rollback is distinct from the application installer, which retains `.previous-<date>-<id>.app` beside Claude Profiles itself.
 
 ## Windows opened without their profile
 
@@ -74,7 +76,7 @@ The observed Desktop loader resolves Cowork history inside the current data dire
 
 Cowork synchronization is consequently inventory-only: no card propagation, path rewriting, linking, deletion, or synchronization-state writes. Existing cards and former `cowork-sync.json` and native-scope records remain untouched; they are not removed or treated as permission to resume copying. `CoworkSync.removeCards(workingIn:)` does nothing. Modern cloud Cowork sessions, project caches and schedules are also never transferred between profiles.
 
-Continue legacy local Cowork in the original profile, or use a reviewed context handoff to start a new conversation elsewhere. The handoff does not migrate the original transcript or VM runtime. Diagnostics report missing adjacent local history to help identify old card copies; they cannot reconstruct missing history.
+Continue the original legacy local Cowork session in its original profile, or explicitly capture its available context for a new conversation elsewhere. The capture described below saves transcript bytes as reference data; it does not register those transcripts as another account's original native conversation or migrate the VM runtime. Diagnostics report missing adjacent local history to help identify old card copies; they cannot reconstruct missing history.
 
 The app synchronizes eligible Code cards at launch and every minute while running (it stays in the menu bar when the window is closed); `claude-profiles sync` does the same on demand. Removing a profile synchronizes Code once more after its window quits, so sessions started in it moments ago are retained. The removed profile's legacy local Cowork files move to the Trash with its data directory. Cowork cards in other profiles remain unchanged and do not preserve those files.
 
@@ -116,6 +118,46 @@ The upstream capabilities change independently of this application: [Code Projec
 
 Handoffs are Markdown files under `Handoffs/` in the Claude Profiles state directory, created with mode `0600` in a `0700` directory. The prompt distinguishes quoted source content from user authorization and asks the destination to verify required files and tools before continuing. A handoff does not migrate the original cloud conversation or legacy local Cowork session, its memory, files, runtime, permissions or background jobs. The source must stop working on the same task before the destination continues it.
 
+## Captured continuity workspaces
+
+`ContinuityWorkspace` is a private canonical context store under `Workspaces/<UUID>`, separate from native Claude storage. `LATEST.json` identifies an immutable snapshot and includes hashes for its manifest and generated `CONTINUE.md` instructions. The manifest contains the workspace identity and revision, source profile/link, entries with provenance/size/SHA-256, component coverage and limitations, a mapping of profiles to separate native conversation links, and one recorded active profile. Payload files use generated names and are stored as data rather than executable instructions. Historical source text remains untrusted context.
+
+Publishing appends new logical paths while retaining earlier entries. An identical path and identical contents are idempotent; changing an existing logical path requires a new capture path. File inputs must match the reviewed size and hash. Private staging completes before an atomic `LATEST.json` update makes the snapshot visible. `FileLock` and an expected revision reject stale writers. Loading verifies the instruction file, manifest and every referenced payload. Relative-path checks and symlink rejection keep supplied paths inside the intended storage; workspace directories use `0700` and files `0600`.
+
+Registering a destination stores a separate native URL, not a rewritten source object ID. Activating it requires a current revision, a recorded destination and caller acknowledgement that the previous source is paused. This is local workflow state, not an execution lock in Claude. The app cannot prevent someone from manually resuming another window or a cloud worker. The destination must verify context and required access before receiving the separate work prompt. New context must be captured and appended before another switch.
+
+### Local Cowork capture
+
+`CoworkHistory` reads the selected task from its configured profile/account/organization root. It rediscovers the card and current transcript identity rather than trusting caller-supplied file paths. The capture includes exact UTF-8 JSONL records in the task's local transcript tree, available rewind/subagent history and supported transcript metadata. It inventories and hashes supported `outputs` and `uploads` files. Scoped parent-project metadata/instructions and local project memory are captured where present. It does not automatically include other tasks, profile-wide memory, external working folders, cloud-only Library content or credentials/configuration. Each missing or excluded component is described in the capture's limitations.
+
+Malformed records, truncated history, ambiguous identities, unsafe paths and size/count limits produce an error rather than a silently shortened transcript. Source identity and contents are checked while reading. `CoworkContinuation.save` repeats the capture after review and requires it to match before publishing. Selected artifact bytes are checked again against the reviewed hashes during workspace publication. A failed save cannot advance the prior workspace revision.
+
+The saved capture contains the quoted overview, each raw transcript, separate project context documents, source metadata and copied task artifacts. Coverage can describe available local history as complete without describing the whole task or Project as complete: artifacts and project context retain their own partial/unavailable status, and runtime/tool grants are unavailable. A saved byte is not proof that the destination model has read it.
+
+The Cowork GUI first copies a read-only bootstrap check. After the user reviews the destination's answer and records its native link, it records that profile as active and copies a separate work prompt. It does not send either prompt. A Project coordinator without local file access may use one read-only helper solely to inspect the supplied context; this is not permission to resume the original task or change external systems.
+
+### Current-view and bounded capture
+
+`ClaudeContextCapture.captureCurrentView` uses macOS Accessibility to read a supported view from the selected profile process without navigation. The parser keeps supported Project/Cowork content and excludes sidebar navigation, account controls, secure fields and unsent composer drafts. It rejects unsupported/authentication routes. Capture does not enable Accessibility, send messages or call a private cloud API.
+
+Each view snapshot records the source URL, visible sections, pagination/collapsed controls and gaps and remains `currentViewOnly`. `captureAvailableViews`, exposed as **Read available views**, collects these snapshots through a bounded allowlist of native actions. Code Project capture visits supported General settings, memory files, observed thread groups/links, older conversation pages/tool disclosures, Library inventory pagination and supported AX scrolling. Cloud Cowork capture stays within the open conversation's pagination, tools and scrolling; Project navigation is forbidden there.
+
+The native driver verifies process, profile data directory, account, window and canonical source identity and re-reads the expected surface before an action. Time/action/view limits, cancellation and source changes stop the sweep while retaining prior views. The result inventories captured references and unresolved gaps; `isCompleteProject` remains false. Virtualized history, hidden branches and original Library/artifact bytes may still be unavailable. A scroll boundary or missing pagination button is not proof of complete history.
+
+`CapturedViewSheet` previews and saves captured text, metadata, inventory and limitations to a workspace. Preview shortening is not payload truncation. Neither capture mode creates a native destination Project. Automated fixtures cover the collector and parser; a live sweep still requires separate verification with Accessibility access.
+
+Artifact links are provenance and inventory, not a download API. The native Project artifact menu inspected during development exposed no Download action. Only separately supplied originals obtained through supported means can close the corresponding file gap; the capture/export layer cannot promise every cloud artifact's bytes.
+
+`WorkspaceSelectedFiles`, exposed as **Add downloaded/selected files…**, appends the explicitly chosen local originals with byte hashes/provenance and partial Library coverage. It preserves prior captures and does not alter source files, execute them or upload them. The GUI invalidates previous review, destination-verification and export references after adding content. Automated tests cover this path; native attachment ingestion remains a separate live check.
+
+### Portable export
+
+`WorkspaceContinuationSheet`, opened through **Open saved workspace…**, provides inspection, export and separate native-link registration for either capture source. Read-only verification may precede native-link registration: a new Cowork conversation does not receive its URL until its first message. Work activation still requires the reviewed context, a registered destination and acknowledgement that source work has stopped. A user-supplied link is not proof that the selected account owns or can access that object.
+
+`workspace-info PATH [--json]` uses the production workspace loader to verify saved bytes and display coverage and known native links. It does not check authenticated destination access. `workspace-export PATH --to NEW_FOLDER --revision N` exports the explicitly reviewed revision to a previously absent directory. `ContinuityWorkspaceExport` retains all payloads referenced by the current manifest, including earlier captures, while excluding obsolete control manifests and unreferenced files. `CONTEXT.md` contains quoted complete text entries. Entries marked as files are also exported under `files/` with safe prefixed filenames retaining their extensions; `ATTACHMENTS.json` maps them to logical paths, sizes and hashes. Users attach supported files individually through Claude's native picker. `workspace.zip` contains a loadable workspace snapshot and all retained payloads for local backup/restoration; it is not a native Claude import format. No upload, import or message is performed by the exporter.
+
+A live development-build test verified capture, native Markdown upload and one-way reading of a local Cowork task's available text in a new Cowork conversation in another profile. The native picker rejected the ZIP. That pilot contained no binary artifacts, so individual attachment ingestion, a return trip and complete cloud Project capture remain unverified. See [CONTINUITY.md](CONTINUITY.md#validation-record) for the anonymized evidence and limits. None of these files change native Project ownership, copy account grants or guarantee complete cloud context.
+
 ## Diagnostics
 
 **Check sessions** and `claude-profiles doctor [--json]` inspect the local installation without changing it. The report inventories ordinary local Code and Cowork cards separately from account-owned workers, identifies ambiguous worker copies, missing working folders and missing adjacent Cowork history, and shows per-profile Remote Control configuration. Counts describe local inventory, not cross-profile portability. It is a local consistency check, not an authenticated test of cloud Project access or a promise that a Cowork session can resume elsewhere. After a Desktop update, use the report and a small real continuation task to validate the workflow you need.
@@ -132,4 +174,4 @@ Handoffs are Markdown files under `Handoffs/` in the Claude Profiles state direc
 
 ## Testing
 
-All logic lives in `ClaudeProfilesKit` and takes a `Paths` value, so tests run against a temporary home directory and never touch real data. `Backup` accepts a `discard` closure so pruning can be tested without filling the real Trash.
+Storage and synchronization logic lives in `ClaudeProfilesKit` and accepts explicit roots or a `Paths` value, so fixture tests run against temporary directories. `Backup` accepts a `discard` closure so pruning can be tested without filling the real Trash. Engine tests inject copy/validation/exchange failures. Continuity tests exercise byte preservation, changes after review, revision conflicts, corruption, unsafe paths and coverage gaps; Accessibility parser tests use synthetic trees. These tests cannot validate a live account's feature rollout or a destination model's actual use of context. Native application checks and a small real round trip are recorded separately.

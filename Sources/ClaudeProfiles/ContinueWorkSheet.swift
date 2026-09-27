@@ -12,6 +12,9 @@ final class ContinueWorkForm: ObservableObject {
     @Published var sourceURL = ""
     @Published var message = ""
     @Published var opening = false
+    @Published var isReadingCowork = false
+    @Published var isReadingVisibleContext = false
+    @Published var isOpeningWorkspace = false
 }
 
 struct ContinueWorkSheet: View {
@@ -28,11 +31,14 @@ struct ContinueWorkSheet: View {
                 Button("Share local sessions now") { model.syncNow() }
             }
             Divider()
-            Text("Projects and Cowork: continue with context").font(.headline)
-            Text("Cloud history stays with its account; local Cowork history and runtime stay in their original profile. Continue in a new conversation with reviewed context: ask the source Claude for a handoff, paste it below, and choose the destination. Files and connector access must be available there separately.")
+            Button("Read local Cowork history and files…") { form.isReadingCowork = true }
+            Button("Read visible Project or Cowork context…") { form.isReadingVisibleContext = true }
+            Button("Open saved workspace…") { form.isOpeningWorkspace = true }
+            Text("Optional handoff note").font(.headline)
+            Text("Use the capture tools above to preserve available history without asking the source model. You can also add a reviewed note below. A note or a partial screen capture is not a complete Project transfer. The destination uses a separate native conversation with its own files, tools and permissions.")
                 .font(.callout).foregroundStyle(.secondary)
             Button("Copy handoff request for source Claude") {
-                copy(Handoff.request); form.message = "Request copied. Paste it in the original conversation, then review and paste its answer below. If its limit is reached, use your own summary from the visible history and files."
+                copy(Handoff.request); form.message = "Optional handoff request copied. If the source still has quota, review its answer before using it. A generated summary supplements captured history; it does not prove all context was transferred."
             }
             HStack {
                 Picker("From", selection: $form.source) { ForEach(model.statuses) { Text($0.label).tag($0.id) } }
@@ -58,6 +64,9 @@ struct ContinueWorkSheet: View {
             }
         }
         .padding(22).frame(width: 680)
+        .sheet(isPresented: $form.isReadingCowork) { CoworkContinuationSheet(model: model) }
+        .sheet(isPresented: $form.isReadingVisibleContext) { CapturedViewSheet(model: model) }
+        .sheet(isPresented: $form.isOpeningWorkspace) { WorkspaceContinuationSheet(model: model) }
     }
 
     private func copy(_ text: String) {

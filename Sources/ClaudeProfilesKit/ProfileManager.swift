@@ -255,6 +255,9 @@ public final class ProfileManager: @unchecked Sendable {
             }
             // The app and the CLI may open a profile at the same moment; the merges read and write without Claude's locks.
             _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
+                // A launcher or CLI can start a profile without the manager's background timer.
+                // Claude reads its cards at startup, so wait for a complete additive sync first.
+                _ = try prepareSessionsForLaunch()
                 var problems: [String] = []
                 do { _ = try SettingsSync(paths: paths).run(into: paths.dataDir(for: profile.id)) }
                 catch { problems.append("Setup: \(error.localizedDescription)") }
@@ -272,7 +275,26 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     public func openMain() async throws {
+        if !runningClaudes().contains(where: {
+            $0.uses(dataDir: paths.mainDataDir, mainDataDir: paths.mainDataDir, bundle: paths.claudeApp)
+        }) {
+            _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
+                _ = try prepareSessionsForLaunch()
+            }
+        }
         _ = try await NSWorkspace.shared.openApplication(at: paths.claudeApp, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// Refreshes session cards before a cold launch, even when the manager is not running.
+    /// Opening a window never propagates deletions or migrates account-owned Project/Cowork workers.
+    /// Errors abort the launch instead of silently presenting stale history as successfully shared.
+    @discardableResult
+    func prepareSessionsForLaunch() throws -> SessionSync.Report {
+        guard let report = try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: true, {
+            createSessionFolders()
+            return try SessionSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: false)
+        }) else { throw POSIXError(.EWOULDBLOCK) }
+        return report
     }
 
     // MARK: Remove
@@ -387,12 +409,7 @@ public final class ProfileManager: @unchecked Sendable {
 
     private func cloneEngine(for profile: Profile) throws {
         let engine = paths.engine(for: profile.id)
-        try fm.createDirectory(at: paths.enginesDir, withIntermediateDirectories: true)
-        if fm.fileExists(atPath: engine.path) { try fm.removeItem(at: engine) }
-        if clonefile(paths.claudeApp.path, engine.path, 0) != 0 {
-            let reason = String(cString: strerror(errno))
-            do { try fm.copyItem(at: paths.claudeApp, to: engine) } catch { throw ProfileError.cloneFailed("\(reason); \(error.localizedDescription)") }
-        }
+        try EngineInstall.install(from: paths.claudeApp, to: engine)
         NSWorkspace.shared.setIcon(icon(for: profile), forFile: engine.path, options: [])
     }
 
@@ -475,7 +492,10 @@ enum FileLock {
         let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR, 0o644)
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { close(descriptor) }
-        guard flock(descriptor, LOCK_EX | (blocking ? 0 : LOCK_NB)) == 0 else { return nil }
+        guard flock(descriptor, LOCK_EX | (blocking ? 0 : LOCK_NB)) == 0 else {
+            if !blocking && (errno == EWOULDBLOCK || errno == EAGAIN) { return nil }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         defer { flock(descriptor, LOCK_UN) }
         return try body()
     }

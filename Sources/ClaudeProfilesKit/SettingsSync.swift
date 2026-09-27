@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Darwin
 
 /// Shares an explicit set of portable desktop settings before a profile starts. Account state, Projects,
 /// Remote Control, Cowork grants and unknown future preferences stay with the profile. Portable settings
@@ -8,9 +9,8 @@ import CryptoKit
 ///
 /// Run it only while the profile's window is closed: Claude writes these files back when it quits.
 public struct SettingsSync: Sendable {
-    /// Files and folders copied as they are.
-    static let copied = ["Claude Extensions", "Claude Extensions Settings", "extensions-installations.json",
-                         "ssh_configs.json", "claude-ssh-remote"]
+    /// Local setup assets. Existing profile customizations are preserved at each top-level item.
+    static let copied = ["Claude Extensions Settings", "claude-ssh-remote"]
     /// Claude Code builds the main app has downloaded, one folder per version. Cloning them spares a profile the download.
     static let builds = "claude-code"
     /// Scheduled task switches, which Claude turns on in a window that has tasks. Tasks are kept per account in
@@ -41,19 +41,16 @@ public struct SettingsSync: Sendable {
         let backup = Backup(paths: paths, now: now)
         guard !LocalStorage(dataDir: dataDir).isInUse else { throw LocalStorageError.databaseInUse }
         let stateURL = paths.stateDir.appending(path: "Settings/\(dataDir.lastPathComponent).json")
-        var base = InterfaceSync.readState(stateURL)
+        var base = try Self.readBaseline(stateURL)
         var changed = 0
 
+        changed += try mergeExtensions(into: dataDir, base: &base, backup: backup)
         for name in Self.copied {
-            let from = source.appending(path: name), to = dataDir.appending(path: name)
-            guard fm.fileExists(atPath: from.path), !fm.contentsEqual(atPath: from.path, andPath: to.path) else { continue }
-            if fm.fileExists(atPath: to.path) {
-                _ = try backup.save(to)
-                try fm.trashItem(at: to, resultingItemURL: nil)
-            }
-            try fm.copyItem(at: from, to: to)   // an APFS clone, so extensions take no extra space
-            changed += 1
+            changed += try mergeAsset(source.appending(path: name), into: dataDir.appending(path: name),
+                                      key: "asset:" + name, base: &base, backup: backup)
         }
+
+        changed += try mergeSSH(into: dataDir, base: &base, backup: backup)
 
         changed += try copyBuilds(into: dataDir)
 
@@ -61,7 +58,21 @@ public struct SettingsSync: Sendable {
         if let main = try Self.readExistingJSON(source.appending(path: "claude_desktop_config.json")) {
             let current = try Self.readExistingJSON(desktop) ?? [:]
             var result = current, attempt = base
-            Self.share("mcpServers", main: main, own: current, into: &result, base: &attempt, prefix: "desktop:")
+            if let sourceServers = main["mcpServers"] {
+                guard let servers = sourceServers as? [String: Any],
+                      current["mcpServers"] == nil || current["mcpServers"] is [String: Any] else {
+                    throw LocalStorageError.corrupt("mcpServers must contain a JSON object; the existing configuration was kept")
+                }
+                let ownServers = current["mcpServers"] as? [String: Any] ?? [:]
+                var merged = ownServers
+                for key in servers.keys.sorted() {
+                    Self.sharePreservingChanges(key, main: servers, own: ownServers, into: &merged,
+                                                base: &attempt, prefix: "mcp:")
+                }
+                result["mcpServers"] = merged
+                // The old whole-dictionary baseline cannot establish ownership of individual servers.
+                attempt.removeValue(forKey: "desktop:mcpServers")
+            }
             let mainPrefs = main["preferences"] as? [String: Any] ?? [:]
             let ownPrefs = current["preferences"] as? [String: Any] ?? [:]
             var prefs = ownPrefs
@@ -84,6 +95,232 @@ public struct SettingsSync: Sendable {
         if try copyAppearance(into: dataDir, base: &base) { changed += 1 }
         try InterfaceSync.writeState(base, to: stateURL)
         return changed
+    }
+
+    /// The registry and each installed package describe one unit. Update them together, preserving an
+    /// independently installed/edited destination package and its record instead of mixing versions.
+    private func mergeExtensions(into dataDir: URL, base: inout [String: String], backup: Backup) throws -> Int {
+        let sourceIndex = paths.mainDataDir.appending(path: "extensions-installations.json")
+        let targetIndex = dataDir.appending(path: "extensions-installations.json")
+        let sourceRoot = paths.mainDataDir.appending(path: "Claude Extensions")
+        let targetRoot = dataDir.appending(path: "Claude Extensions")
+        guard try Self.itemType(sourceIndex) == .typeRegular,
+              try Self.itemType(sourceRoot) == .typeDirectory,
+              try Self.itemType(targetIndex) == nil || Self.itemType(targetIndex) == .typeRegular,
+              try Self.itemType(targetRoot) == nil || Self.itemType(targetRoot) == .typeDirectory,
+              let source = try Self.readExistingJSON(sourceIndex), let sourceRecords = Self.extensionRecords(source) else { return 0 }
+        let own = try Self.readExistingJSON(targetIndex) ?? ["extensions": [:]]
+        guard let ownRecords = Self.extensionRecords(own) else { return 0 }
+        var merged = ownRecords, attempt = base, packages: [String: String] = [:]
+        for id in sourceRecords.keys.sorted() {
+            let sourcePackage = sourceRoot.appending(path: id), targetPackage = targetRoot.appending(path: id)
+            guard try Self.itemType(sourcePackage) == .typeDirectory else { continue }
+            let targetType = try Self.itemType(targetPackage)
+            guard targetType == nil || targetType == .typeDirectory else { continue }
+            let sourceHash = try Self.assetFingerprint(sourcePackage)
+            let ownHash = targetType == nil ? nil : try Self.assetFingerprint(targetPackage)
+            let recordHash = Self.fingerprint(sourceRecords[id]!)
+            let ownRecordHash = ownRecords[id].map(Self.fingerprint)
+            let assetKey = "extension-asset:" + id, recordKey = "extension-record:" + id
+            let previousAsset = base[assetKey], previousRecord = base[recordKey]
+            let identical = ownHash == sourceHash && ownRecordHash == recordHash
+            let new = ownHash == nil && ownRecordHash == nil && previousAsset == nil && previousRecord == nil
+            let unchanged = previousAsset != nil && previousRecord != nil && ownHash == previousAsset && ownRecordHash == previousRecord
+            if identical || new || unchanged {
+                merged[id] = sourceRecords[id]
+                if ownHash != sourceHash { packages[id] = sourceHash }
+                attempt[assetKey] = sourceHash; attempt[recordKey] = recordHash
+            } else if previousAsset == nil && previousRecord == nil {
+                // Remember an initial conflict without claiming that the target accepted this source.
+                attempt[assetKey] = sourceHash; attempt[recordKey] = recordHash
+            }
+        }
+        let recordChanges = !NSDictionary(dictionary: merged).isEqual(to: ownRecords)
+        guard !packages.isEmpty || recordChanges else { base = attempt; return 0 }
+        let oldRootHash = try Self.itemType(targetRoot) == nil ? nil : try Self.assetFingerprint(targetRoot)
+        let oldIndexHash = try Self.itemType(targetIndex) == nil ? nil : try Self.assetFingerprint(targetIndex)
+        let stage = dataDir.appending(path: ".claudeprofiles-extensions-\(UUID().uuidString)")
+        try fm.createDirectory(at: stage, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let stagedRoot = stage.appending(path: "packages"), stagedIndex = stage.appending(path: "index.json")
+        var keepRecovery = false
+        defer { if !keepRecovery { try? fm.removeItem(at: stage) } }
+        if oldRootHash != nil { try fm.copyItem(at: targetRoot, to: stagedRoot) }
+        else { try fm.createDirectory(at: stagedRoot, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
+        for (id, hash) in packages {
+            let stagedPackage = stagedRoot.appending(path: id)
+            if try Self.itemType(stagedPackage) != nil { try fm.removeItem(at: stagedPackage) }
+            try fm.copyItem(at: sourceRoot.appending(path: id), to: stagedPackage)
+            guard try Self.assetFingerprint(stagedPackage) == hash else {
+                throw LocalStorageError.corrupt("An extension changed during copying; existing setup was kept")
+            }
+        }
+        try Self.writeJSON(["extensions": merged], to: stagedIndex)
+        if let mode = try? fm.attributesOfItem(atPath: targetIndex.path)[.posixPermissions] {
+            try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: stagedIndex.path)
+        }
+        guard (try Self.itemType(targetRoot) == nil ? nil : try Self.assetFingerprint(targetRoot)) == oldRootHash,
+              (try Self.itemType(targetIndex) == nil ? nil : try Self.assetFingerprint(targetIndex)) == oldIndexHash else {
+            throw LocalStorageError.corrupt("Extension setup changed during copying; existing setup was kept")
+        }
+        if oldRootHash != nil { _ = try backup.save(targetRoot) }
+        if oldIndexHash != nil { _ = try backup.save(targetIndex) }
+        try Self.installStaged(stagedRoot, into: targetRoot, replacing: oldRootHash != nil)
+        do { try Self.installStaged(stagedIndex, into: targetIndex, replacing: oldIndexHash != nil) }
+        catch {
+            // If the second rename fails, restore the original packages before reporting the error.
+            let restored = oldRootHash != nil
+                ? renamex_np(stagedRoot.path, targetRoot.path, UInt32(RENAME_SWAP))
+                : renamex_np(targetRoot.path, stagedRoot.path, UInt32(RENAME_EXCL))
+            if restored != 0 {
+                keepRecovery = true
+                throw LocalStorageError.corrupt("Extension setup could not be restored; recovery files remain at \(stage.path)")
+            }
+            throw error
+        }
+        base = attempt
+        return packages.count + (recordChanges ? 1 : 0)
+    }
+
+    /// Reject future layouts rather than copying package files without their matching registry data.
+    private static func extensionRecords(_ object: [String: Any]) -> [String: Any]? {
+        guard Set(object.keys) == ["extensions"], let records = object["extensions"] as? [String: Any] else { return nil }
+        for (id, value) in records {
+            guard !id.isEmpty, id != ".", id != "..", !id.contains("/"),
+                  let record = value as? [String: Any],
+                  Set(record.keys) == ["id", "version", "hash", "installedAt", "manifest", "signatureInfo", "source"],
+                  record["id"] as? String == id, record["version"] is String, record["hash"] is String,
+                  record["installedAt"] is String, record["manifest"] is [String: Any],
+                  record["signatureInfo"] is [String: Any], record["source"] is String else { return nil }
+        }
+        return records
+    }
+
+    private static func installStaged(_ stage: URL, into target: URL, replacing: Bool) throws {
+        guard renamex_np(stage.path, target.path, replacing ? UInt32(RENAME_SWAP) : UInt32(RENAME_EXCL)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    /// This is the observed SSH setup schema, not a generic JSON rewrite. Connection definitions may
+    /// follow the user; a host trust decision is a permission and remains with the destination profile.
+    private func mergeSSH(into dataDir: URL, base: inout [String: String], backup: Backup) throws -> Int {
+        let filename = "ssh_configs.json"
+        let source = paths.mainDataDir.appending(path: filename), target = dataDir.appending(path: filename)
+        guard try Self.itemType(source) == .typeRegular,
+              try Self.itemType(target) == nil || Self.itemType(target) == .typeRegular,
+              let main = try Self.readExistingJSON(source), let mainConfigs = Self.sshConfigurations(main) else { return 0 }
+        let own = try Self.readExistingJSON(target) ?? ["configs": []]
+        guard let ownConfigs = Self.sshConfigurations(own) else { return 0 }
+        let mainByID = Dictionary(uniqueKeysWithValues: mainConfigs.map { ($0["id"] as! String, $0 as Any) })
+        let ownByID = Dictionary(uniqueKeysWithValues: ownConfigs.map { ($0["id"] as! String, $0 as Any) })
+        var merged = ownByID, attempt = base
+        for key in mainByID.keys.sorted() {
+            Self.sharePreservingChanges(key, main: mainByID, own: ownByID, into: &merged, base: &attempt, prefix: "ssh:")
+        }
+        let ownOrder = ownConfigs.compactMap { $0["id"] as? String }
+        let added = mainConfigs.compactMap { $0["id"] as? String }.filter { ownByID[$0] == nil && merged[$0] != nil }
+        var result = own
+        result["configs"] = (ownOrder + added).compactMap { merged[$0] }
+        if NSDictionary(dictionary: result).isEqual(to: own) { base = attempt; return 0 }
+        if fm.fileExists(atPath: target.path) { _ = try backup.save(target) }
+        try Self.writeJSON(result, to: target)
+        base = attempt
+        return 1
+    }
+
+    private static func sshConfigurations(_ object: [String: Any]) -> [[String: Any]]? {
+        guard Set(object.keys).isSubset(of: ["configs", "trustedHosts"]),
+              let configs = object["configs"] as? [[String: Any]],
+              configs.allSatisfy({ Set($0.keys) == ["id", "name", "sshHost"]
+                  && $0["id"] is String && ($0["id"] as? String)?.isEmpty == false
+                  && $0["name"] is String && $0["sshHost"] is String }),
+              Set(configs.compactMap { $0["id"] as? String }).count == configs.count else { return nil }
+        return configs
+    }
+
+    /// Extension packages are indivisible; the directory containing them is not. Merge its immediate
+    /// children so a profile-only extension survives when MAIN installs or updates another one.
+    private func mergeAsset(_ source: URL, into target: URL, key: String,
+                            base: inout [String: String], backup: Backup) throws -> Int {
+        guard let sourceType = try Self.itemType(source) else { return 0 }
+        guard sourceType == .typeRegular || sourceType == .typeDirectory else { return 0 }
+        let targetType = try Self.itemType(target)
+        if sourceType == .typeDirectory {
+            // An occupied path of another kind belongs to this profile; never replace or follow it.
+            guard targetType == nil || targetType == .typeDirectory else { return 0 }
+            if targetType == nil {
+                try fm.createDirectory(at: target, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            }
+            var changed = 0
+            for child in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                changed += try mergeAssetItem(child, into: target.appending(path: child.lastPathComponent),
+                                             key: key + "/" + child.lastPathComponent, base: &base, backup: backup)
+            }
+            return changed
+        }
+        return try mergeAssetItem(source, into: target, key: key, base: &base, backup: backup)
+    }
+
+    private func mergeAssetItem(_ source: URL, into target: URL, key: String,
+                                base: inout [String: String], backup: Backup) throws -> Int {
+        guard let sourceType = try Self.itemType(source), sourceType == .typeRegular || sourceType == .typeDirectory else { return 0 }
+        let targetType = try Self.itemType(target)
+        guard targetType == nil || targetType == sourceType else { return 0 }
+        let sourceHash = try Self.assetFingerprint(source)
+        let ownHash = targetType == nil ? nil : try Self.assetFingerprint(target)
+        if ownHash == sourceHash { base[key] = sourceHash; return 0 }
+        let previous = base[key]
+        guard (previous == nil && ownHash == nil) || (previous != nil && ownHash == previous) else {
+            if previous == nil { base[key] = sourceHash }
+            return 0
+        }
+        // Stage before backing up or replacing anything. A failed copy leaves the live item intact.
+        let stage = target.deletingLastPathComponent().appending(path: ".claudeprofiles-setup-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: stage) }
+        try fm.copyItem(at: source, to: stage)
+        guard try Self.assetFingerprint(stage) == sourceHash,
+              (try Self.itemType(target) == nil ? nil : try Self.assetFingerprint(target)) == ownHash else {
+            throw LocalStorageError.corrupt("Shared setup changed during copying; the profile's existing item was kept")
+        }
+        if ownHash != nil { _ = try backup.save(target) }
+        // macOS swaps directories atomically too, including nonempty extension packages. The previous
+        // item remains at the staging path until cleanup, and in the normal backup for recovery.
+        let flags = ownHash == nil ? UInt32(RENAME_EXCL) : UInt32(RENAME_SWAP)
+        guard renamex_np(stage.path, target.path, flags) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        base[key] = sourceHash
+        return 1
+    }
+
+    private static func itemType(_ url: URL) throws -> FileAttributeType? {
+        do { return try FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType }
+        catch let error as NSError where error.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code) { return nil }
+    }
+
+    /// Hash content, names, kinds and modes without traversing links inside an extension package.
+    private static func assetFingerprint(_ root: URL) throws -> String {
+        var hash = SHA256()
+        func add(_ value: String) { hash.update(data: Data("\(value.utf8.count):\(value)".utf8)) }
+        func visit(_ url: URL, name: String) throws {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let kind = attributes[.type] as? FileAttributeType
+            add(name); add(kind?.rawValue ?? "unknown"); add(String(describing: attributes[.posixPermissions] ?? 0))
+            switch kind {
+            case .typeDirectory:
+                for child in try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                    try visit(child, name: name + "/" + child.lastPathComponent)
+                }
+            case .typeRegular:
+                let handle = try FileHandle(forReadingFrom: url)
+                defer { try? handle.close() }
+                while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty { hash.update(data: data) }
+            case .typeSymbolicLink:
+                add(try FileManager.default.destinationOfSymbolicLink(atPath: url.path))
+            default:
+                throw LocalStorageError.corrupt("Unsupported item in shared local setup; the profile's copy was kept")
+            }
+        }
+        try visit(root, name: "")
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Copies Claude Code versions the profile doesn't have yet. Only finished downloads (with `.verified`) are
@@ -119,6 +356,35 @@ public struct SettingsSync: Sendable {
 
     private static func fingerprint(_ value: Any) -> String {
         SHA256.hash(data: Data(InterfaceSync.canonical(value).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Shares independently named settings without replacing pre-existing profile choices. The first
+    /// source fingerprint also remembers an initial conflict so a later profile-side deletion stays local.
+    private static func sharePreservingChanges(_ key: String, main: [String: Any], own: [String: Any],
+                                               into result: inout [String: Any], base: inout [String: String],
+                                               prefix: String) {
+        guard let value = main[key] else { return }
+        let stateKey = prefix + key, mainHash = fingerprint(value)
+        let ownHash = own[key].map(fingerprint)
+        let previous = base[stateKey]
+        if ownHash == mainHash || (previous == nil && ownHash == nil) || (previous != nil && ownHash == previous) {
+            result[key] = value
+            base[stateKey] = mainHash
+        } else if previous == nil {
+            base[stateKey] = mainHash
+        }
+    }
+
+    /// Missing state is a first launch; damaged state is not. Resetting it could overwrite a profile's
+    /// changes with MAIN's values on the next launch, so reject it before copying any setup files.
+    private static func readBaseline(_ url: URL) throws -> [String: String] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        let data = try Data(contentsOf: url)
+        guard let result = try JSONSerialization.jsonObject(with: data) as? [String: String],
+              result.values.allSatisfy({ $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil }) else {
+            throw LocalStorageError.corrupt("Shared settings history is unreadable; setup files were left unchanged")
+        }
+        return result
     }
 
     /// A corrupt existing configuration is not an empty configuration and must never be replaced silently.

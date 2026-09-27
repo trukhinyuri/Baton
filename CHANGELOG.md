@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Preserve complete available local Cowork transcripts, tool results, scoped project memory and selected files in a private, versioned continuation workspace without asking the source model for a summary. Captures list excluded or unavailable context and never replace native session state.
+- Review saved context, export exact text and separate attachments, register each profile's own native conversation, and check the destination's reply before recording a profile switch. ZIP archives preserve captured bytes for local restoration; Claude's file picker may reject them.
+- Add optional Accessibility capture of the selected profile's visible Project context and bounded read-only sweeps of observed Project views or the open cloud Cowork conversation. All such captures remain explicitly partial; original Library files, embedded artifacts and complete historical boundaries are not verified automatically.
+- Synchronize ordinary local Code cards before a closed profile launches, so launchers do not depend on the manager's next background tick. A corrupt synchronization state prevents a stale launch.
+- Merge MCP servers and known SSH entries independently while preserving profile-only changes. Extension packages and their installation registry move together; account permissions and trusted-host grants remain local to each profile.
+- Stage and verify Claude engine replacements before an atomic swap, retaining the previous engine when validation fails.
+
+The development build still requires live acceptance for full Project capture and round-trip continuation. These changes do not make one account's native cloud Project available to another account.
+
 ## 0.2.0 — 2026-09-27
 
 - Installation stages and verifies the new app and retains the previous app for rollback; a running manager must be quit first, while Claude windows can remain open
