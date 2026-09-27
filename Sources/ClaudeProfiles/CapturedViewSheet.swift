@@ -8,6 +8,8 @@ private struct CapturedViewItem: Identifiable {
     var scope: String = "Current view"
 }
 
+private enum PendingCapture { case currentView, availableViews }
+
 @MainActor
 private final class CapturedViewForm: ObservableObject {
     @Published var source = "main"
@@ -21,6 +23,11 @@ private final class CapturedViewForm: ObservableObject {
     @Published var message = ""
     @Published var projectCapture: ClaudeContextCapture.ProjectCapture?
     var captureTask: Task<Void, Never>?
+    let access = AccessibilityAccess.Controller()
+    @Published var accessState = AccessibilityAccess.State()
+    @Published var pendingCapture: PendingCapture?
+    @Published var permissionPollingActive = false
+    @Published var permissionPollingGeneration = 0
 }
 
 /// Captures existing visible context, with an optional bounded read-only Project sweep. Never sends prompts.
@@ -35,6 +42,7 @@ struct CapturedViewSheet: View {
             Text("PARTIAL CAPTURE — coverage is reported explicitly").font(.headline).foregroundStyle(.orange)
             Text("Open the desired Project, conversation or project settings in Claude. This reads the text that Claude currently exposes. Other pages, older history, collapsed results and Library files may be missing. It does not ask Claude to generate a response or use your plan's quota.")
                 .font(.callout).foregroundStyle(.secondary)
+            windowAccess
             HStack {
                 Picker("Claude profile", selection: $form.source) {
                     ForEach(model.statuses) { Text($0.label).tag($0.id) }
@@ -116,15 +124,131 @@ struct CapturedViewSheet: View {
             }
         }
         .padding(22).frame(width: 750)
+        .onAppear { refreshPermission() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshPermission() }
+        .task(id: form.permissionPollingGeneration) { await monitorPermissionChange() }
+        .onDisappear {
+            form.permissionPollingActive = false
+            form.captureTask?.cancel()
+        }
         .onChange(of: form.source) { _, _ in
-            form.captureTask?.cancel(); form.projectCapture = nil
+            form.captureTask?.cancel(); form.projectCapture = nil; form.pendingCapture = nil
             form.captures = []; form.savedCount = 0; form.savedWorkspace = nil; form.message = ""
             if form.existingWorkspace == nil { form.workspaceTitle = "" }
         }
     }
 
+    @ViewBuilder
+    private var windowAccess: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 7) {
+                if form.accessState.canCapture {
+                    HStack {
+                        Label("Claude window access is enabled", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
+                        Spacer()
+                        if form.pendingCapture != nil { Button("Continue capture", action: checkPermissionAndRetry) }
+                    }
+                } else {
+                    Text("Allow Claude Profiles to read Claude's windows").font(.headline)
+                    Text("macOS grants broad access to read and control apps. Claude Profiles uses it here only to capture the Claude profile you select. The setting is called \(form.access.settingsPaneName). It is used here for context capture.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    if form.accessState.status == .waitingForApproval {
+                        Text("Enable Claude Profiles in System Settings, then return here. Access is checked automatically for one minute; you can check again at any time.").font(.caption)
+                    } else if form.accessState.status == .notApplied {
+                        Text("macOS has not confirmed access for this running copy. An enabled switch alone does not confirm that capture can use it.").font(.caption).foregroundStyle(.orange)
+                    }
+                    HStack {
+                        if !form.accessState.requested {
+                            Button("Request access", action: requestPermission).buttonStyle(.borderedProminent)
+                        }
+                        Button("Open System Settings", action: openPermissionSettings)
+                        Button(form.pendingCapture == nil ? "Check again" : "Check & retry", action: checkPermissionAndRetry)
+                        if form.pendingCapture != nil || form.accessState.requested {
+                            Button("Not now", action: cancelPermissionWaiting)
+                        }
+                    }
+                    if form.accessState.settingsOpenFailed {
+                        Text("System Settings could not be opened. Open it from the Apple menu, then choose Privacy & Security → \(form.access.settingsPaneName).").font(.caption).foregroundStyle(.orange)
+                    }
+                    if form.accessState.requested || form.accessState.status == .notApplied {
+                        DisclosureGroup("Already enabled, or recently updated the app?") {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("In Privacy & Security → \(form.access.settingsPaneName), enable the current Claude Profiles application. If an old entry is still enabled after an update, remove that Claude Profiles entry and add the current application using +. Then check again. If macOS still has not applied access, save any captured context, quit Claude Profiles and reopen it.")
+                                if form.access.application.isAdHocSigned == true {
+                                    Text("This development build has a signature tied to this version. macOS may require access to be granted again after an update.")
+                                }
+                                Text(form.access.application.url.path).textSelection(.enabled)
+                                Button("Show this application in Finder") { form.access.revealThisApplication() }
+                            }.font(.caption)
+                        }
+                    }
+                    Text("No other OS permission is requested here. Profile management and saved workspaces remain available without it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }.disabled(form.busy)
+    }
+
+    private func refreshPermission() {
+        form.accessState = form.access.refresh()
+        if form.accessState.canCapture { form.permissionPollingActive = false }
+    }
+    private func beginPermissionMonitoring() {
+        form.permissionPollingActive = !form.accessState.canCapture
+        form.permissionPollingGeneration += 1
+    }
+    private func monitorPermissionChange() async {
+        guard form.permissionPollingGeneration > 0 else { return }
+        for _ in 0..<60 {
+            guard form.permissionPollingActive, !Task.isCancelled else { return }
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            guard !Task.isCancelled else { return }
+            refreshPermission()
+        }
+        form.permissionPollingActive = false
+    }
+    private func requestPermission() {
+        form.accessState = form.access.requestAccess()
+        beginPermissionMonitoring()
+    }
+    private func openPermissionSettings() {
+        form.accessState = form.access.openSystemSettings()
+        beginPermissionMonitoring()
+    }
+    private func cancelPermissionWaiting() {
+        form.pendingCapture = nil; form.permissionPollingActive = false
+        form.accessState = form.access.cancelWaiting()
+        form.message = "Capture is paused. Your saved workspaces and already read views remain available."
+    }
+    private func checkPermissionAndRetry() {
+        form.accessState = form.access.checkAfterSettingsChange()
+        guard form.accessState.canCapture else { return }
+        form.permissionPollingActive = false
+        guard let pending = form.pendingCapture else { return }
+        form.pendingCapture = nil
+        switch pending {
+        case .currentView: readCurrentView()
+        case .availableViews: readProject()
+        }
+    }
+    private func prepareAccess(for capture: PendingCapture) -> Bool {
+        refreshPermission()
+        guard form.accessState.canCapture else {
+            form.pendingCapture = capture
+            form.message = "Window access is needed for this capture. Use Request access above; previously captured views are retained."
+            return false
+        }
+        form.pendingCapture = nil
+        return true
+    }
+    private func captureAccessFailed(_ capture: PendingCapture) {
+        form.pendingCapture = capture
+        form.accessState = form.access.recordCaptureDenied()
+        form.message = "Capture could not use window access. Check the current application in System Settings, then use Check & retry. Already read views are retained."
+    }
+
     private func readProject() {
-        guard !form.busy else { return }
+        guard !form.busy, prepareAccess(for: .availableViews) else { return }
         form.busy = true; form.message = "Reading existing context…"; form.projectCapture = nil
         let source = form.source, paths = model.manager.paths
         form.captureTask = Task { @MainActor in
@@ -140,12 +264,14 @@ struct CapturedViewSheet: View {
                 form.message = capture.cancelled
                     ? "Capture cancelled. All previously read views are retained and can be saved."
                     : "Context sweep finished: \(capture.views.count) views read. Review the remaining limits and save the partial context."
+            } catch ClaudeContextCapture.CaptureError.accessibilityPermissionRequired {
+                captureAccessFailed(.availableViews)
             } catch { form.message = error.localizedDescription }
         }
     }
 
     private func readCurrentView() {
-        guard !form.busy else { return }
+        guard !form.busy, prepareAccess(for: .currentView) else { return }
         form.busy = true; form.message = ""
         let profileID = form.source, paths = model.manager.paths
         Task { @MainActor in
@@ -166,7 +292,7 @@ struct CapturedViewSheet: View {
                 if form.workspaceTitle.isEmpty { form.workspaceTitle = snapshot.title }
                 form.message = "Read \(snapshot.sections.count) sections. This remains a partial capture; no message was sent and Claude was not changed."
             } catch ClaudeContextCapture.CaptureError.accessibilityPermissionRequired {
-                form.message = "Claude Profiles needs Accessibility access to read this view. Enable Claude Profiles in System Settings → Privacy & Security → Accessibility, then try again. No permission request or settings panel was opened."
+                captureAccessFailed(.currentView)
             } catch { form.message = error.localizedDescription }
         }
     }

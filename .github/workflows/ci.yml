@@ -13,7 +13,9 @@ jobs:
       - name: Toolchain
         run: swift --version
       - name: Test
-        run: swift test
+        run: |
+          swift test
+          sh scripts/tests/distribution-tests.sh
       - name: Build app
         run: scripts/build-app.sh
       - name: Package

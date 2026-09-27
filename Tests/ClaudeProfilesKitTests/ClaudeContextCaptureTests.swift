@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import Testing
 @testable import ClaudeProfilesKit
@@ -529,4 +530,154 @@ private final class CoworkCaptureScriptDriver: ClaudeContextCapture.ProjectDrive
         return true
     }
     func settle() async throws { if cancelAfterAction { throw CancellationError() } }
+}
+
+@Suite("Scoped native capture control validation")
+struct ClaudeScopedCaptureControlTests {
+    typealias Node = ClaudeContextCapture.Node
+    typealias Action = ClaudeContextCapture.ReadAction
+    let source = "https://claude.ai/cowork/cse_scoped"
+
+    func tree(url: String? = nil, clock: String = "12:00", message: String = "Existing context",
+              label: String = "Ran 5 commands", identifier: String? = "tools-1", actionNames: [String] = ["AXPress"],
+              extraBefore: Bool = false, duplicate: Bool = false, group: String = "Tool group", groupID: String = "message-1") -> Node {
+        let target = Node(role: "AXButton", title: label, identifier: identifier, actions: actionNames)
+        var controls = [target]
+        if extraBefore { controls.insert(Node(role: "AXStaticText", value: "New unrelated row"), at: 0) }
+        if duplicate { controls.append(target) }
+        return Node(role: "AXWindow", title: "Claude", children: [
+            Node(role: "AXWebArea", title: "Claude", url: url ?? source, children: [
+                Node(role: "AXStaticText", value: clock),
+                Node(role: "AXGroup", title: "Chat messages", children: [
+                    Node(role: "AXStaticText", value: message),
+                    Node(role: "AXGroup", title: group, identifier: groupID, children: controls)
+                ])
+            ])
+        ])
+    }
+    func action(_ tree: Node) throws -> Action {
+        let target = try #require(ClaudeContextCapture.controls(tree).first { $0.role == "AXButton" })
+        return Action(intent: .toolDetails, control: target)
+    }
+    func validate(_ before: Node, _ after: Node, sourceURL: String? = nil,
+                  nativeIdentity: ClaudeContextCapture.NativeTargetIdentity = .unavailable) throws -> String? {
+        try ClaudeContextCapture.validatedNativeAction(action(before), expectedTree: before, freshTree: after,
+                                                       sourceURL: sourceURL ?? source, nativeIdentity: nativeIdentity)
+    }
+
+    @Test func unrelatedClockAndMessageUpdatesDoNotBlockStableDisclosure() throws {
+        let before = tree()
+        let after = tree(clock: "12:01", message: "Existing context with a live timestamp", actionNames: ["AXShowMenu", "AXPress"])
+        #expect(before != after)
+        #expect(try validate(before, after) == "AXPress")
+    }
+
+    @Test func movedOrReplacedControlIsRejected() {
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(tree(), tree(extraBefore: true)) }
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(tree(), tree(identifier: "different-tools")) }
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(tree(), tree(label: "Ran 6 commands")) }
+    }
+
+    @Test func ambiguousEquivalentControlsAreRejectedEvenWhenOriginalPathStillExists() {
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(tree(), tree(duplicate: true)) }
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(tree(duplicate: true), tree(duplicate: true)) }
+    }
+
+    @Test func recurringDisclosuresNeedTheSameBoundNativeElement() throws {
+        let repeated = tree(label: "Ran a command", identifier: nil, duplicate: true, groupID: "")
+        // Both buttons have identical labels and ancestry, as in a transcript without AXIdentifiers.
+        // Either specific retained element can be used; neither label nor ordinal proves identity.
+        let buttons = ClaudeContextCapture.controls(repeated).filter { $0.role == "AXButton" }
+        #expect(buttons.count == 2 && buttons[0].path != buttons[1].path)
+        for button in buttons {
+            let selected = Action(intent: .toolDetails, control: button)
+            #expect(try ClaudeContextCapture.validatedNativeAction(selected, expectedTree: repeated, freshTree: repeated,
+                                                                   sourceURL: source, nativeIdentity: .sameElement) == "AXPress")
+            for absentOrChanged in [ClaudeContextCapture.NativeTargetIdentity.unavailable, .differentElement] {
+                #expect(throws: ClaudeContextCapture.CollectorError.staleControl) {
+                    try ClaudeContextCapture.validatedNativeAction(selected, expectedTree: repeated, freshTree: repeated,
+                                                                   sourceURL: source, nativeIdentity: absentOrChanged)
+                }
+            }
+        }
+    }
+
+    @Test func nativeIdentityComparisonUsesTheRetainedReferenceAndRejectsMissingOrDifferentElements() {
+        // Creating application references performs no AX read, action or permission request.
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let original = AXUIElementCreateApplication(pid), same = AXUIElementCreateApplication(pid)
+        let different = AXUIElementCreateApplication(pid + 1)
+        #expect(ClaudeContextCapture.nativeTargetIdentity(expected: original, current: same) == .sameElement)
+        #expect(ClaudeContextCapture.nativeTargetIdentity(expected: original, current: different) == .differentElement)
+        #expect(ClaudeContextCapture.nativeTargetIdentity(expected: nil, current: same) == .unavailable)
+        #expect(ClaudeContextCapture.nativeTargetIdentity(expected: original, current: nil) == .unavailable)
+    }
+
+    @Test func nativeIdentityNeverOverridesMovedChangedOrUnsafeControls() {
+        let before = tree(label: "Ran a command", identifier: nil, duplicate: true, groupID: "")
+        for after in [
+            tree(label: "Ran a command", identifier: nil, extraBefore: true, duplicate: true, groupID: ""),
+            tree(label: "Run a command", identifier: nil, duplicate: true, groupID: ""),
+            tree(label: "Ran a command", identifier: nil, duplicate: true, group: "Another message", groupID: ""),
+            tree(label: "Ran a command", identifier: nil, actionNames: ["AXShowMenu"], duplicate: true, groupID: "")
+        ] {
+            #expect(throws: ClaudeContextCapture.CollectorError.staleControl) {
+                try validate(before, after, nativeIdentity: .sameElement)
+            }
+        }
+        // Replacing even a uniquely labelled target is denied by contrary native identity evidence.
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) {
+            try validate(tree(), tree(), nativeIdentity: .differentElement)
+        }
+        #expect(throws: ClaudeContextCapture.CollectorError.sourceChanged) {
+            try validate(before, tree(url: source + "?thread=another", label: "Ran a command", identifier: nil,
+                                      duplicate: true, groupID: ""), nativeIdentity: .sameElement)
+        }
+    }
+
+    @Test func repeatedDisclosuresStillNeedAnExactNativePressAction() throws {
+        let unsupported = tree(label: "Ran a command", identifier: nil, actionNames: ["AXShowMenu"], duplicate: true, groupID: "")
+        #expect(try validate(unsupported, unsupported, nativeIdentity: .sameElement) == nil)
+        let unsafe = tree(label: "Run a command", identifier: nil, duplicate: true, groupID: "")
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) {
+            try validate(unsafe, unsafe, nativeIdentity: .sameElement)
+        }
+    }
+
+    @Test func changedConversationThreadTabOrDocumentIsRejected() {
+        #expect(throws: ClaudeContextCapture.CollectorError.sourceChanged) { try validate(tree(), tree(url: "https://claude.ai/cowork/cse_other")) }
+        let project = "https://claude.ai/epitaxy/project/chan_scoped"
+        #expect(throws: ClaudeContextCapture.CollectorError.sourceChanged) {
+            try validate(tree(url: project + "?thread=session_one"), tree(url: project + "?thread=session_two"), sourceURL: project)
+        }
+        #expect(throws: ClaudeContextCapture.CollectorError.sourceChanged) {
+            try validate(tree(url: project), tree(url: project + "?overviewTab=library"), sourceURL: project)
+        }
+        #expect(throws: ClaudeContextCapture.CollectorError.sourceChanged) {
+            try validate(tree(), tree(url: "https://example.test/cowork/cse_scoped"))
+        }
+    }
+
+    @Test func changedAncestorOrRemovedNativeActionIsRejected() {
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(tree(), tree(group: "Different message")) }
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(tree(), tree(groupID: "message-2")) }
+        #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(tree(), tree(actionNames: [])) }
+    }
+
+    @Test func unsupportedActionRemainsUnavailableRatherThanInventingAPress() throws {
+        let unsupported = tree(actionNames: [])
+        #expect(try validate(unsupported, unsupported) == nil)
+    }
+
+    @Test func exactObservedSingularSummaryIsAllowedAndRecordedAsACaptureGap() throws {
+        let singular = tree(label: "Ran a command")
+        #expect(try validate(singular, singular) == "AXPress")
+        let snapshot = try ClaudeContextCapture.parse(singular, profileID: "vir", profileLabel: "VIR")
+        #expect(snapshot.collapsedControls == ["Ran a command"])
+        #expect(snapshot.gaps.contains(.collapsedContent))
+        for unsafe in ["Run a command", "Ran a command to change settings"] {
+            let unknown = tree(label: unsafe)
+            #expect(throws: ClaudeContextCapture.CollectorError.staleControl) { try validate(unknown, unknown) }
+        }
+    }
 }

@@ -49,7 +49,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature: enough for apps you build yourself. Distributed builds should use a Developer ID.
-codesign --force --sign "${CODESIGN_IDENTITY:--}" "$APP/Contents/Helpers/claude-profiles"
-codesign --force --sign "${CODESIGN_IDENTITY:--}" "$APP"
+# Local source builds remain ad hoc. An explicitly configured distribution build
+# must pass the Developer ID checks; signing failures never fall back to ad hoc.
+sh scripts/sign-app.sh "$APP"
 echo "Built $APP ($VERSION)"

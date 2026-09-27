@@ -10,8 +10,37 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
+    env:
+      CLAUDE_PROFILES_SIGNING_MODE: ${{ vars.MACOS_SIGNING_MODE || 'ad-hoc' }}
+      CODESIGN_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v5
+      - name: Validate distribution configuration
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          case "$CLAUDE_PROFILES_SIGNING_MODE" in
+            ad-hoc)
+              if [[ -n "$CODESIGN_IDENTITY" ]]; then
+                echo 'Remove MACOS_SIGNING_IDENTITY for ad-hoc mode, or enable developer-id mode.' >&2
+                exit 1
+              fi
+              ;;
+            developer-id)
+              for name in CODESIGN_IDENTITY APPLE_TEAM_ID CERTIFICATE CERTIFICATE_PASSWORD NOTARY_KEY NOTARY_KEY_ID NOTARY_ISSUER_ID; do
+                if [[ -z "${!name}" ]]; then
+                  echo "Developer ID distribution requires $name; no ad-hoc fallback is allowed." >&2
+                  exit 1
+                fi
+              done
+              ;;
+            *) echo 'MACOS_SIGNING_MODE must be ad-hoc or developer-id.' >&2; exit 1 ;;
+          esac
       - name: Validate release version and notes
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -36,14 +65,71 @@ jobs:
             exit 1
           fi
       - name: Test
-        run: swift test
+        run: |
+          swift test
+          sh scripts/tests/distribution-tests.sh
+      - name: Prepare isolated signing keychain
+        if: env.CLAUDE_PROFILES_SIGNING_MODE == 'developer-id'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          umask 077
+          signing_dir="$RUNNER_TEMP/claudeprofiles-signing"
+          mkdir "$signing_dir"
+          keychain="$signing_dir/release.keychain-db"
+          password=$(openssl rand -base64 32)
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$signing_dir/certificate.p12"
+          security import "$signing_dir/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          printf '%s' "$NOTARY_KEY" | base64 --decode > "$signing_dir/notary.p8"
+          xcrun notarytool store-credentials claudeprofiles-release --keychain "$keychain" \
+            --key "$signing_dir/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
+          printf 'CODESIGN_KEYCHAIN=%s\nNOTARY_KEYCHAIN=%s\nNOTARY_KEYCHAIN_PROFILE=claudeprofiles-release\n' "$keychain" "$keychain" >> "$GITHUB_ENV"
       - name: Build
         run: scripts/build-app.sh "$(cat VERSION)"
-      - name: Package
+      - name: Package development build
+        if: env.CLAUDE_PROFILES_SIGNING_MODE == 'ad-hoc'
         run: ditto -c -k --keepParent "build/Claude Profiles.app" "ClaudeProfiles-${GITHUB_REF_NAME}.zip"
+      - name: Notarize and package distribution
+        if: env.CLAUDE_PROFILES_SIGNING_MODE == 'developer-id'
+        run: sh scripts/notarize-app.sh "build/Claude Profiles.app" "ClaudeProfiles-${GITHUB_REF_NAME}.zip"
+      - name: Add distribution status to release notes
+        run: |
+          notes="$RUNNER_TEMP/claudeprofiles-release-notes.md"
+          if [[ "$CLAUDE_PROFILES_SIGNING_MODE" == developer-id ]]; then
+            printf '\nThis app is Developer ID signed, notarized, and stapled. macOS still requires your consent for window access.\n' >> "$notes"
+          else
+            printf '\nThis is an ad-hoc signed development build, not a Developer ID notarized distribution. macOS may require first-launch approval and window-access reapproval after updates. See docs/DISTRIBUTION.md in the source repository.\n' >> "$notes"
+          fi
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" "ClaudeProfiles-${GITHUB_REF_NAME}.zip" \
             --title "Claude Profiles ${GITHUB_REF_NAME}" --notes-file "$RUNNER_TEMP/claudeprofiles-release-notes.md"
+      - name: Retain notarization diagnostics
+        if: always() && env.CLAUDE_PROFILES_SIGNING_MODE == 'developer-id'
+        uses: actions/upload-artifact@v5
+        with:
+          name: notarization-diagnostics
+          path: build/notarization/*.json
+          if-no-files-found: ignore
+      - name: Remove isolated signing material
+        if: always() && env.CLAUDE_PROFILES_SIGNING_MODE == 'developer-id'
+        run: |
+          signing_dir="$RUNNER_TEMP/claudeprofiles-signing"
+          cleanup_status=0
+          if [[ -f "$signing_dir/release.keychain-db" ]]; then
+            security delete-keychain "$signing_dir/release.keychain-db" || cleanup_status=$?
+          fi
+          rm -f "$signing_dir/certificate.p12" "$signing_dir/notary.p8"
+          if [[ -d "$signing_dir" ]]; then rmdir "$signing_dir" || cleanup_status=$?; fi
+          exit "$cleanup_status"

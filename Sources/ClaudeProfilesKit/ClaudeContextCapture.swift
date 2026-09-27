@@ -249,9 +249,12 @@ public enum ClaudeContextCapture {
         // Claude's aggregated tool summaries often omit AXExpanded entirely. Their presence is an
         // unresolved capture gap until a future collector opens and verifies the underlying results.
         if node.role == "AXButton", node.expanded != true,
-           label.range(of: "^(ran [0-9]+ commands?\\b|used [0-9]+ tools?\\b|message sent to another session\\b)", options: .regularExpression) != nil { return true }
+           isToolSummaryLabel(label) { return true }
         guard node.expanded == false else { return false }
         return ["tool", "read", "bash", "command", "result", "details"].contains { label.contains($0) }
+    }
+    private static func isToolSummaryLabel(_ label: String) -> Bool {
+        label == "ran a command" || label.range(of: "^(ran [0-9]+ commands?\\b|used [0-9]+ tools?\\b|message sent to another session\\b)", options: .regularExpression) != nil
     }
     private static func descendants(_ node: Node) -> [Node] {
         guard !excluded(node) else { return [] }
@@ -438,6 +441,8 @@ extension ClaudeContextCapture {
         var label: String
         var url: String?
         var ancestors: [String]
+        var identifier: String?
+        var ancestorIdentifiers: [String]
         var expanded: Bool?
         var selected: Bool?
         var actions: [String]
@@ -448,7 +453,7 @@ extension ClaudeContextCapture {
         var intent: ReadIntent
         var control: ReadControl
     }
-    enum CollectorError: LocalizedError {
+    enum CollectorError: LocalizedError, Equatable {
         case sourceChanged, staleControl, limitReached
         var errorDescription: String? {
             switch self {
@@ -478,9 +483,9 @@ extension ClaudeContextCapture {
         let docs = descendants(tree).filter { $0.role == "AXWebArea" && route($0.url) != nil }
         return docs.count == 1 ? docs[0] : nil
     }
-    private static func controls(_ tree: Node) -> [ReadControl] {
+    static func controls(_ tree: Node) -> [ReadControl] {
         var result: [ReadControl] = []
-        func walk(_ node: Node, path: [Int], ancestors: [String], approved: Bool, inTranscript: Bool) {
+        func walk(_ node: Node, path: [Int], ancestors: [String], ancestorIdentifiers: [String], approved: Bool, inTranscript: Bool) {
             guard !excluded(node) else { return }
             let accepted = node.role == "AXWebArea" ? route(node.url) != nil : approved
             if node.role == "AXWebArea" && approved && !accepted { return }
@@ -488,16 +493,17 @@ extension ClaudeContextCapture {
             let transcript = ["chat messages", "conversation messages", "transcript"].contains(label)
             if accepted && ["AXButton", "AXLink", "AXRadioButton", "AXTab", "AXCheckBox", "AXRow", "AXScrollArea", "AXDisclosureTriangle"].contains(node.role) {
                 result.append(ReadControl(path: path, role: node.role, label: name, url: node.url, ancestors: ancestors,
+                                          identifier: node.identifier, ancestorIdentifiers: ancestorIdentifiers,
                                           expanded: node.expanded, selected: node.selected, actions: node.actions,
                                           inTranscript: inTranscript || transcript,
                                           containsTranscript: descendants(node).contains { ["chat messages", "conversation messages", "transcript"].contains(normalizedLabel($0)) }))
             }
             for (index, child) in node.children.enumerated() {
                 walk(child, path: path + [index], ancestors: ancestors + (name.isEmpty ? [] : [name]),
-                     approved: accepted, inTranscript: inTranscript || transcript)
+                     ancestorIdentifiers: ancestorIdentifiers + [node.identifier ?? ""], approved: accepted, inTranscript: inTranscript || transcript)
             }
         }
-        walk(tree, path: [], ancestors: [], approved: false, inTranscript: false)
+        walk(tree, path: [], ancestors: [], ancestorIdentifiers: [], approved: false, inTranscript: false)
         return result
     }
     private static func allowed(_ c: ReadControl, _ intent: ReadIntent, projectURL: String) -> Bool {
@@ -534,7 +540,7 @@ extension ClaudeContextCapture {
         case .routinesTab: return tab && label == "routines" && !c.inTranscript && !settings
         case .toolDetails:
             guard c.inTranscript, button || c.role == "AXDisclosureTriangle", c.expanded != true else { return false }
-            return label.range(of: "^(ran [0-9]+ commands?\\b|used [0-9]+ tools?\\b|message sent to another session\\b)", options: .regularExpression) != nil
+            return isToolSummaryLabel(label)
                 || ["show tool results", "show tool details"].contains(label)
         case .pagination:
             return (button || c.role == "AXLink") && (transcript || ancestors.contains("library")) &&
@@ -542,6 +548,57 @@ extension ClaudeContextCapture {
         case .scrollUp: return c.role == "AXScrollArea" && transcript && c.actions.contains(where: { ["AXScrollUpByPage", "AXScrollUp"].contains($0) })
         case .scrollDown: return c.role == "AXScrollArea" && transcript && c.actions.contains(where: { ["AXScrollDownByPage", "AXScrollDown"].contains($0) })
         }
+    }
+
+    private static func sameSemanticControl(_ lhs: ReadControl, _ rhs: ReadControl) -> Bool {
+        lhs.role == rhs.role && lhs.label == rhs.label && lhs.url == rhs.url && lhs.ancestors == rhs.ancestors
+            && lhs.identifier == rhs.identifier && lhs.ancestorIdentifiers == rhs.ancestorIdentifiers
+            && lhs.expanded == rhs.expanded && lhs.selected == rhs.selected
+            && lhs.inTranscript == rhs.inTranscript && lhs.containsTranscript == rhs.containsTranscript
+    }
+
+    enum NativeTargetIdentity: Equatable, Sendable {
+        case unavailable, sameElement, differentElement
+    }
+
+    /// This evidence comes from native element references retained across the two reads, never
+    /// from a label, child index or AXIdentifier that could be reused by another control.
+    static func nativeTargetIdentity(expected: AXUIElement?, current: AXUIElement?) -> NativeTargetIdentity {
+        guard let expected, let current else { return .unavailable }
+        return CFEqual(expected, current) ? .sameElement : .differentElement
+    }
+
+    /// Validates just the source view and target control, not unrelated clocks, sidebar text or other
+    /// messages. Repeated disclosure labels require the same native element at the same path. Without
+    /// that evidence, ambiguous controls fail closed. The live driver separately pins the process,
+    /// account and window before each read.
+    static func validatedNativeAction(_ action: ReadAction, expectedTree: Node, freshTree: Node,
+                                      sourceURL: String, nativeIdentity: NativeTargetIdentity = .unavailable) throws -> String? {
+        guard let expectedDocument = projectDocument(expectedTree), let freshDocument = projectDocument(freshTree),
+              expectedDocument.url == freshDocument.url,
+              canonicalSourceURL(expectedDocument.url) == sourceURL,
+              canonicalSourceURL(freshDocument.url) == sourceURL else { throw CollectorError.sourceChanged }
+        let expected = controls(expectedTree), fresh = controls(freshTree)
+        guard nativeIdentity != .differentElement,
+              expected.contains(action.control), allowed(action.control, action.intent, projectURL: sourceURL),
+              let current = fresh.first(where: { $0.path == action.control.path }),
+              sameSemanticControl(current, action.control), allowed(current, action.intent, projectURL: sourceURL) else {
+            throw CollectorError.staleControl
+        }
+        let unambiguous = expected.filter({ sameSemanticControl($0, action.control) }).count == 1
+            && fresh.filter({ sameSemanticControl($0, action.control) }).count == 1
+        guard unambiguous || (action.intent == .toolDetails && nativeIdentity == .sameElement) else {
+            throw CollectorError.staleControl
+        }
+        let nativeAction: String?
+        switch action.intent {
+        case .scrollUp: nativeAction = ["AXScrollUpByPage", "AXScrollUp"].first { action.control.actions.contains($0) }
+        case .scrollDown: nativeAction = ["AXScrollDownByPage", "AXScrollDown"].first { action.control.actions.contains($0) }
+        default: nativeAction = action.control.actions.contains(kAXPressAction) ? kAXPressAction : nil
+        }
+        guard let nativeAction else { return nil }
+        guard current.actions.contains(nativeAction) else { throw CollectorError.staleControl }
+        return nativeAction
     }
 
     @MainActor
@@ -597,20 +654,18 @@ extension ClaudeContextCapture {
         }
         func perform(_ action: ReadAction, expectedTree: Node) throws -> Bool {
             try verify()
-            // AX elements are ephemeral: re-read and require the exact expected surface before using one.
+            let path = action.control.path.map(String.init).joined(separator: ".")
+            // Bind the reference to the exact prior read that produced this action. This is a
+            // comparison of retained snapshots, not a requirement that live window text stays still.
+            guard lastTree == expectedTree, let expectedTarget = lastElements[path] else { throw CollectorError.staleControl }
+            // AX elements are ephemeral. Re-read the pinned view, but unrelated live text must not
+            // make a stable, allowlisted disclosure control look stale.
             let fresh = try readTree()
-            guard fresh == expectedTree, let projectURL,
-                  controls(fresh).contains(action.control), allowed(action.control, action.intent, projectURL: projectURL) else {
-                throw CollectorError.staleControl
-            }
-            guard let target = lastElements[action.control.path.map(String.init).joined(separator: ".")] else { throw CollectorError.staleControl }
-            let nativeAction: String?
-            switch action.intent {
-            case .scrollUp: nativeAction = action.control.actions.first { ["AXScrollUpByPage", "AXScrollUp"].contains($0) }
-            case .scrollDown: nativeAction = action.control.actions.first { ["AXScrollDownByPage", "AXScrollDown"].contains($0) }
-            default: nativeAction = action.control.actions.contains(kAXPressAction) ? kAXPressAction : nil
-            }
-            guard let nativeAction else { return false }
+            guard let projectURL else { throw CollectorError.sourceChanged }
+            guard let target = lastElements[path] else { throw CollectorError.staleControl }
+            guard let nativeAction = try validatedNativeAction(action, expectedTree: expectedTree, freshTree: fresh,
+                                                               sourceURL: projectURL,
+                                                               nativeIdentity: nativeTargetIdentity(expected: expectedTarget, current: target)) else { return false }
             return AXUIElementPerformAction(target, nativeAction as CFString) == .success
         }
         func settle() async throws { try await Task.sleep(for: .milliseconds(220)); try verify() }
