@@ -29,7 +29,7 @@ Claude Profiles gives every subscription its own Claude window with its own Dock
 
 The continuation features described below reflect the current source checkout; check your installed release before expecting those controls. A session appearing in another sidebar is not proof that its history or Project is available. Use the [continuation acceptance checklist](docs/CONTINUITY.md) to check the actual workflow on your Claude version.
 
-A live check of the development build successfully captured a local Cowork task, uploaded its text context through Claude's normal file picker, and verified that a new Cowork conversation in another profile understood the original objective, earlier events and latest state. This establishes one-way text-context reading for that test. A round trip, binary attachments and a complete cloud Project transfer remain unverified; see the [validation record](docs/CONTINUITY.md#validation-record).
+A live check of the development build successfully captured a local Cowork task, uploaded its text context through Claude's normal file picker, and verified that a new Cowork conversation in another profile understood the original objective, earlier events and latest state. This establishes one-way text-context reading for that test. A separate selected PDF also passed native upload and content-reading checks. A round trip, other attachment formats and a complete cloud Project transfer remain unverified; see the [validation record](docs/CONTINUITY.md#validation-record).
 
 ## Features
 
@@ -120,7 +120,7 @@ To remove a subscription, choose **⋯ → Remove Subscription…**. Its window 
 
 **Saved workspaces:** **Open saved workspace…** lets you inspect saved coverage and files, export captured context, verify it in a separate native destination and record where work is active. A cloud Project cannot read a Mac path by itself; attach `CONTEXT.md` and any required supported files from the export's `files/` folder, or configure an appropriate local worker. `workspace.zip` is a local backup/portable archive: the tested native Cowork picker rejected ZIP uploads. Check missing or unsupported attachments explicitly. Saving or uploading files alone does not establish successful continuation; follow the [acceptance checks](docs/CONTINUITY.md).
 
-Use **Add downloaded/selected files…** for originals you already have or can obtain through a supported export/download. It preserves their exact bytes and earlier workspace context, keeps Library coverage partial, and clears the previous destination verification so the updated context must be checked again. Live attachment ingestion remains unverified.
+Use **Add downloaded/selected files…** for originals you already have or can obtain through a supported export/download. It preserves their exact bytes and earlier workspace context, keeps Library coverage partial, and clears the previous destination verification so the updated context must be checked again. One selected PDF passed live export, upload and content-reading checks; other attachment formats remain unverified.
 
 **Manual handoff:** if the automatic local capture does not cover your task, you can still supply reviewed context:
 
