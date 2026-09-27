@@ -14,10 +14,7 @@ app:
 	scripts/build-app.sh
 
 install: app
-	mkdir -p "$(DEST)"
-	rm -rf "$(DEST)/Claude Profiles.app"
-	cp -R "build/Claude Profiles.app" "$(DEST)/Claude Profiles.app"
-	@echo "Installed to $(DEST)/Claude Profiles.app"
+	sh scripts/install-app.sh "$(DEST)"
 	@echo "Optional CLI: ln -sf \"$(DEST)/Claude Profiles.app/Contents/Helpers/claude-profiles\" /usr/local/bin/claude-profiles"
 
 uninstall:

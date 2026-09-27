@@ -16,6 +16,10 @@ struct InterfaceSyncTests {
             try FileManager.default.copyItem(at: fixture, to: dir.appending(path: "Local Storage", directoryHint: .isDirectory))
             try box.write(#"{"lastKnownAccountUuid":"\#(account)"}"#, to: dir.appending(path: "config.json"))
         }
+        let pair = try box.pair(box.main, account: Sandbox.accountA)
+        for id in ["local_1", "local_2", "local_a", "local_main", "local_own"] {
+            try box.write("{\"sessionId\":\"\(id)\",\"cwd\":\"/shared/repo\"}", to: pair.appending(path: "\(id).json"))
+        }
         return box
     }
 
@@ -35,7 +39,7 @@ struct InterfaceSyncTests {
         try LocalStorage(dataDir: dir).update(origin: Self.origin, set: set, remove: remove)
     }
 
-    @Test func profileGetsTheMainSidebarAndStateForItsOwnAccount() throws {
+    @Test func portableSidebarFieldsAreSharedWithoutAccountOrPermissionState() throws {
         let box = try sandbox()
         try put(box.main, [
             InterfaceSync.sidebarKey: try sidebar([
@@ -64,19 +68,19 @@ struct InterfaceSyncTests {
         let state = try sidebarState(work)
         #expect(state["sidebarWidth"] as? Int == 242)
         #expect(state["pinnedOrder"] as? [String] == ["code:local_1"])
-        #expect(state["navPinnedIds"] as? [String] == ["routines-chorus"])
-        #expect(state["collapsedGroups"] as? [String] == ["project-done"])
+        #expect(state["navPinnedIds"] is NSNull)
+        #expect(state["collapsedGroups"] as? [String] == [])
         #expect(state["lastSidebarScopeKey"] as? String == Self.workScope, "the profile's own account stays its own")
-        #expect((state["customGroupsByScope"] as? [String: Any])?.keys.sorted() == [Self.workScope])
+        #expect((state["customGroupsByScope"] as? [String: Any])?.isEmpty == true)
         #expect(((state["sidebarRowCountsByScope"] as? [String: Any])?[Self.workScope] as? [String: Int])?["code.recents"] == 50)
         #expect((state["navHasCodeRoutinesByOrg"] as? [String: Any])?.isEmpty == true)
-        #expect(work["epitaxy-unread-v1"] == #"{"state":{"unreadIds":["local_1"]},"version":0}"#)
-        #expect(work["LSS-persisted.epitaxy-folder-permission-mode.\(Sandbox.accountB)"] == #"{"value":{"scratch:":"auto"},"tabId":"","timestamp":1}"#)
-        #expect(work["LSS-persisted.code-sessions-status-filter.\(Sandbox.accountB)"] == nil, "the main app shows the default filter")
+        #expect(work["epitaxy-unread-v1"] == nil, "unread state can also contain cloud threads")
+        #expect(work["LSS-persisted.epitaxy-folder-permission-mode.\(Sandbox.accountB)"] == nil, "permission grants are never remapped")
+        #expect(work["LSS-persisted.code-sessions-status-filter.\(Sandbox.accountB)"] == #"{"value":"all","tabId":"","timestamp":1}"#)
         #expect(work["composer-draft:epitaxy-local_1"] == nil, "drafts are not copied")
         #expect(work["__qk_hint_account_uuid"] == nil, "account data is not copied")
         #expect(work["sidebarWidth"] == "240", "unrelated entries stay")
-        #expect(changed == 4)
+        #expect(changed == 1)
         #expect(try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work") == 0, "a second run has nothing to do")
     }
 
@@ -109,11 +113,11 @@ struct InterfaceSyncTests {
 
     @Test func nothingIsWrittenBeforeSignInOrWhileTheWindowIsOpen() throws {
         let box = try sandbox()
-        try put(box.main, ["epitaxy-unread-v1": #"{"state":{"unreadIds":["local_1"]}}"#])
+        try put(box.main, ["epitaxy-editor-prefs": #"{"state":{"unreadIds":["local_1"]}}"#])
         let config = box.work.appending(path: "config.json")
         try FileManager.default.removeItem(at: config)
         #expect(try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work") == 0, "not signed in yet")
-        #expect(try items(box.work)["epitaxy-unread-v1"] == nil)
+        #expect(try items(box.work)["epitaxy-editor-prefs"] == nil)
 
         try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountB)"}"#, to: config)
         let holder = Process()
@@ -128,7 +132,7 @@ struct InterfaceSyncTests {
         _ = stdout.fileHandleForReading.availableData   // the holder's "locked" line
 
         #expect(try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work") == 0, "the window is open")
-        #expect(try items(box.work)["epitaxy-unread-v1"] == nil)
+        #expect(try items(box.work)["epitaxy-editor-prefs"] == nil)
     }
 
     // MARK: claude_desktop_config.json
@@ -144,36 +148,116 @@ struct InterfaceSyncTests {
     }
 
     /// Claude reads these settings from `claude_desktop_config.json` before Local Storage.
-    @Test func settingsClaudeReadsFirstFollowTheMainAppPerAccount() throws {
+    @Test func portablePrefsShareWithoutImportingUnknownOrAccountPreferences() throws {
         let box = try sandbox()
         let (a, b) = (Sandbox.accountA, Sandbox.accountB)
-        try writePrefs(box, box.main, ["dframe-local-slice": ["open": 1], "epitaxy-folder-permission-mode.\(a)": ["scratch:": "auto"],
-                                       "somethingElse": true])
-        try writePrefs(box, box.work, ["code-sessions-status-filter.\(b)": "all", "ownOnly": 2])
+        try writePrefs(box, box.main, ["epitaxy-transcript-links-in-preview": true,
+                                       "epitaxy-folder-permission-mode.\(a)": ["scratch:": "auto"],
+                                       "desktop-frame.paneStore.v1": ["project": "chan_other"],
+                                       "projects.chan_other.overviewPaneOpen": true, "futurePreference": true])
+        try writePrefs(box, box.work, ["epitaxy-transcript-links-in-preview": false,
+                                       "epitaxy-folder-permission-mode.\(b)": ["scratch:": "ask"],
+                                       "desktop-frame.paneStore.v1": ["project": "chan_own"],
+                                       "projects.chan_own.overviewPaneOpen": false, "ownOnly": 2])
         let settings = SettingsSync(paths: box.paths), interface = InterfaceSync(paths: box.paths)
-
-        // In the order opening a profile runs them.
         try settings.run(into: box.work)
         try interface.run(into: box.work, profileID: "work")
-
         var work = try prefs(box.work)
-        #expect(work["code-sessions-status-filter.\(b)"] == nil, "the main app shows the default filter, so the profile does too")
-        #expect((work["epitaxy-folder-permission-mode.\(b)"] as? [String: String]) == ["scratch:": "auto"])
-        #expect(work["epitaxy-folder-permission-mode.\(a)"] == nil, "the main app's account isn't copied as is")
-        #expect((work["dframe-local-slice"] as? [String: Int]) == ["open": 1])
-        #expect(work["somethingElse"] as? Bool == true)
+        #expect(work["epitaxy-transcript-links-in-preview"] as? Bool == true)
+        #expect((work["epitaxy-folder-permission-mode.\(b)"] as? [String: String]) == ["scratch:": "ask"])
+        #expect(work["epitaxy-folder-permission-mode.\(a)"] == nil)
+        #expect((work["desktop-frame.paneStore.v1"] as? [String: String]) == ["project": "chan_own"])
+        #expect(work["projects.chan_other.overviewPaneOpen"] == nil)
+        #expect(work["projects.chan_own.overviewPaneOpen"] as? Bool == false)
+        #expect(work["futurePreference"] == nil)
         #expect(work["ownOnly"] as? Int == 2)
-        #expect(try settings.run(into: box.work) == 0 && interface.run(into: box.work, profileID: "work") == 0,
-                "a second run has nothing to do")
-
-        // A change made only in the profile's window stays, through both.
-        var changed = work
-        changed["dframe-local-slice"] = ["open": 2]
-        try writePrefs(box, box.work, changed)
+        #expect(try settings.run(into: box.work) == 0 && interface.run(into: box.work, profileID: "work") == 0)
+        work["epitaxy-transcript-links-in-preview"] = false
+        try writePrefs(box, box.work, work)
         try settings.run(into: box.work)
         try interface.run(into: box.work, profileID: "work")
-        work = try prefs(box.work)
-        #expect((work["dframe-local-slice"] as? [String: Int]) == ["open": 2])
+        #expect(try prefs(box.work)["epitaxy-transcript-links-in-preview"] as? Bool == false)
+    }
+
+    @Test func cloudProjectAndMixedPinsStayWithTheirProfileInBothStores() throws {
+        let box = try sandbox()
+        let hidden = "dframe-unpinned-epitaxy-project-ids"
+        let stars = "LSS-persisted.starred-local-code-sessions"
+        let source = [hidden: #"["chan_main"]"#, stars: #"{"value":["local_main"]}"#,
+                      InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_main"], "sidebarWidth": 250])]
+        let target = [hidden: #"["chan_own"]"#, stars: #"{"value":["local_own","session_remote"]}"#,
+                      InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_own", "project:chan_own"], "sidebarWidth": 240])]
+        try put(box.main, source)
+        try put(box.work, target)
+        let starred = "store:pin-state:dframe-starred-code", projects = "store:pin-state:dframe-unpinned-epitaxy-project"
+        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_main"]},"version":0}"#),
+                                             projects: (2, #"{"state":{"unpinnedIds":["chan_main"]},"version":0}"#)])
+        let ownStarred = #"{"state":{"starredIds":["local_own","session_remote"]},"version":0}"#
+        let ownProjects = #"{"state":{"unpinnedIds":["chan_own"]},"version":0}"#
+        let idb = try makePinStore(box.work, records: [starred: (1, ownStarred), projects: (2, ownProjects)])
+        try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work")
+        let result = try items(box.work)
+        #expect(result[hidden] == target[hidden])
+        #expect(result[stars] == target[stars])
+        #expect(try sidebarState(result)["pinnedOrder"] as? [String] == ["code:local_own", "project:chan_own"])
+        #expect(try sidebarState(result)["sidebarWidth"] as? Int == 250)
+        #expect(try idb.read()?.records[starred]?.string == ownStarred)
+        #expect(try idb.read()?.records[projects]?.string == ownProjects)
+    }
+
+    @Test func nativeWorkersAndUnknownLocalIDsAreNotPortablePins() throws {
+        let box = try sandbox()
+        let pair = try box.pair(box.main, account: Sandbox.accountA)
+        try box.write(NativeSessionScopeTests.worker, to: pair.appending(path: "local_worker.json"))
+        let key = "LSS-persisted.starred-local-code-sessions"
+        try put(box.main, [key: #"{"value":["local_1","local_worker"]}"#,
+                           InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_worker"]])])
+        let own = #"{"value":["local_2"]}"#
+        try put(box.work, [key: own, InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_2"]])])
+        let sync = InterfaceSync(paths: box.paths)
+        try sync.run(into: box.work, profileID: "work")
+        #expect(try items(box.work)[key] == own)
+        #expect(try sidebarState(items(box.work))["pinnedOrder"] as? [String] == ["code:local_2"])
+        try put(box.main, [key: #"{"value":["local_unknown"]}"#])
+        try sync.run(into: box.work, profileID: "work")
+        #expect(try items(box.work)[key] == own)
+    }
+
+    @Test func rememberedNativeOwnershipProtectsPinsAfterCardMarkersDisappear() throws {
+        let box = try sandbox()
+        // local_1 has an ordinary-looking current card, but the durable ownership state remembers it.
+        let scopeFile = box.paths.stateDir.appending(path: "code-native-session-scopes.json")
+        try SessionSync.NativeScopeState(scopes: ["local_1.json": [Self.mainScope]]).save(to: scopeFile)
+        let key = "LSS-persisted.starred-local-code-sessions"
+        let own = #"{"value":["local_2"]}"#
+        try put(box.main, [key: #"{"value":["local_1"]}"#,
+                           InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_1"]])])
+        try put(box.work, [key: own, InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_2"]])])
+        try writePrefs(box, box.main, ["starred-local-code-sessions": ["local_1"]])
+        try writePrefs(box, box.work, ["starred-local-code-sessions": ["local_2"]])
+        let stars = "store:pin-state:dframe-starred-code"
+        try makePinStore(box.main, records: [stars: (1, #"{"state":{"starredIds":["local_1"]},"version":0}"#)])
+        let ownPins = #"{"state":{"starredIds":["local_2"]},"version":0}"#
+        let targetPins = try makePinStore(box.work, records: [stars: (1, ownPins)])
+        try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work")
+        #expect(try items(box.work)[key] == own)
+        #expect(try sidebarState(items(box.work))["pinnedOrder"] as? [String] == ["code:local_2"])
+        #expect(try prefs(box.work)["starred-local-code-sessions"] as? [String] == ["local_2"])
+        #expect(try targetPins.read()?.records[stars]?.string == ownPins)
+    }
+
+    @Test(arguments: ["{corrupt", #"{"version":2,"scopes":{}}"#])
+    func invalidNativeOwnershipStateRefusesInterfaceWrites(state: String) throws {
+        let box = try sandbox()
+        let key = "LSS-persisted.starred-local-code-sessions"
+        let own = #"{"value":["local_2"]}"#
+        try put(box.main, [key: #"{"value":["local_1"]}"#])
+        try put(box.work, [key: own])
+        try box.write(state, to: box.paths.stateDir.appending(path: "code-native-session-scopes.json"))
+        let sync = InterfaceSync(paths: box.paths)
+        #expect(throws: (any Error).self) { try sync.run(into: box.work, profileID: "work") }
+        #expect(try items(box.work)[key] == own)
+        #expect(!box.exists(sync.stateFile(for: "work")))
     }
 
     // MARK: IndexedDB
@@ -227,7 +311,7 @@ struct InterfaceSyncTests {
         return store
     }
 
-    @Test func starredSessionsAndOpenSectionsFollowTheMainApp() throws {
+    @Test func onlyLocalStarredSessionsFollowTheMainApp() throws {
         let box = try sandbox()
         let starred = "store:pin-state:dframe-starred-code", groups = "store:pin-state:dframe-session-groups"
         let mainStarred = #"{"state":{"starredIds":["local_1"]},"version":0}"#
@@ -237,11 +321,11 @@ struct InterfaceSyncTests {
                                                         "unrelated": (3, "own")], databaseID: 2)
         let sync = InterfaceSync(paths: box.paths)
 
-        #expect(try sync.run(into: box.work, profileID: "work") == 2)
+        #expect(try sync.run(into: box.work, profileID: "work") == 1)
 
         let snapshot = try #require(try work.read())
         #expect(snapshot.records[starred]?.string == mainStarred)
-        #expect(snapshot.records[groups]?.string == mainGroups)
+        #expect(snapshot.records[groups]?.string == #"{"state":{"expandedIds":[]},"version":0}"#)
         #expect(snapshot.records["unrelated"]?.string == "own")
         let version = try #require(snapshot.records[starred]?.version)
         #expect(version > 3 && snapshot.lastVersion >= version, "new records get versions the store hasn't used")
@@ -265,7 +349,7 @@ struct InterfaceSyncTests {
     @Test func pinRecordsWithBlobsOrAnotherVersionAreLeftAlone() throws {
         let box = try sandbox()
         let starred = "store:pin-state:dframe-starred-code", groups = "store:pin-state:dframe-session-groups"
-        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["a"]},"version":1}"#),
+        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_a"]},"version":1}"#),
                                              groups: (2, #"{"state":{"expandedIds":["b"]},"version":0}"#)])
         let work = try makePinStore(box.work, records: [starred: (1, #"{"state":{"starredIds":[]},"version":0}"#),
                                                         groups: (2, #"{"state":{"expandedIds":[]},"version":0}"#)], blobs: [groups])
@@ -294,7 +378,7 @@ struct InterfaceSyncTests {
                                            ("key generator", keyGenerator, 0x10_0000_0015),
                                            ("data version", { _, _ in [] }, 0x10_0000_0014)] {
             let box = try sandbox()
-            try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["a"]},"version":0}"#)])
+            try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_a"]},"version":0}"#)])
             let work = try makePinStore(box.work, records: [starred: (1, own)], dataVersion: dataVersion, extra: extra)
             #expect(try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work") == 0, "\(name)")
             let entries = try work.store.liveEntries()
@@ -306,9 +390,9 @@ struct InterfaceSyncTests {
     @Test func placesMergedBeforeAFailureAreRemembered() throws {
         let box = try sandbox()
         let starred = "store:pin-state:dframe-starred-code"
-        try writePrefs(box, box.main, ["dframe-local-slice": ["open": 1]])
+        try writePrefs(box, box.main, ["epitaxy-transcript-links-in-preview": true])
         try writePrefs(box, box.work, ["ownOnly": 2])
-        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["a"]},"version":0}"#)])
+        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_a"]},"version":0}"#)])
         try makePinStore(box.work, records: [starred: (1, #"{"state":{"starredIds":[]},"version":0}"#)])
         let now = Date()
         let blocked = Backup(paths: box.paths, now: now).dayDir.appending(path: "Interface")
@@ -319,9 +403,9 @@ struct InterfaceSyncTests {
         #expect(throws: (any Error).self) { try sync.run(into: box.work, profileID: "work", now: now) }
 
         let state = InterfaceSync.readState(sync.stateFile(for: "work"))
-        #expect(state["prefs:dframe-local-slice"] != nil)
+        #expect(state["prefs:epitaxy-transcript-links-in-preview"] != nil)
         #expect(state["idb:" + starred] == nil)
-        #expect((try prefs(box.work)["dframe-local-slice"] as? [String: Int]) == ["open": 1])
+        #expect(try prefs(box.work)["epitaxy-transcript-links-in-preview"] as? Bool == true)
     }
 
     @Test func readsTheStringsChromiumSerializes() {

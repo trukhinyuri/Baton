@@ -1,8 +1,10 @@
 import Foundation
+import CryptoKit
 
-/// Gives a profile the main app's local setup before its window starts: desktop extensions, MCP servers,
-/// tool toggles, SSH hosts, app preferences and appearance. The main app is the source; a profile keeps only
-/// settings the main app doesn't have. Sign-in data (tokens in `config.json`, cookies) is never copied.
+/// Shares an explicit set of portable desktop settings before a profile starts. Account state, Projects,
+/// Remote Control, Cowork grants and unknown future preferences stay with the profile. Portable settings
+/// use a three-way merge: a change made only in the profile survives the next launch.
+/// Sign-in data (tokens in `config.json`, cookies) is never copied.
 ///
 /// Run it only while the profile's window is closed: Claude writes these files back when it quits.
 public struct SettingsSync: Sendable {
@@ -20,6 +22,13 @@ public struct SettingsSync: Sendable {
     /// The only `config.json` keys copied; the rest of that file is sign-in and per-window state.
     static let appearanceKeys = ["userThemeMode", "windowControlsZoomFactor", "locale"]
 
+    /// Deliberately opt-in: a new Claude preference must be understood before it can cross profiles.
+    /// In particular, Remote Control, folder grants, browser pairing and account consent are not appearance.
+    static let portablePreferences: Set<String> = [
+        "keepAwakeEnabled", "dockBounceEnabled", "sidebarMode", "quickEntryDictationShortcut",
+        "coworkPreferredBrowser", "ccAutoArchiveInactiveDays", "ccAutoArchiveOnPrClose",
+    ]
+
     public let paths: Paths
     private var fm: FileManager { .default }
 
@@ -30,8 +39,9 @@ public struct SettingsSync: Sendable {
     public func run(into dataDir: URL, now: Date = Date()) throws -> Int {
         let source = paths.mainDataDir
         let backup = Backup(paths: paths, now: now)
-        let mainAccount = DesktopData.accountID(in: source)
-        let account = DesktopData.accountID(in: dataDir)
+        guard !LocalStorage(dataDir: dataDir).isInUse else { throw LocalStorageError.databaseInUse }
+        let stateURL = paths.stateDir.appending(path: "Settings/\(dataDir.lastPathComponent).json")
+        var base = InterfaceSync.readState(stateURL)
         var changed = 0
 
         for name in Self.copied {
@@ -47,30 +57,32 @@ public struct SettingsSync: Sendable {
 
         changed += try copyBuilds(into: dataDir)
 
-        if try mergeJSON("claude_desktop_config.json", into: dataDir, backup: backup, adjust: { config, current in
-            var preferences = config["preferences"] as? [String: Any] ?? [:]
-            let ownPreferences = current["preferences"] as? [String: Any] ?? [:]
-            for key in Self.windowPreferences { preferences[key] = ownPreferences[key] }
-            for key in Self.mainOnlyPreferences { preferences[key] = false }
-            // Interface settings here are shared by InterfaceSync, per account and keeping changes made only in the profile.
-            if var prefs = preferences["epitaxyPrefs"] as? [String: Any] {
-                let own = ownPreferences["epitaxyPrefs"] as? [String: Any] ?? [:]
-                prefs = prefs.filter { !InterfaceSync.sharesPref($0.key) }
-                for (key, value) in own where InterfaceSync.sharesPref(key) { prefs[key] = value }
-                preferences["epitaxyPrefs"] = prefs
+        let desktop = dataDir.appending(path: "claude_desktop_config.json")
+        if let main = try Self.readExistingJSON(source.appending(path: "claude_desktop_config.json")) {
+            let current = try Self.readExistingJSON(desktop) ?? [:]
+            var result = current, attempt = base
+            Self.share("mcpServers", main: main, own: current, into: &result, base: &attempt, prefix: "desktop:")
+            let mainPrefs = main["preferences"] as? [String: Any] ?? [:]
+            let ownPrefs = current["preferences"] as? [String: Any] ?? [:]
+            var prefs = ownPrefs
+            for key in Self.portablePreferences {
+                Self.share(key, main: mainPrefs, own: ownPrefs, into: &prefs, base: &attempt, prefix: "preferences:")
             }
-            config["preferences"] = preferences
-        }) { changed += 1 }
-
-        // Tool toggles are kept per account; the profile's account gets the ones chosen in the main app.
-        if try mergeJSON("mcp-user-tool-toggles.json", into: dataDir, backup: backup, adjust: { toggles, _ in
-            guard let mainAccount, let account, var owners = toggles["owners"] as? [String: Any],
-                  let chosen = owners[mainAccount] else { return }
-            owners[account] = chosen
-            toggles["owners"] = owners
-        }) { changed += 1 }
-
-        if try copyAppearance(into: dataDir) { changed += 1 }
+            // Scheduled tasks keep their own switches; only MAIN registers a wake helper.
+            for key in Self.mainOnlyPreferences { prefs[key] = false }
+            if !prefs.isEmpty || current["preferences"] != nil { result["preferences"] = prefs }
+            if !NSDictionary(dictionary: result).isEqual(to: current) {
+                if fm.fileExists(atPath: desktop.path) { _ = try backup.save(desktop) }
+                try Self.writeJSON(result, to: desktop)
+                changed += 1
+            }
+            base = attempt
+            try InterfaceSync.writeState(base, to: stateURL)
+        }
+        // Tool toggles are permissions owned by each account. Never copy another account's grants or
+        // replace a profile's deliberate denial with MAIN's enabled switch.
+        if try copyAppearance(into: dataDir, base: &base) { changed += 1 }
+        try InterfaceSync.writeState(base, to: stateURL)
         return changed
     }
 
@@ -93,49 +105,53 @@ public struct SettingsSync: Sendable {
         return copied
     }
 
-    /// Merges `name` from the main app into the profile, applies `adjust` (which also gets the profile's
-    /// current contents), and writes it if anything changed.
-    private func mergeJSON(_ name: String, into dataDir: URL, backup: Backup,
-                           adjust: (inout [String: Any], [String: Any]) -> Void) throws -> Bool {
-        let from = paths.mainDataDir.appending(path: name), to = dataDir.appending(path: name)
-        guard let main = Self.readJSON(from) else { return false }
-        let current = Self.readJSON(to) ?? [:]
-        var result = Self.merge(current, main)
-        adjust(&result, current)
-        guard !NSDictionary(dictionary: result).isEqual(to: current) else { return false }
-        if fm.fileExists(atPath: to.path) { _ = try backup.save(to) }
-        try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: to, options: .atomic)
-        return true
+    /// Resolves portable values without retaining their contents (MCP configuration may include secrets).
+    /// Missing source settings do not delete profile-only settings.
+    private static func share(_ key: String, main: [String: Any], own: [String: Any],
+                              into result: inout [String: Any], base: inout [String: String], prefix: String) {
+        guard let value = main[key] else { return }
+        let stateKey = prefix + key
+        let mainHash = fingerprint(value), ownHash = own[key].map(fingerprint) ?? InterfaceSync.missing
+        guard InterfaceSync.resolve(own: ownHash, main: mainHash, base: base[stateKey]) == .main else { return }
+        result[key] = value
+        base[stateKey] = mainHash
+    }
+
+    private static func fingerprint(_ value: Any) -> String {
+        SHA256.hash(data: Data(InterfaceSync.canonical(value).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A corrupt existing configuration is not an empty configuration and must never be replaced silently.
+    private static func readExistingJSON(_ url: URL) throws -> [String: Any]? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LocalStorageError.corrupt("\(url.lastPathComponent) must contain a JSON object")
+        }
+        return object
+    }
+
+    private static func writeJSON(_ object: [String: Any], to url: URL) throws {
+        let permissions = (try? FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions]) ?? NSNumber(value: 0o600)
+        try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
     }
 
     /// Copies theme, zoom and language into the profile's `config.json`, leaving everything else in it untouched.
     /// That file also holds the profile's sign-in, so it is edited in place and never backed up or copied.
-    private func copyAppearance(into dataDir: URL) throws -> Bool {
+    private func copyAppearance(into dataDir: URL, base: inout [String: String]) throws -> Bool {
         let to = dataDir.appending(path: "config.json")
         guard let main = Self.readJSON(paths.mainDataDir.appending(path: "config.json")),
               var config = Self.readJSON(to) else { return false }
-        let before = NSDictionary(dictionary: config)
+        let own = config
+        var attempt = base
         for key in Self.appearanceKeys {
-            if let value = main[key] { config[key] = value }
+            Self.share(key, main: main, own: own, into: &config, base: &attempt, prefix: "appearance:")
         }
-        guard !before.isEqual(to: config) else { return false }
-        let permissions = (try? fm.attributesOfItem(atPath: to.path)[.posixPermissions]) ?? NSNumber(value: 0o600)
-        try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted]).write(to: to, options: .atomic)
-        try fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: to.path)
+        guard !NSDictionary(dictionary: own).isEqual(to: config) else { base = attempt; return false }
+        try Self.writeJSON(config, to: to)
+        base = attempt
         return true
-    }
-
-    /// `main` wins; nested objects such as `preferences` or per-account maps are merged the same way.
-    static func merge(_ profile: [String: Any], _ main: [String: Any]) -> [String: Any] {
-        var result = profile
-        for (key, value) in main {
-            if let inner = value as? [String: Any], let own = profile[key] as? [String: Any], key != "mcpServers" {
-                result[key] = merge(own, inner)
-            } else {
-                result[key] = value
-            }
-        }
-        return result
     }
 
     static func readJSON(_ url: URL) -> [String: Any]? {

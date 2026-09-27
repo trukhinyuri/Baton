@@ -132,6 +132,12 @@ struct ProfileRow: View {
                     Label("Signed in as a different account than \(expected)", systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
+                if status.isOpenWithoutProfile {
+                    Label("A Claude \(status.label) window shows the main account — click \(status.isRunning ? "Show" : "Open") to replace it",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                        .help("This app copy was opened without the profile, from its own Dock icon or by macOS at login. Keep the launcher in the Dock instead.")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -207,6 +213,8 @@ struct ContentView: View {
         }
         .frame(minWidth: 760, idealWidth: 900, minHeight: 380, idealHeight: 580)
         .sheet(isPresented: $model.isAdding) { AddProfileSheet(model: model) }
+        .sheet(isPresented: $model.isContinuing) { ContinueWorkSheet(model: model) }
+        .sheet(isPresented: $model.isCheckingSessions) { DiagnosticsSheet(entries: model.diagnostics) }
         .confirmationDialog(
             "Remove \(model.pendingRemoval.map { $0.email ?? "Claude \($0.label)" } ?? "")?",
             isPresented: Binding(get: { model.pendingRemoval != nil }, set: { if !$0 { model.pendingRemoval = nil } }),
@@ -215,7 +223,7 @@ struct ContentView: View {
             Button("Remove", role: .destructive) { model.remove(status) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("Its window closes and its app copy and sign-in move to the Trash. Your Claude Code sessions stay available in every other window; Cowork sessions started in it move to the Trash with it.")
+            Text("Its window closes and its app copy and sign-in move to the Trash. Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the profile; cloud Projects stay with their account.")
         }
         .alert("Something went wrong", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
@@ -228,11 +236,12 @@ struct ContentView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Subscriptions").font(.title2.weight(.semibold))
-                Text("Every subscription runs in its own Claude window with a labeled Dock icon. Sessions, settings and skills are shared.")
+                Text("Continue local work with another subscription. Cloud projects stay in their account; use a context handoff to continue elsewhere.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button("Continue work…") { model.isContinuing = true }
             Button {
                 model.isAdding = true
             } label: {
@@ -252,20 +261,21 @@ struct ContentView: View {
             if let message = model.busyMessage {
                 ProgressView().controlSize(.small)
                 Text(message)
-            } else if let problem = model.registryError ?? model.syncError {
+            } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 Text(problem).lineLimit(2).textSelection(.enabled)
             } else {
                 Image(systemName: "arrow.triangle.2.circlepath")
                 if model.statuses.count < 2 {
-                    Text("Sessions will be shared as soon as you add a subscription")
+                    Text("Local Code sessions will be shared when you add a subscription")
                 } else if let last = model.lastSync {
-                    Text("Sessions shared across \(model.statuses.count) windows · synced \(last, format: .relative(presentation: .named))")
+                    Text("Local Code synced · \(last, format: .relative(presentation: .named))")
                 } else {
-                    Text("Sharing sessions…")
+                    Text("Sharing local Code sessions…")
                 }
             }
             Spacer()
+            Button("Check sessions") { model.checkSessions() }
             Link(destination: URL(string: "https://github.com/trukhinyuri/ClaudeProfiles#staying-within-anthropics-terms")!) {
                 Label("Fair use", systemImage: "checkmark.shield")
             }
