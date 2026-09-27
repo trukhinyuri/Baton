@@ -6,6 +6,8 @@ import Foundation
 /// `<data dir>/claude-code-sessions/<account>/<organization>/local_<id>.json`; the conversation itself lives in
 /// `~/.claude/projects` and is already shared by all profiles. Copying the cards into every account/organization
 /// directory of every profile lets you continue a session from any window.
+/// Native Project / Remote Control workers retain their account-and-organization scope; copying a card
+/// does not grant access to its server project or bridge. Ambiguous copies made by old releases are preserved.
 ///
 /// Cards are copied, not symlinked: Claude Desktop creates these directories with `mkdir` and fails on symlinks.
 public struct SessionSync: Sendable {
@@ -16,6 +18,10 @@ public struct SessionSync: Sendable {
         public var tombstonesWritten = 0
         public var archiveIndexesWritten = 0
         public var backedUp = 0
+        /// Native Project / Remote Control workers shared only within one account and organization.
+        public var accountBoundCards = 0
+        /// Existing copies in several scopes are preserved without choosing an owner.
+        public var ambiguousAccountBoundCards = 0
         public var changes: Int { cardsWritten + cardsRemoved + tombstonesWritten + archiveIndexesWritten }
     }
 
@@ -37,23 +43,36 @@ public struct SessionSync: Sendable {
     @discardableResult
     public func run(propagateDeletions: Bool, now: Date = Date()) throws -> Report {
         var report = Report()
-        let pairs = self.pairs()
+        let pairs = try self.pairs()
         report.pairs = pairs.count
 
         var cards: [String: (modified: Date, data: Data)] = [:]
         var tombstones = Set<String>()
+        var tombstonesByScope: [String: Set<String>] = [:]
+        let scopeFile = paths.stateDir.appending(path: "code-native-session-scopes.json")
+        let remembered = try NativeScopeState.load(from: scopeFile)
+        var cardScopes = remembered.scopes.mapValues(Set.init)
+        var accountBound = Set(remembered.scopes.keys)
+        var observed = Set<String>()
         var archiveLists: [String: Set<String>] = [:]   // folder path → archived IDs, for folders that have an index
         var archiveVersion: Any = 1
 
         for pair in pairs {
-            for url in SyncFolders.contents(of: pair) {
+            let scope = Self.scope(of: pair)
+            // A read error must not look like an empty folder to deletion handling.
+            for url in try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil) {
                 let name = url.lastPathComponent
                 if name.hasPrefix("local_"), name.hasSuffix(".json") {
+                    let data = try Data(contentsOf: url)
+                    observed.insert(name)
+                    cardScopes[name, default: []].insert(scope)
+                    if Self.isAccountBound(data) { accountBound.insert(name) }
                     guard let modified = SyncFolders.modificationDate(url) else { continue }
                     if let known = cards[name], known.modified >= modified { continue }
-                    if let data = try? Data(contentsOf: url) { cards[name] = (modified, data) }
+                    cards[name] = (modified, data)
                 } else if name.hasPrefix("deleted_") {
                     tombstones.insert(name)
+                    tombstonesByScope[scope, default: []].insert(name)
                 } else if name == Self.archiveIndex, let index = readJSON(url) {
                     archiveLists[pair.path] = Set(index["archived"] as? [String] ?? [])
                     archiveVersion = index["v"] ?? archiveVersion
@@ -61,16 +80,27 @@ public struct SessionSync: Sendable {
             }
         }
 
-        // Never resurrect a session that was deleted in any profile.
-        let deletedIDs = Set(tombstones.map { String($0.dropFirst("deleted_".count)) })
-        cards = cards.filter { name, _ in
-            let id = String(name.dropFirst("local_".count).dropLast(".json".count))
-            return !deletedIDs.contains(id) && !deletedIDs.contains("local_" + id)
-        }
+        report.accountBoundCards = accountBound.intersection(observed).count
+        report.ambiguousAccountBoundCards = accountBound.intersection(observed).filter { (cardScopes[$0]?.count ?? 0) != 1 }.count
+        // Remember native IDs before any deletion. Their later tombstones must never become global just
+        // because the last card disappeared, and an ambiguous owner cannot be guessed on the next run.
+        let nextScopes = cardScopes.filter { accountBound.contains($0.key) }.mapValues { $0.sorted() }
+        if nextScopes != remembered.scopes { try NativeScopeState(scopes: nextScopes).save(to: scopeFile) }
 
-        // Archive lists are merged by union. Honoring removals would be unsafe: a running Claude can write back
-        // a stale list, which would look like un-archiving everything added since it loaded.
-        let archived = archiveLists.values.reduce(into: Set<String>()) { $0.formUnion($1) }
+        // A native worker is tied to its server-side account/organization and CCR bridge. Old versions may
+        // already have copied it elsewhere; timestamps cannot establish which copy owns that bridge.
+        // Preserve ambiguous copies, without relinking, replacing or deleting any of them.
+        func permitted(_ name: String, in scope: String) -> Bool {
+            guard accountBound.contains(name) else { return true }
+            return cardScopes[name]?.count == 1 && cardScopes[name]?.contains(scope) == true
+        }
+        func markers(in scope: String) -> Set<String> {
+            Set(tombstones.filter { marker in
+                let name = Self.cardName(for: String(marker.dropFirst("deleted_".count)))
+                return !accountBound.contains(name)
+                    || (permitted(name, in: scope) && tombstonesByScope[scope]?.contains(marker) == true)
+            })
+        }
 
         let backup = Backup(paths: paths, now: now)
         for pair in pairs {
@@ -78,15 +108,21 @@ public struct SessionSync: Sendable {
             let listed = pair.resolvingSymlinksInPath().path
             let dataDir = dataDirs.first { listed.hasPrefix($0.resolvingSymlinksInPath().path + "/") }
                 ?? pair.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            let present = Set(SyncFolders.contents(of: pair).map(\.lastPathComponent))
-            for (name, card) in cards {
+            let scope = Self.scope(of: pair)
+            let applicableTombstones = markers(in: scope)
+            let deletedNames = Set(applicableTombstones.map { Self.cardName(for: String($0.dropFirst("deleted_".count))) })
+            let present = Set(try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil).map(\.lastPathComponent))
+            for (name, card) in cards where permitted(name, in: scope) && !deletedNames.contains(name) {
                 let target = pair.appending(path: name)
-                var data = localized(card.data, for: dataDir), modified = card.modified
+                // A native worker's cwd is coupled to remoteControlSpawn.folder and its server bridge.
+                // Even within one account/organization, preserve the complete card byte-for-byte.
+                let native = accountBound.contains(name)
+                var data = native ? card.data : localized(card.data, for: dataDir), modified = card.modified
                 if present.contains(name) {
                     guard let current = SyncFolders.modificationDate(target), let own = try? Data(contentsOf: target) else { continue }
                     if current >= card.modified.addingTimeInterval(-1) {
                         // This copy is as new as any; it may still need this window's scratch folder path.
-                        data = localized(own, for: dataDir)
+                        data = native ? own : localized(own, for: dataDir)
                         modified = current
                     }
                     guard own != data else { continue }
@@ -99,16 +135,26 @@ public struct SessionSync: Sendable {
                 report.cardsWritten += 1
             }
             if propagateDeletions {
-                for tombstone in tombstones where !present.contains(tombstone) {
+                for tombstone in applicableTombstones where !present.contains(tombstone) {
                     fm.createFile(atPath: pair.appending(path: tombstone).path, contents: Data())
                     report.tombstonesWritten += 1
                 }
-                for name in present where name.hasPrefix("local_") && name.hasSuffix(".json") && cards[name] == nil {
+                for name in present where deletedNames.contains(name) && permitted(name, in: scope) {
                     let target = pair.appending(path: name)
                     if try backup.save(target, everyTime: true) { report.backedUp += 1 }
                     try fm.removeItem(at: target)
                     report.cardsRemoved += 1
                 }
+            }
+            // Keep own archive entries; import native worker entries only within their known scope.
+            // Union still protects against a running window writing a stale archive list.
+            var archived = archiveLists[pair.path] ?? []
+            for (path, ids) in archiveLists {
+                let sourceScope = Self.scope(of: URL(fileURLWithPath: path))
+                archived.formUnion(ids.filter { id in
+                    let name = Self.cardName(for: id)
+                    return !accountBound.contains(name) || (sourceScope == scope && permitted(name, in: scope))
+                })
             }
             let url = pair.appending(path: Self.archiveIndex)
             if !archived.isEmpty {
@@ -123,6 +169,72 @@ public struct SessionSync: Sendable {
         removeDeadScratchLinks()
         backup.prune()
         return report
+    }
+
+    /// A second organization on the same account is not authorization for the native worker.
+    static func scope(of pair: URL) -> String {
+        pair.deletingLastPathComponent().lastPathComponent + "/" + pair.lastPathComponent
+    }
+
+    /// Missing session roots are normal for a new profile. Other enumeration errors are not evidence of
+    /// deletion and must stop the sync before its baseline or cards change.
+    static func sessionPairs(dataDirs: [URL], folder: String) throws -> [URL] {
+        let fm = FileManager.default
+        var result: [URL] = []
+        for dataDir in dataDirs {
+            let root = dataDir.appending(path: folder, directoryHint: .isDirectory)
+            let accounts: [URL]
+            do {
+                accounts = try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+                continue
+            }
+            for account in accounts where account.lastPathComponent.count == 36 {
+                let values = try account.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
+                for org in try fm.contentsOfDirectory(at: account, includingPropertiesForKeys: nil) where !org.lastPathComponent.hasPrefix(".") {
+                    let values = try org.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                    if values.isDirectory == true, values.isSymbolicLink != true { result.append(org) }
+                }
+            }
+        }
+        return result
+    }
+
+    static func cardName(for id: String) -> String {
+        let name = id.hasPrefix("local_") ? id : "local_" + id
+        return name.hasSuffix(".json") ? name : name + ".json"
+    }
+
+    static func isAccountBound(_ data: Data) -> Bool {
+        guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
+        return isAccountBoundCard(card)
+    }
+
+    static func isAccountBoundCard(_ card: [String: Any]) -> Bool {
+        if let spawn = card["remoteControlSpawn"], !(spawn is NSNull) { return true }
+        return card["projectThreadChild"] as? Bool == true || card["rcChild"] as? Bool == true
+    }
+
+    /// Only native card identifiers and account/organization scopes, never conversation text or credentials.
+    /// Shared by the two session kinds, each in its own file. Malformed/unknown state fails closed.
+    struct NativeScopeState: Codable {
+        var version = 1
+        var scopes: [String: [String]] = [:]
+
+        static func load(from url: URL) throws -> NativeScopeState {
+            guard FileManager.default.fileExists(atPath: url.path) else { return NativeScopeState() }
+            let state = try JSONDecoder().decode(NativeScopeState.self, from: Data(contentsOf: url))
+            guard state.version == 1 else { throw CocoaError(.fileReadCorruptFile) }
+            return state
+        }
+
+        func save(to url: URL) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(self).write(to: url, options: .atomic)
+        }
     }
 
     static let scratchFolder = "/scratch-workspaces/"
@@ -245,7 +357,7 @@ public struct SessionSync: Sendable {
     }
 
     /// Every `<account>/<organization>` session directory across all data directories.
-    func pairs() -> [URL] { SyncFolders.pairs(dataDirs: dataDirs, folder: Self.sessionsFolder) }
+    func pairs() throws -> [URL] { try Self.sessionPairs(dataDirs: dataDirs, folder: Self.sessionsFolder) }
 
     private func readJSON(_ url: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: url) else { return nil }
@@ -311,4 +423,3 @@ struct Backup {
         return moved
     }
 }
-

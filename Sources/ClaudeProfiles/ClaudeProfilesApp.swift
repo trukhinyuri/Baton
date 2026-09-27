@@ -18,6 +18,8 @@ struct ClaudeProfilesApp: App {
             }
             CommandGroup(after: .newItem) {
                 Button("Share Sessions Now") { model.syncNow() }.keyboardShortcut("r")
+                Button("Continue work…") { model.isContinuing = true }
+                Button("Check sessions") { model.checkSessions() }
             }
         }
 
@@ -53,6 +55,11 @@ struct MenuBarContent: View {
             model.isAdding = true
         }
         Button("Share Sessions Now") { model.syncNow() }
+        Button("Continue work…") {
+            openWindow(id: "main")
+            NSApp.activate()
+            model.isContinuing = true
+        }
         Divider()
         Button("Quit Claude Profiles") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }

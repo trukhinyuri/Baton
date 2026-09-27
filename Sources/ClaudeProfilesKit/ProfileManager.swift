@@ -8,6 +8,7 @@ public enum ProfileError: LocalizedError, Equatable {
     case duplicateLabel(String)
     case notFound(String)
     case cloneFailed(String)
+    case windowStillRunning(String)
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +18,7 @@ public enum ProfileError: LocalizedError, Equatable {
         case .duplicateLabel(let label): "A profile labeled “\(label)” already exists."
         case .notFound(let id): "No profile “\(id)”."
         case .cloneFailed(let reason): "Couldn’t create the app copy: \(reason)"
+        case .windowStillRunning(let label): "Claude \(label) is open without its profile and did not quit. Finish or stop its active work, close that window, then open the profile again."
         }
     }
 }
@@ -28,13 +30,18 @@ public struct ProfileStatus: Identifiable, Equatable, Sendable {
     public var email: String?
     public var usage: Usage?
     public var isRunning: Bool
+    /// The profile's app copy is open without the profile's data (opened from its own Dock icon or reopened
+    /// by macOS at login), so that window shows the main app's account.
+    public var isOpenWithoutProfile: Bool
 
-    public init(profile: Profile?, accountID: String?, email: String?, usage: Usage?, isRunning: Bool) {
+    public init(profile: Profile?, accountID: String?, email: String?, usage: Usage?, isRunning: Bool,
+                isOpenWithoutProfile: Bool = false) {
         self.profile = profile
         self.accountID = accountID
         self.email = email
         self.usage = usage
         self.isRunning = isRunning
+        self.isOpenWithoutProfile = isOpenWithoutProfile
     }
 
     public var id: String { profile?.id ?? "main" }
@@ -67,6 +74,9 @@ public final class ProfileManager: @unchecked Sendable {
     /// Serializes changes to the registry and to engines within this process; `FileLock` does it across processes.
     private let lock = NSRecursiveLock()
     private var emailCache: [String: (account: String, email: String?, checkedAt: Date)] = [:]
+    private var openWarning: String?
+    /// Opening can succeed using the profile's saved settings even if portable setup could not be refreshed.
+    public var lastOpenWarning: String? { lock.withLock { openWarning } }
 
     public init(paths: Paths = .standard, cliPath: URL? = nil) {
         self.paths = paths
@@ -92,11 +102,14 @@ public final class ProfileManager: @unchecked Sendable {
     // MARK: Status
 
     public func statuses() -> [ProfileStatus] {
-        let running = runningBundlePaths()
-        let main = status(profile: nil, dataDir: paths.mainDataDir, running: running.contains(paths.claudeApp.standardizedFileURL.path))
+        let running = runningClaudes()
+        let main = status(profile: nil, dataDir: paths.mainDataDir,
+                          running: running.contains { $0.uses(dataDir: paths.mainDataDir, mainDataDir: paths.mainDataDir, bundle: paths.claudeApp) })
         let all = [main] + profiles.map { profile in
-            status(profile: profile, dataDir: paths.dataDir(for: profile.id),
-                   running: running.contains(paths.engine(for: profile.id).standardizedFileURL.path))
+            var entry = status(profile: profile, dataDir: paths.dataDir(for: profile.id),
+                               running: running.contains { window(of: profile.id, is: $0) })
+            entry.isOpenWithoutProfile = running.contains { $0.isStartedWithoutDataDir(engine: paths.engine(for: profile.id)) }
+            return entry
         }
         finishSignInIfDone(all)
         return all
@@ -147,6 +160,40 @@ public final class ProfileManager: @unchecked Sendable {
 
     public var isAnyClaudeRunning: Bool { !claudeProcesses().isEmpty }
 
+    func runningClaudes() -> [RunningClaude] { claudeProcesses().map(RunningClaude.init(app:)) }
+
+    /// Whether `copy` is the profile's own window: its app copy started with its data directory.
+    private func window(of id: String, is copy: RunningClaude) -> Bool {
+        copy.uses(dataDir: paths.dataDir(for: id), mainDataDir: paths.mainDataDir, bundle: paths.engine(for: id))
+    }
+
+    /// The profile whose app copy process `pid` is, if it was started without the profile's data directory:
+    /// opened from a Dock icon kept with “Keep in Dock” or reopened by macOS at login. Such a window shows the main
+    /// app's account; `open(_:)` replaces it with the profile's own window.
+    public func profileStartedWithoutDataDir(pid: pid_t) -> Profile? {
+        guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return nil }
+        let copy = RunningClaude(app: app)
+        return profiles.first { copy.isStartedWithoutDataDir(engine: paths.engine(for: $0.id)) }
+    }
+
+    /// Profile app copies running without their data directory that started within `age`, oldest first.
+    public func recentlyStartedWithoutDataDir(within age: TimeInterval, now: Date = Date()) -> [pid_t] {
+        claudeProcesses()
+            .filter { app in app.launchDate.map { now.timeIntervalSince($0) < age } ?? false }
+            .sorted { ($0.launchDate ?? .distantPast) < ($1.launchDate ?? .distantPast) }
+            .map(\.processIdentifier)
+            .filter { profileStartedWithoutDataDir(pid: $0) != nil }
+    }
+
+    /// Asks `apps` to quit and waits up to `seconds`. Ones still running are force-quit only if `force` is set.
+    private func quit(_ apps: [NSRunningApplication], waiting seconds: Double, force: Bool) async throws {
+        apps.forEach { $0.terminate() }
+        for _ in 0..<Int(seconds * 5) where apps.contains(where: { !$0.isTerminated }) {
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        if force { apps.filter { !$0.isTerminated }.forEach { $0.forceTerminate() } }
+    }
+
     // MARK: Create
 
     @discardableResult
@@ -182,13 +229,22 @@ public final class ProfileManager: @unchecked Sendable {
 
     /// Brings the profile's window forward, starting it first if needed.
     public func open(_ id: String) async throws {
+        lock.withLock { openWarning = nil }
         guard let profile = profiles.first(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         let engine = paths.engine(for: profile.id)
         if DesktopData.accountID(in: paths.dataDir(for: profile.id)) == nil {
             try signInRouting.begin(profileID: profile.id, allProfileIDs: profiles.map(\.id))
         }
-        if let running = claudeProcesses().first(where: { $0.bundleURL?.standardizedFileURL == engine.standardizedFileURL }) {
-            running.activate()
+        let running = runningClaudes()
+        // A copy started without the profile's data shows the main account, next to the main app on the same data.
+        // A recently opened window may already have restored active work. Never force-quit it just because it is new.
+        let strays = running.filter { $0.isStartedWithoutDataDir(engine: engine) }.compactMap(\.app)
+        if !strays.isEmpty {
+            try await quit(strays, waiting: 10, force: false)
+            guard strays.allSatisfy(\.isTerminated) else { throw ProfileError.windowStillRunning(profile.label) }
+        }
+        if let window = running.first(where: { window(of: profile.id, is: $0) }) {
+            window.app?.activate()
             return
         }
         try lock.withLock {
@@ -199,8 +255,14 @@ public final class ProfileManager: @unchecked Sendable {
             }
             // The app and the CLI may open a profile at the same moment; the merges read and write without Claude's locks.
             _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
-                _ = try? SettingsSync(paths: paths).run(into: paths.dataDir(for: profile.id))
-                _ = try? InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id)
+                var problems: [String] = []
+                do { _ = try SettingsSync(paths: paths).run(into: paths.dataDir(for: profile.id)) }
+                catch { problems.append("Setup: \(error.localizedDescription)") }
+                do { _ = try InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id) }
+                catch { problems.append("Interface: \(error.localizedDescription)") }
+                if !problems.isEmpty {
+                    openWarning = "Claude \(profile.label) opened, but some shared settings could not be refreshed. " + problems.joined(separator: " ")
+                }
             }
         }
         let configuration = NSWorkspace.OpenConfiguration()
@@ -221,12 +283,7 @@ public final class ProfileManager: @unchecked Sendable {
     public func remove(_ id: String) async throws {
         guard let profile = profiles.first(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         let engine = paths.engine(for: id).standardizedFileURL
-        let running = claudeProcesses().filter { $0.bundleURL?.standardizedFileURL == engine }
-        running.forEach { $0.terminate() }
-        for _ in 0..<50 where running.contains(where: { !$0.isTerminated }) {
-            try await Task.sleep(for: .milliseconds(200))
-        }
-        running.filter { !$0.isTerminated }.forEach { $0.forceTerminate() }
+        try await quit(claudeProcesses().filter { $0.bundleURL?.standardizedFileURL == engine }, waiting: 10, force: true)
 
         // Share cards of sessions started in this window moments ago before its data goes away.
         _ = try? syncSessions()
@@ -238,7 +295,6 @@ public final class ProfileManager: @unchecked Sendable {
             }
             try registry.save(try registry.load().filter { $0.id != id })
         }
-        _ = try? CoworkSync(paths: paths, dataDirs: dataDirs).removeCards(workingIn: paths.dataDir(for: id))
         if signInRouting.state?.profileID == id { signInRouting.end(allProfileIDs: profiles.map(\.id)) }
     }
 
@@ -261,7 +317,7 @@ public final class ProfileManager: @unchecked Sendable {
         }
     }
 
-    /// Shares Claude Code sessions and Cowork sessions across all profiles.
+    /// Shares ordinary local Code sessions; inventories Cowork without cross-profile writes.
     /// - Returns: `nil` if another sync (from the app or the CLI) is already running.
     @discardableResult
     public func syncSessions() throws -> SyncReport? {
@@ -280,7 +336,7 @@ public final class ProfileManager: @unchecked Sendable {
         for dataDir in dataDirs {
             guard let account = DesktopData.accountID(in: dataDir),
                   let org = DesktopData.organizationID(in: dataDir, accountID: account) else { continue }
-            for kind in [SessionSync.sessionsFolder, CoworkSync.sessionsFolder] {
+            for kind in [SessionSync.sessionsFolder] {
                 let folder = dataDir.appending(path: "\(kind)/\(account)/\(org)", directoryHint: .isDirectory)
                 if !fm.fileExists(atPath: folder.path) {
                     try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -298,10 +354,7 @@ public final class ProfileManager: @unchecked Sendable {
         let engine = paths.engine(for: id).standardizedFileURL
         let running = claudeProcesses().filter { $0.bundleURL?.standardizedFileURL == engine }
         guard !running.isEmpty else { return }   // closed already: it picks everything up when opened
-        running.forEach { $0.terminate() }
-        for _ in 0..<100 where running.contains(where: { !$0.isTerminated }) {
-            try await Task.sleep(for: .milliseconds(200))
-        }
+        try await quit(running, waiting: 20, force: false)
         guard running.allSatisfy(\.isTerminated), profiles.contains(where: { $0.id == id }) else { return }
         _ = try? syncSessions()
         try await open(id)

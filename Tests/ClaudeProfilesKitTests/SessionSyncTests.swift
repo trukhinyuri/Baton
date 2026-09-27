@@ -340,16 +340,20 @@ struct SettingsSyncTests {
         #expect(prefs["wakeSchedulerEnabled"] as? Bool == false)
     }
 
-    @Test func toolTogglesFollowTheProfilesAccount() throws {
+    @Test func toolTogglesStayWithTheProfilesAccount() throws {
         let box = try Sandbox()
         try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountA)"}"#, to: box.main.appending(path: "config.json"))
         try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountB)"}"#, to: box.work.appending(path: "config.json"))
-        try box.write(#"{"owners":{"\#(Sandbox.accountA)":{"github":{"push":false}}}}"#,
+        try box.write(#"{"owners":{"\#(Sandbox.accountA)":{"github":{"push":true}}}}"#,
                       to: box.main.appending(path: "mcp-user-tool-toggles.json"))
+        let own = #"{"owners":{"\#(Sandbox.accountB)":{"github":{"push":false}}}}"#
+        let target = box.work.appending(path: "mcp-user-tool-toggles.json")
+        try box.write(own, to: target)
         try SettingsSync(paths: box.paths).run(into: box.work)
-        let owners = try #require(SettingsSync.readJSON(box.work.appending(path: "mcp-user-tool-toggles.json"))?["owners"] as? [String: Any])
-        let chosen = try #require(owners[Sandbox.accountB] as? [String: Any])
-        #expect((chosen["github"] as? [String: Any])?["push"] as? Bool == false)
+        #expect(box.read(target) == own, "a target denial must never become another account's grant")
+        try FileManager.default.removeItem(at: target)
+        try SettingsSync(paths: box.paths).run(into: box.work)
+        #expect(!box.exists(target), "a new profile makes its own tool choices")
     }
 
     @Test func appearanceIsCopiedButSignInIsNot() throws {

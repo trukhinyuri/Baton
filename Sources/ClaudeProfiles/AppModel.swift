@@ -12,6 +12,10 @@ final class AppModel: ObservableObject {
     @Published var busyMessage: String?
     @Published var errorMessage: String?
     @Published var isAdding = false
+    @Published var isContinuing = false
+    @Published var isCheckingSessions = false
+    @Published var diagnostics: [Diagnostics.Entry] = []
+    @Published private(set) var setupWarning: String?
     @Published var pendingRemoval: ProfileStatus?
 
     let manager: ProfileManager
@@ -20,6 +24,7 @@ final class AppModel: ObservableObject {
     private var syncTimer: Timer?
     /// Profiles whose window was open and not yet signed in at the last check.
     private var awaitingSignIn: Set<String> = []
+    private var launchObserver: NSObjectProtocol?
 
     init() {
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/claude-profiles")
@@ -41,6 +46,15 @@ final class AppModel: ObservableObject {
         }
         Task.detached { [manager] in try? manager.refresh() }
         syncNow()
+        launchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let pid = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+            else { return }
+            Task { @MainActor in self?.reopenIfStartedWithoutProfile(pid) }
+        }
+        // macOS reopens windows at login by starting each app copy without its arguments, possibly before this app.
+        manager.recentlyStartedWithoutDataDir(within: 120).forEach(reopenIfStartedWithoutProfile)
     }
 
     var profiles: [ProfileStatus] { statuses }
@@ -90,6 +104,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// A profile's app copy opened from its own Dock icon (kept with “Keep in Dock”) or reopened by macOS starts
+    /// without the profile's data and shows the main account. It is replaced with the profile's own window.
+    private func reopenIfStartedWithoutProfile(_ pid: pid_t) {
+        guard let profile = manager.profileStartedWithoutDataDir(pid: pid) else { return }
+        let manager = manager
+        run("Opening Claude \(profile.label) with its own account…") { try await manager.open(profile.id) }
+    }
+
     func syncNow() {
         guard !isDemo else { return }
         let manager = manager
@@ -116,6 +138,16 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func checkSessions() {
+        let paths = manager.paths
+        Task {
+            do {
+                diagnostics = try await Task.detached { try Diagnostics.inspect(paths: paths) }.value
+                isCheckingSessions = true
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func create(email: String, label: String, color: String) {
         let manager = manager
         run("Creating Claude \(label)…") {
@@ -138,7 +170,10 @@ final class AppModel: ObservableObject {
     private func run(_ message: String?, _ work: @escaping @Sendable () async throws -> Void) {
         busyMessage = message
         Task {
-            do { try await work() } catch { errorMessage = error.localizedDescription }
+            do {
+                try await work()
+                setupWarning = manager.lastOpenWarning
+            } catch { errorMessage = error.localizedDescription }
             busyMessage = nil
             reload()
         }

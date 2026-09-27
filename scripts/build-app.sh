@@ -3,12 +3,23 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-VERSION="${1:-$(git describe --tags --always 2>/dev/null | sed 's/^v//' || echo 0.0.0)}"
+VERSION="${1:-$(cat VERSION)}"
+case "$VERSION" in
+    ''|*[!0-9.]*)
+        echo 'Version must be major.minor.patch, for example 0.2.0.' >&2
+        exit 1
+        ;;
+esac
+if ! printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+    echo 'Version must be major.minor.patch, for example 0.2.0.' >&2
+    exit 1
+fi
 APP="build/Claude Profiles.app"
+BUILD_DIR="${CLAUDE_PROFILES_BUILD_DIR:-.build}"
 
-swift build -c release --product ClaudeProfiles
-swift build -c release --product claude-profiles
-BIN="$(swift build -c release --show-bin-path)"
+swift build --scratch-path "$BUILD_DIR" -c release --product ClaudeProfiles
+swift build --scratch-path "$BUILD_DIR" -c release --product claude-profiles
+BIN="$(swift build --scratch-path "$BUILD_DIR" -c release --show-bin-path)"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
