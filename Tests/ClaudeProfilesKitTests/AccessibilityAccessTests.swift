@@ -22,7 +22,47 @@ struct AccessibilityAccessTests {
         #expect(controller.refresh().status == .waitingForApproval)
         probe.allowed = true
         #expect(controller.refresh().canCapture)
+        #expect(!controller.state.requested)
         #expect(probe.requests == 1 && probe.settingsOpens == 0)
+    }
+
+    @Test func revokedGrantShowsRecoveryAndOnlyExplicitRetryRequestsAgain() {
+        let probe = PermissionProbe()
+        let controller = AccessibilityAccess.Controller(client: probe.client)
+        #expect(controller.requestAccess().status == .waitingForApproval)
+        probe.allowed = true
+        #expect(controller.refresh().canCapture)
+        probe.allowed = false
+        let revoked = controller.refresh()
+        #expect(revoked.status == .notApplied && !revoked.requested && !revoked.canCapture)
+        #expect(controller.refresh().status == .notApplied)
+        #expect(probe.requests == 1 && probe.settingsOpens == 0)
+        // The Request access button is available again, but no check invokes that action for us.
+        #expect(controller.requestAccess().status == .waitingForApproval)
+        #expect(probe.requests == 2)
+    }
+
+    @Test func manualConfirmationEndsPendingRequestBeforeLaterRevocation() {
+        let probe = PermissionProbe()
+        let controller = AccessibilityAccess.Controller(client: probe.client)
+        _ = controller.requestAccess()
+        probe.allowed = true
+        #expect(controller.checkAfterSettingsChange().canCapture)
+        #expect(!controller.state.requested)
+        probe.allowed = false
+        #expect(controller.refresh().status == .notApplied)
+        #expect(!controller.state.requested && probe.requests == 1)
+    }
+
+    @Test func newRunningCopyChecksTheOSInsteadOfReusingEarlierGrant() {
+        let probe = PermissionProbe(); probe.allowed = true
+        let earlier = AccessibilityAccess.Controller(client: probe.client)
+        #expect(earlier.refresh().canCapture)
+        probe.allowed = false
+        let restarted = AccessibilityAccess.Controller(client: probe.client)
+        #expect(restarted.state.status == .unknown)
+        #expect(restarted.refresh().status == .notGranted)
+        #expect(!restarted.state.requested && probe.requests == 0 && probe.settingsOpens == 0)
     }
 
     @Test func alreadyGrantedAccessDoesNotRequestAgain() {

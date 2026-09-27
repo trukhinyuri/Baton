@@ -71,30 +71,43 @@ public enum AccessibilityAccess {
 
         /// Safe on sheet appearance, return from Settings, and a bounded status refresh loop.
         @discardableResult public func refresh() -> State {
-            if client.check() { state.status = .granted }
+            if client.check() { confirmGranted() }
+            else if state.status == .granted {
+                // Losing a previously confirmed grant is not a pending approval request. Surface
+                // recovery and let the user explicitly request again; a status check never prompts.
+                state.status = .notApplied; state.requested = false
+            }
             else if state.status != .notApplied { state.status = state.requested ? .waitingForApproval : .notGranted }
             return state
         }
 
         /// Call only from the explicit Request access button, never from launch, refresh or retry.
         @discardableResult public func requestAccess() -> State {
-            if client.check() { state.status = .granted; return state }
+            if client.check() { confirmGranted(); return state }
             state.requested = true; state.settingsOpenFailed = false
-            state.status = client.request() ? .granted : .waitingForApproval
+            if client.request() { confirmGranted() }
+            else { state.status = .waitingForApproval }
             return state
         }
 
         /// The user explicitly says they changed Settings; do not infer a grant from that gesture.
         @discardableResult public func checkAfterSettingsChange() -> State {
-            state.status = client.check() ? .granted : .notApplied
+            if client.check() { confirmGranted() }
+            else { state.status = .notApplied }
             return state
         }
 
         /// A capture failure is evidence that the running copy could not use access, even if the
         /// Settings switch appears on. A later successful status check is required before retry.
         @discardableResult public func recordCaptureDenied() -> State {
-            state.status = .notApplied
+            state.status = .notApplied; state.requested = false
             return state
+        }
+
+        private func confirmGranted() {
+            state.status = .granted
+            state.requested = false
+            state.settingsOpenFailed = false
         }
 
         @discardableResult public func openSystemSettings() -> State {
