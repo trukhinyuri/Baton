@@ -34,3 +34,9 @@
   `sessionPermissionUpdates`, `bypassChosenInApp`, `autoChosenInApp`, `steeredByRemoteClient`.
 - Copies spread by earlier releases are identical in every window. The first-written file (earliest creation
   date) is taken as the original; when dates tie, the first data directory in `dataDirs` (main) is.
+
+## W4: lineage merge
+
+- `SessionSync.liveSessionIDs: Set<String>?` — `nil` reads `LiveSessions.ids(claudeDir: paths.claudeDir)`, only when
+  a copy would change its `cliSessionId`. Lane B may pass the set it already computed.
+- `Report.keptLive` — copies left alone because their session is open in a running `claude` process.

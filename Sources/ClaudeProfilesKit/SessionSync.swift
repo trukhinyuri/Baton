@@ -36,6 +36,8 @@ public struct SessionSync: Sendable {
         public var withheldByRule = 0
         /// Copies removed from a closed window whose account a folder rule does not allow.
         public var retiredByRule = 0
+        /// Copies left as they are because a running `claude` process has their session open.
+        public var keptLive = 0
         public var changes: Int { cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten + retiredByRule }
     }
 
@@ -157,6 +159,11 @@ public struct SessionSync: Sendable {
         }
 
         let carriers = carriesPermissionMode == nil ? permissionModeCarriers() : []
+        var live: Set<String>?
+        func isLive(_ transcript: String) -> Bool {
+            if live == nil { live = liveSessionIDs ?? LiveSessions.ids(claudeDir: paths.claudeDir) }
+            return live?.contains(transcript) == true
+        }
         let backup = Backup(paths: paths, now: now)
         for pair in pairs {
             let dataDir = dataDir(of: pair)
@@ -217,7 +224,15 @@ public struct SessionSync: Sendable {
                 var data = native ? card.data : shared(card.data), modified = card.modified
                 if present.contains(name) {
                     guard let current = SyncFolders.modificationDate(target), let own = existing else { continue }
-                    if current >= card.modified.addingTimeInterval(-1) {
+                    let here = Self.facts(of: own)
+                    if let transcript = here.transcript, transcript != card.facts.transcript {
+                        // Already a fork of the incoming conversation: never point the session back.
+                        if let incoming = card.facts.transcript, here.priors.contains(incoming) { continue }
+                        // Claude Code may write to that conversation at any moment; leave the card to it.
+                        if isLive(transcript) { report.keptLive += 1; continue }
+                    }
+                    let behind = here.transcript.map(card.facts.priors.contains) == true
+                    if current >= card.modified.addingTimeInterval(-1), !behind {
                         // This copy is as new as any; it may still need this window's scratch folder path.
                         data = native ? own : shared(own)
                         modified = current
@@ -288,8 +303,14 @@ public struct SessionSync: Sendable {
         var account: String
         var created: Date
 
-        /// Newer than `other`. Of copies that are the same file, the one written first is where the card was made.
+        /// Newer than `other`. A fork of the other's conversation is newer whatever the dates say, so a window
+        /// still holding the card from before the fork can't point the session back. Of copies that are the same
+        /// file, the one written first is where the card was made.
         func supersedes(_ other: Card) -> Bool {
+            if let mine = facts.transcript, let theirs = other.facts.transcript, mine != theirs {
+                if facts.priors.contains(theirs) { return true }
+                if other.facts.priors.contains(mine) { return false }
+            }
             if data == other.data { return created < other.created }
             return modified > other.modified
         }
@@ -394,6 +415,8 @@ public struct SessionSync: Sendable {
         var imported = false
         /// `cwd` and `originCwd`, except "No folder" scratch workspaces, for folder rules.
         var folders: [String] = []
+        /// The conversations Claude forked this session from (`priorCliSessionIds`).
+        var priors: Set<String> = []
     }
 
     static func facts(of data: Data) -> CardFacts {
@@ -403,7 +426,8 @@ public struct SessionSync: Sendable {
         return CardFacts(accountBound: isAccountBoundCard(card),
                          transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
                          imported: card["adoptedFromOtherSurface"] as? Bool == true,
-                         folders: Array(Set(folders)).sorted())
+                         folders: Array(Set(folders)).sorted(),
+                         priors: Set((card["priorCliSessionIds"] as? [String] ?? []).map { $0.lowercased() }))
     }
 
     /// `local_<uuid>.json` names the transcript it was imported from; any other name gives `nil`.
