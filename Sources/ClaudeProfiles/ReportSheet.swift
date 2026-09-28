@@ -85,7 +85,7 @@ struct ReportSheet: View {
         do {
             try Data(text.utf8).write(to: url)
             form.note = "Saved to \((url.path as NSString).abbreviatingWithTildeInPath)."
-        } catch { model.errorMessage = error.localizedDescription }
+        } catch { model.show(error) }
     }
 
     private func openGitHub() {
@@ -100,6 +100,6 @@ struct ReportSheet: View {
             } else {
                 form.note = "Opened the issue form in your browser. Review it there and submit it yourself."
             }
-        } catch { model.errorMessage = error.localizedDescription }
+        } catch { model.show(error) }
     }
 }

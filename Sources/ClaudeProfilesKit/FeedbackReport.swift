@@ -41,6 +41,14 @@ public struct FeedbackReport: Sendable {
         public var user: String
         public var profiles: [[String]]
 
+        public init(build: BuildInfo, macOS: String, architecture: String, claudeVersion: String?, windows: [Window],
+                    diagnostics: [Diagnostics.Entry], lastSync: SyncReport?, lastSyncDate: Date?, errors: [String],
+                    log: [String], home: String, user: String, profiles: [[String]]) {
+            self.build = build; self.macOS = macOS; self.architecture = architecture; self.claudeVersion = claudeVersion
+            self.windows = windows; self.diagnostics = diagnostics; self.lastSync = lastSync; self.lastSyncDate = lastSyncDate
+            self.errors = errors; self.log = log; self.home = home; self.user = user; self.profiles = profiles
+        }
+
         /// Reads only what the app already shows: window states, the sessions check and version numbers.
         public static func collect(paths: Paths, user: String = NSUserName(), errors: [String] = [], log: [String] = [],
                                    lastSync: SyncReport? = nil, lastSyncDate: Date? = nil,

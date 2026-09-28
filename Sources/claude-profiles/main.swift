@@ -278,7 +278,7 @@ do {
         }
     case "report":
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? manager.paths.home
-        print(try FeedbackReport.command(args, paths: manager.paths, downloads: downloads, copy: { text in
+        print(try FeedbackReport.command(args, paths: manager.paths, log: LogTail.read(), downloads: downloads, copy: { text in
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         }, open: { NSWorkspace.shared.open($0) }))

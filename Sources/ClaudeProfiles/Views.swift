@@ -152,6 +152,8 @@ struct ProfileRow: View {
                     .frame(minWidth: 64)
                     .accessibilityLabel("\(status.isRunning ? "Show" : "Open") \(status.isMain ? "Claude" : "Claude \(status.label)")")
                 Menu {
+                    Button("Status…") { model.showStatus(of: status.id) }
+                    Divider()
                     if !status.isMain {
                         Button("Show Launcher in Finder") { model.revealLauncher(status) }
                         Divider()
@@ -249,6 +251,9 @@ struct ContentView: View {
         .sheet(isPresented: $model.isContinuing) { ContinueWorkSheet(model: model) }
         .sheet(isPresented: $model.isCheckingSessions) { DiagnosticsSheet(entries: model.diagnostics) }
         .sheet(isPresented: $model.isReporting) { ReportSheet(model: model) }
+        .sheet(isPresented: Binding(get: { model.statusWindow != nil }, set: { if !$0 { model.statusWindow = nil } })) {
+            WindowStatusSheet(model: model)
+        }
         .confirmationDialog(
             "Remove \(model.pendingRemoval.map { $0.email ?? "Claude \($0.label)" } ?? "")?",
             isPresented: Binding(get: { model.pendingRemoval != nil }, set: { if !$0 { model.pendingRemoval = nil } }),
@@ -259,7 +264,7 @@ struct ContentView: View {
         } message: { _ in
             Text("Its window closes and its app copy and sign-in move to the Trash. Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the profile; cloud Projects stay with their account.")
         }
-        .alert("Something went wrong", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
+        .alert(model.errorTitle, isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
@@ -324,5 +329,61 @@ struct ContentView: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
+    }
+}
+
+/// One window's account, sharing scope and why some work isn't shared, with a restart to apply pending changes.
+struct WindowStatusSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    private var status: WindowStatus? { model.windowStatuses.first { $0.id == model.statusWindow } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let status {
+                Text("\(status.isMain ? "Claude" : "Claude \(status.label)") status").font(.title2.bold())
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
+                    row("Window", status.isRunning ? "Open" : "Closed")
+                    row("Account", status.account ?? "Not signed in")
+                    row("Sharing scope", status.scope ?? "None until you sign in")
+                    row("Scope from", status.scopeSource)
+                    row("Local only", status.localOnly.map { $0 ? "On" : "Off" } ?? "Not available in this version")
+                    row("Claude Code running", status.liveSessions == 0 ? "No sessions" : "\(status.liveSessions) session\(status.liveSessions == 1 ? "" : "s")")
+                }
+                section("Not shared, and why", status.skipReasons, empty: "Everything local is shared.")
+                section("Waiting for a restart", status.pendingChanges, empty: "No changes waiting.")
+            } else {
+                ProgressView("Checking…")
+            }
+            Spacer(minLength: 0)
+            Divider()
+            HStack {
+                if let status, !status.pendingChanges.isEmpty || status.isRunning {
+                    Button(status.restartTitle) { model.restart(status.id) }
+                        .disabled(!status.canRestart)
+                        .help(status.restartHelp)
+                }
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(22)
+        .frame(minWidth: 480, idealWidth: 560, minHeight: 360, idealHeight: 440)
+    }
+
+    private func row(_ title: String, _ value: String) -> some View {
+        GridRow {
+            Text(title).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+            Text(value).textSelection(.enabled)
+        }
+    }
+
+    private func section(_ title: String, _ items: [String], empty: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.headline)
+            if items.isEmpty { Text(empty).foregroundStyle(.secondary) }
+            ForEach(items, id: \.self) { Text($0).fixedSize(horizontal: false, vertical: true) }
+        }
     }
 }
