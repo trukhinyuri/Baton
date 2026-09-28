@@ -2,7 +2,7 @@
 
 Thanks for helping. A few ground rules keep the project useful and safe for everyone:
 
-- **Stay within Anthropic’s terms.** Changes that handle credentials or tokens, proxy requests, pool limits or switch accounts automatically won’t be merged. See [Staying within Anthropic’s terms](README.md#staying-within-anthropics-terms).
+- **Stay within Anthropic's terms.** Changes that handle credentials or tokens, proxy requests, pool limits or switch accounts automatically won't be merged. See [Staying within Anthropic's terms](README.md#staying-within-anthropics-terms).
 - **Never lose user data.** Anything that overwrites or removes a file must back it up first or move it to the Trash.
 - **Stay local.** No network calls, and no reading of credentials, tokens, cookies or the Keychain. Claude's data is written only while that window is closed.
 - **Test what you change.** `make test` runs the suite; logic belongs in `BatonKit`, where it can be tested against a sandboxed home directory. Write the failing test first. [docs/TESTING.md](docs/TESTING.md) has the details.

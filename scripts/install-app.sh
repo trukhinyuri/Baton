@@ -84,6 +84,11 @@ backup() { # backup <app> <name>
     ditto -c -k --keepParent "$1" "$zip" && unzip -tq "$zip" >/dev/null && basename "$zip"
 }
 
+# DEST given as the folder of the earlier name that baton migrate has renamed since: Baton.app is in Baton's now.
+if [ -n "$EXPLICIT" ] && [ "${EXPLICIT%/}" = "$OLD_FOLDER" ] && [ -d "$NEW_FOLDER" ] \
+    && ! [ -e "$OLD_FOLDER" ] && ! [ -L "$OLD_FOLDER" ]; then
+    EXPLICIT="$NEW_FOLDER"
+fi
 if [ "$WHERE" = 1 ]; then choose_dest; exit 0; fi
 
 # A folder of Baton's earlier name that is a link leading nowhere right now: stop rather than start a new, empty one.

@@ -5,7 +5,8 @@ import os
 /// One place for Baton's log. Every line goes to the unified log, with values marked `privacy: .private`, so paths,
 /// emails and ids stay redacted in `log show` unless the Mac has private data logging turned on. Once the app or the
 /// CLI has called `enableFile(in:)`, the same line also goes to Baton's own text log, `Logs/baton.log` in its data
-/// folder: a size-capped, rotating file a problem report attaches after redaction. Nothing leaves the Mac.
+/// folder, whenever that folder exists: a size-capped, rotating file a problem report attaches after redaction.
+/// Nothing leaves the Mac.
 public enum Log {
     public static let subsystem = "io.github.trukhinyuri.claudeprofiles"
 
@@ -29,26 +30,43 @@ public enum Log {
         shared.file?.append(level: level, category: category, message: message)
     }
 
-    /// Starts writing Baton's own log into `<dataFolder>/Logs`, only when the data folder already exists: the log never
-    /// creates Baton's data folder, which would win over a folder of the earlier name that isn't reachable right now.
-    public static func enableFile(in dataFolder: URL) {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: dataFolder.path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
-        shared.file = LogFile(folder: dataFolder.appending(path: "Logs", directoryHint: .isDirectory))
+    /// `message` with every one of `paths` in it put in curly quotes, as the app quotes titles, so a problem report
+    /// hides the whole path even when a folder name has a space in it. Longest first; one already quoted stays as it is.
+    public static func quoting(paths: [String], in message: String) -> String {
+        let candidates = Set(paths.filter { $0.count > 1 && $0.contains("/") }).sorted { $0.count > $1.count }
+        guard !candidates.isEmpty,
+            let regex = try? NSRegularExpression(
+                pattern: "(?<!“)(?:" + candidates.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|") + ")")
+        else { return message }
+        return regex.stringByReplacingMatches(in: message, range: NSRange(message.startIndex..., in: message), withTemplate: "“$0”")
     }
 
-    /// The last `limit` lines of Baton's own log, oldest first; empty until `enableFile(in:)` ran.
+    /// Writes Baton's own log into `<dataFolder>/Logs` from now on, each line only while the data folder exists. On a
+    /// fresh Mac the first sync or `baton add` creates it, and the lines after that are kept. The log itself never
+    /// creates Baton's data folder, which would win over a folder of the earlier name that isn't reachable right now.
+    public static func enableFile(in dataFolder: URL) { shared.dataFolder = dataFolder }
+
+    /// The last `limit` lines of Baton's own log, oldest first; empty until `enableFile(in:)` ran and the folder exists.
     public static func fileTail(limit: Int) -> [String] { shared.file?.tail(limit: limit) ?? [] }
 
-    private final class Shared: @unchecked Sendable {
+    /// Baton's data folder the log goes to, checked at every line rather than once: it may not exist yet when the app
+    /// or the CLI starts, and may be moved away while it runs.
+    final class Sink: @unchecked Sendable {
         private let lock = NSLock()
-        private var stored: LogFile?
-        var file: LogFile? {
+        private var stored: URL?
+        var dataFolder: URL? {
             get { lock.withLock { stored } }
             set { lock.withLock { stored = newValue } }
         }
+        /// The log file, or nil while no data folder is set or it isn't a folder right now.
+        var file: LogFile? {
+            guard let dataFolder else { return nil }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: dataFolder.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+            return LogFile(folder: dataFolder.appending(path: "Logs", directoryHint: .isDirectory))
+        }
     }
-    private static let shared = Shared()
+    private static let shared = Sink()
 }
 
 /// A text log capped at `maxBytes` per file and `keep` files: `baton.log`, then `baton.log.1`, `baton.log.2`, oldest

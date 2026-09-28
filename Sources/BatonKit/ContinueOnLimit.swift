@@ -334,13 +334,20 @@ struct ContinueCopies: Sendable {
         return stored.copies
     }
 
-    /// Drops every entry whose copy has no transcript among `transcripts` (session id → file, as
-    /// `ConversationIndex.transcriptFiles` finds them). Returns how many went.
+    /// Drops every entry whose copy has no transcript in any project folder of `projects`. Looked up under the lock, so
+    /// a copy a Continue records meanwhile is never dropped for a listing made before it existed. When the projects
+    /// folder can't be read (no permission, a volume not mounted), nothing is dropped. Returns how many went.
     @discardableResult
-    func dropMissing(transcripts: [String: URL]) throws -> Int {
+    func dropMissing(in projects: URL) throws -> Int {
         try FileLock.withLock(lockFile, blocking: true) {
             let entries = load()
-            let kept = entries.filter { transcripts[$0.copy.lowercased()] != nil }
+            guard !entries.isEmpty,
+                let folders = try? FileManager.default.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil)
+            else { return 0 }
+            let kept = entries.filter { entry in
+                let names = Set([entry.copy, entry.copy.lowercased()]).map { "\($0).jsonl" }
+                return folders.contains { folder in names.contains { FileManager.default.fileExists(atPath: folder.appending(path: $0).path) } }
+            }
             if kept.count < entries.count { try save(kept) }
             return entries.count - kept.count
         } ?? 0

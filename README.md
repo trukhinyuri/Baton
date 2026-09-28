@@ -17,10 +17,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels, accounts, and five-hour and weekly usage">
+  <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels and accounts, five-hour and weekly usage for three of them, and one waiting to sign in">
 </p>
 
-Baton runs several Claude Desktop accounts on one Mac, each in its own unmodified Claude Desktop window with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window. When you want to carry on somewhere else (the work account, the personal one, or the one that still has room today), you hand the conversation over with its transcript, sub-agents, Workflow history, tool outputs and notes. **Continue work…** also keeps Rewind checkpoints, except those from before a copy Claude Desktop made itself, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
+Baton runs several Claude Desktop accounts on one Mac, each in its own unmodified Claude Desktop window with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window. When you want to carry on somewhere else (the work account or the personal one), you hand the conversation over with its transcript, sub-agents, Workflow history, tool outputs and notes. **Continue work…** also keeps Rewind checkpoints, except those from before a copy Claude Desktop made itself, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
 
 Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Baton turns Remote Control off in its windows by default (one switch to undo it) and, before you continue, names what will not follow.
 
@@ -121,7 +121,7 @@ Each row shows the account signed in to that window and its five-hour and weekly
 
 ## Continue work in another window
 
-Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet. The signed-in subscription with the lowest weekly usage is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may be higher now*.
+Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet. The signed-in subscription with the most room left (by the higher of its five-hour and weekly usage) is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may be higher now*.
 
 <p align="center">
   <img src="docs/images/continue-work.png" width="820" alt="Continue work sheet listing local Code sessions and Cowork tasks, with the window to continue in, the choice between Automatic, Same session and As a copy, and Continue All for the session's folder">
@@ -240,7 +240,7 @@ baton continue --folder ~/Projects/api --to LAB --new --dry-run
 
 Backups can contain MCP definitions and other private setup; keep the application data folder private. Details: [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 
-## Staying within Anthropic’s terms
+## Staying within Anthropic's terms
 
 Baton is for people who pay for more than one Claude subscription and use each of them themselves. It does not try to get around how Anthropic meters usage:
 

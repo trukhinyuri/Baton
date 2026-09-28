@@ -446,7 +446,7 @@ enum DemoData {
                     isSignedIn: $0.isSignedIn, claudeCodeVersion: "2.1.281")
             },
             diagnostics: [], lastSync: nil, lastSyncDate: nil,
-            errors: ["Can’t read /Users/alex/src/billing/.claude: permission denied"],
+            errors: ["Can't read /Users/alex/src/billing/.claude: permission denied"],
             log: ["sync: 4 session folders for alex@work.example"], home: "/Users/alex", user: "alex",
             profiles: statuses.compactMap(\.profile).map { [$0.label, $0.id] })
     }

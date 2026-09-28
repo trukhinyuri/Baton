@@ -186,7 +186,7 @@ struct ProfileRow: View {
                         Divider()
                         Button("Remove Subscription…", role: .destructive) { model.pendingRemoval = status }
                     } else {
-                        Text("The main Claude app can’t be removed")
+                        Text("The main Claude app can't be removed")
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -215,7 +215,7 @@ struct EmptyHint: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Ready for the next leg").font(.body.weight(.semibold))
                 Text(
-                    "Add another subscription: it gets its own Claude window and a labeled Dock icon, so you always know which account you’re in. Your Claude Code sessions show up in every window, ready to be handed over."
+                    "Add another subscription: it gets its own Claude window and a labeled Dock icon, so you always know which account you're in. Your Claude Code sessions show up in every window, ready to be handed over."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -253,7 +253,7 @@ struct LimitBanner: View {
     }
 }
 
-/// Whether the footer may add "everyone’s in step" to the last sync: checked again after every sync.
+/// Whether the footer may add "everyone's in step" to the last sync: checked again after every sync.
 /// An object rather than `@State`, which the Command Line Tools can't expand (no SwiftUI macro plugin).
 @MainActor
 final class SyncFooterState: ObservableObject {
@@ -364,7 +364,7 @@ struct ContentView: View {
                     Text("Add a subscription and your local Code sessions start relaying between windows.")
                 } else if let last = model.lastSync {
                     Text("Local Code synced · \(last, format: .relative(presentation: .named))")
-                        + Text(syncFooter.everyoneInStep ? " — everyone’s in step." : "")
+                        + Text(syncFooter.everyoneInStep ? " — everyone's in step." : "")
                 } else {
                     Text("Sharing local Code sessions…")
                 }
@@ -388,7 +388,7 @@ struct ContentView: View {
             Link(destination: URL(string: "https://github.com/\(FeedbackReport.repository)#staying-within-anthropics-terms")!) {
                 Label("Fair use", systemImage: "checkmark.shield")
             }
-            .help("How Baton stays within Anthropic’s terms")
+            .help("How Baton stays within Anthropic's terms")
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -428,7 +428,7 @@ struct WindowStatusSheet: View {
             if let status {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("\(status.isMain ? "Claude" : "Claude \(status.label)") status").font(.title2.bold())
-                    Text("What this window shares, what it doesn’t, and why.").font(.callout).foregroundStyle(.secondary)
+                    Text("What this window shares, what it doesn't, and why.").font(.callout).foregroundStyle(.secondary)
                 }
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
                     row("Window", status.isRunning ? "Open" : "Closed")
@@ -438,7 +438,7 @@ struct WindowStatusSheet: View {
                     row(
                         "Local only", status.localOnly.map { $0 ? "On" : "Off" } ?? "Not available in this version",
                         help:
-                            "Turns off Remote Control for this window’s new sessions from its next start, so they aren’t reachable from claude.ai or your phone unless you turn it on there."
+                            "Turns off Remote Control for this window's new sessions from its next start, so they aren't reachable from claude.ai or your phone unless you turn it on there."
                     )
                     row(
                         "Claude Code running", status.liveSessions == 0 ? "No sessions" : "\(status.liveSessions) session\(status.liveSessions == 1 ? "" : "s")"
@@ -446,7 +446,7 @@ struct WindowStatusSheet: View {
                 }
                 section("Not shared, and why", status.skipReasons, empty: "Everything local is shared.")
                 section("Waiting for a restart", status.pendingChanges, empty: "No changes waiting.")
-                if !status.folderNotes.isEmpty { section("Baton’s folders", status.folderNotes, empty: "") }
+                if !status.folderNotes.isEmpty { section("Baton's folders", status.folderNotes, empty: "") }
             } else {
                 ProgressView("Checking…")
             }

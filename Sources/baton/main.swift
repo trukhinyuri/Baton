@@ -58,7 +58,13 @@ let usage = """
     """
 
 func fail(_ message: String) -> Never {
-    Log.error("cli", message)
+    // The log keeps the folders it was given in curly quotes, so a report hides them whole, spaces and all.
+    let given = CommandLine.arguments.dropFirst().filter { $0.contains("/") || $0.hasPrefix("~") || $0 == "." || $0 == ".." }
+    let paths = given.flatMap { argument -> [String] in
+        let full = URL(fileURLWithPath: (argument as NSString).expandingTildeInPath).standardizedFileURL.path
+        return [argument, full, (full as NSString).abbreviatingWithTildeInPath]
+    }
+    Log.error("cli", Log.quoting(paths: paths, in: message))
     FileHandle.standardError.write(Data("error: \(message)\n".utf8))
     exit(1)
 }
@@ -432,7 +438,7 @@ do {
     case "carry":
         let dryRun = args.dropFirst().contains("--dry-run")
         let reports = try NativeForkCarry.run(paths: manager.paths, dataDirs: manager.dataDirs, dryRun: dryRun)
-        if reports.isEmpty { print("Nothing to carry: every copy Claude Desktop made already has its old session’s files.") }
+        if reports.isEmpty { print("Nothing to carry: every copy Claude Desktop made already has its old session's files.") }
         for report in reports {
             print(
                 "\(report.lineage.old.prefix(8)) → \(report.lineage.new.prefix(8)): \(dryRun ? "would add" : "added") \(report.added.count) files, kept \(report.kept) the new session already had"
@@ -445,7 +451,7 @@ do {
             }
         }
         if !reports.isEmpty {
-            print("Rewind to points before Claude Desktop’s copy works only in the old session; its checkpoints are kept there.")
+            print("Rewind to points before Claude Desktop's copy works only in the old session; its checkpoints are kept there.")
         }
     case "report":
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? manager.paths.home

@@ -37,11 +37,11 @@ enum DemoSnapshot {
                     try write(window, to: file)
                     exit(0)
                 } catch {
-                    FileHandle.standardError.write(Data("Couldn’t write \(file.path): \(error.localizedDescription)\n".utf8))
+                    FileHandle.standardError.write(Data("Couldn't write \(file.path): \(error.localizedDescription)\n".utf8))
                     exit(1)
                 }
             }
-            FileHandle.standardError.write(Data("The window didn’t appear within 15 seconds; no picture written.\n".utf8))
+            FileHandle.standardError.write(Data("The window didn't appear within 15 seconds; no picture written.\n".utf8))
             exit(1)
         }
     }

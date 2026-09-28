@@ -18,11 +18,11 @@ Baton is a thin layer around the official Claude Desktop app. It never changes h
 
 A profile is three things, all derived from a registry entry in `~/Library/Application Support/Baton/profiles.json`:
 
-1. **Engine.** An APFS clone of `/Applications/Claude.app` created with `clonefile(2)`, so it shares disk blocks with the original. The only change is a Finder custom icon, which adds an `Icon\r` file and a Finder flag to the bundle. No code or resource is modified and Anthropic’s signature still verifies with `codesign --verify` (the `--strict` check flags the extra icon file). Because the Dock shows a running app’s icon from its bundle path, each profile window gets its own labeled icon.
+1. **Engine.** An APFS clone of `/Applications/Claude.app` created with `clonefile(2)`, so it shares disk blocks with the original. The only change is a Finder custom icon, which adds an `Icon\r` file and a Finder flag to the bundle. No code or resource is modified and Anthropic's signature still verifies with `codesign --verify` (the `--strict` check flags the extra icon file). Because the Dock shows a running app's icon from its bundle path, each profile window gets its own labeled icon.
 2. **Data directory.** Claude Desktop is an Electron app, and Electron keeps everything (cookies, sign-in, window state, caches) in the directory passed with `--user-data-dir`. Each profile gets its own, so each can be signed in to a different account at the same time.
 3. **Launcher.** A tiny app bundle whose executable is a shell script calling `baton open <id>`, with a fallback to `open -n -a <engine> --args --user-data-dir=<dir>`. Launchers can be kept in the Dock and are indexed by Spotlight. An engine opened directly starts without its data directory and shows the main app's account: that happens when a running profile window is kept with **Keep in Dock** and its icon is clicked later, or when macOS reopens windows at login. See [Windows opened without their profile](#windows-opened-without-their-profile).
 
-Engines are rebuilt when `CFBundleVersion` of the installed Claude differs from the clone’s and the profile isn’t running (`ProfileManager.refresh()` and on open).
+Engines are rebuilt when `CFBundleVersion` of the installed Claude differs from the clone's and the profile isn't running (`ProfileManager.refresh()` and on open).
 
 `EngineInstall` builds a sibling staging bundle with `clonefile` or a copy fallback. It checks the source and staged bundle's version, identifier, executable and code signature before replacement. An existing engine is exchanged atomically with the stage using `renamex_np(RENAME_SWAP)` and kept until the installed copy passes the same checks; if it doesn't, the two are exchanged back, and if even that fails, the previous bundle is kept and its path reported. Only the installer's own staging bundle is ever removed.
 
@@ -48,9 +48,9 @@ The app watches `NSWorkspace.didLaunchApplicationNotification` and, at its own s
 
 ## Signing in
 
-Claude Desktop opens Google sign-in in the default browser, which returns the result through a `claude://` link. Launch Services delivers that link to the registered copy of Claude, and every profile runs a copy with the same bundle identifier, so without help the main app receives it and discards it as a sign-in it didn’t start.
+Claude Desktop opens Google sign-in in the default browser, which returns the result through a `claude://` link. Launch Services delivers that link to the registered copy of Claude, and every profile runs a copy with the same bundle identifier, so without help the main app receives it and discards it as a sign-in it didn't start.
 
-`SignInRouting` fixes the destination rather than the link. Opening a profile that has no signed-in account unregisters the main app and the other app copies (`lsregister -u`) and registers that profile’s copy, and records this in `sign-in.json`. Each status refresh checks whether the profile is now signed in, has been waiting for more than 15 minutes, or never started; then the copies are unregistered and the main app is registered again. Baton never sees the link or anything in it. Email sign-in happens inside the window and needs none of this.
+`SignInRouting` fixes the destination rather than the link. Opening a profile that has no signed-in account unregisters the main app and the other app copies (`lsregister -u`) and registers that profile's copy, and records this in `sign-in.json`. Each status refresh checks whether the profile is now signed in, has been waiting for more than 15 minutes, or never started; then the copies are unregistered and the main app is registered again. Baton never sees the link or anything in it. Email sign-in happens inside the window and needs none of this.
 
 ## Session sharing
 
@@ -65,7 +65,7 @@ Ordinary local Claude Code conversations are stored in `~/.claude/projects` and 
 
 `SessionSync` gathers these from every account/organization folder of every data directory. It first separates ordinary local conversations from account-owned workers, then synchronizes only eligible records:
 
-- **Ordinary local cards.** The newest copy of each eligible card is written to every folder. A card whose `priorCliSessionIds` contains another copy's `cliSessionId` is the newer one whatever the modification times say, so a stale window can never point a conversation back at its pre-fork transcript, and a card whose session is live in another window is not overwritten. The copy keeps the source’s modification time, so it never looks newer than the original.
+- **Ordinary local cards.** The newest copy of each eligible card is written to every folder. A card whose `priorCliSessionIds` contains another copy's `cliSessionId` is the newer one whatever the modification times say, so a stale window can never point a conversation back at its pre-fork transcript, and a card whose session is live in another window is not overwritten. The copy keeps the source's modification time, so it never looks newer than the original.
 - **Folder rules.** Each destination window's email is resolved once. A card whose folder falls under a rule that does not allow that email is not copied there; an unknown email counts as not allowed, and a rules file that cannot be read stops the sync. Copies made before a rule existed are retired only in closed windows, with a backup, and only when an allowed copy remains.
 - **Account-scoped fields.** A copy for a different account drops what belongs to the source account: Remote Control bridge and peer fields, remote MCP servers and non-local tools, and browser and computer-use grants. The permission mode falls back to the default unless the profile opts in to carrying it. Copies between windows of the same account stay byte-for-byte identical.
 - **Account-owned workers.** A non-null `remoteControlSpawn`, or a true top-level `projectThreadChild` or `rcChild`, identifies a native Project/Remote Control worker. If its observed and recorded copies have one account/organization scope, it is eligible only in folders of that exact scope. If copies exist across scopes, ownership is ambiguous: the sync leaves them byte-for-byte intact and excludes them from propagation. It reports the ambiguity instead of guessing which copy owns the cloud session. Deletion and archive state for workers is scoped the same way. This is a logical quarantine, not a file move or deletion.
@@ -76,7 +76,7 @@ Ordinary local Claude Code conversations are stored in `~/.claude/projects` and 
 - **Safety.** Files are written atomically, and a card is re-checked right before it is replaced so a copy Claude has just updated is never overwritten with an older one. Every removed card is copied to `Backups/<date>/` first, and so is the first version of the day of every overwritten file. Backup days older than a week are moved to the Trash.
 - **Concurrency.** The app, the CLI and launchers share `flock(2)` locks: a sync that finds another one running is skipped, and engine rebuilds wait for each other. A damaged `profiles.json` is reported and never overwritten; the previous version is kept as `profiles.json.bak`.
 
-Symlinking the folders instead of copying doesn’t work: Claude Desktop creates them with `mkdir` and fails on a symlink.
+Symlinking the folders instead of copying doesn't work: Claude Desktop creates them with `mkdir` and fails on a symlink.
 
 `CoworkSync` inventories legacy local Cowork cards without writing anything. Their storage is separate from ordinary Code transcripts:
 

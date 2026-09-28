@@ -28,10 +28,10 @@ public enum ProfileError: LocalizedError, Equatable {
         switch self {
         case .claudeNotInstalled(let path): "Claude Desktop is not installed at \(path). Install it from claude.ai/download."
         case .invalidLabel: "Use 1–\(Profile.maxLabelLength) letters, digits, “-” or “_” for the label."
-        case .invalidEmail: "That doesn’t look like an email address."
+        case .invalidEmail: "That doesn't look like an email address."
         case .duplicateLabel(let label): "A profile labeled “\(label)” already exists."
         case .notFound(let id): "No profile “\(id)”."
-        case .cloneFailed(let reason): "Couldn’t create the app copy: \(reason)"
+        case .cloneFailed(let reason): "Couldn't create the app copy: \(reason)"
         case .windowStillRunning(let label):
             "Claude \(label) is open without its profile and did not quit. Finish or stop its active work, close that window, then open the profile again."
         case .notSignedIn(let label): "Sign in to Claude \(label) first, then continue there."
@@ -141,7 +141,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// Why the registry couldn't be read, if it couldn't. Changes are refused until it is fixed.
     public var registryError: String? {
         do { _ = try registry.load(); return nil } catch {
-            return "Can’t read \(paths.registryFile.path): \(error.localizedDescription). A backup is at profiles.json.bak."
+            return "Can't read \(paths.registryFile.path): \(error.localizedDescription). A backup is at profiles.json.bak."
         }
     }
 
@@ -843,7 +843,7 @@ public final class ProfileManager: @unchecked Sendable {
                 // A Continue copy whose transcript is gone is never offered for reuse again.
                 let copies = ContinueCopies(paths: paths)
                 if FileManager.default.fileExists(atPath: copies.file.path) {
-                    do { try copies.dropMissing(transcripts: ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)) } catch {
+                    do { try copies.dropMissing(in: paths.claudeProjectsDir) } catch {
                         Log.error("sync", "Couldn't tidy continue-copies.json: \(error.localizedDescription)")
                     }
                 }

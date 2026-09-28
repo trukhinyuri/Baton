@@ -67,7 +67,7 @@ struct LeakFixture {
     /// Errors as the UI showed them, and log lines as the app wrote them.
     var errors: [String] {
         [
-            "Can’t read \(home)/src/\(Self.folder)/.claude: permission denied",
+            "Can't read \(home)/src/\(Self.folder)/.claude: permission denied",
             "Claude ZEPHYR is signed in as \(Self.emails[0]), expected \(Self.emails[1])",
             "Opening /Volumes/Backup/Users/\(user)/\(Self.folder) failed with token \(Self.token)",
         ]
@@ -124,8 +124,8 @@ struct RedactorTests {
     @Test func nonASCIIHomeCollapsesToTilde() {
         var cyrillic = redactor(home: "/Users/Юрий", user: "Юрий")
         #expect(
-            cyrillic.redact("Can’t read /Users/Юрий/Library/Application Support/Claude/config.json")
-                == "Can’t read ~/Library/Application Support/Claude/config.json")
+            cyrillic.redact("Can't read /Users/Юрий/Library/Application Support/Claude/config.json")
+                == "Can't read ~/Library/Application Support/Claude/config.json")
         // Decomposed input (as some file APIs return it) still matches.
         var cjk = redactor(home: "/Users/名前", user: "名前")
         #expect(cjk.redact("/Users/名前/Library/Logs") == "~/Library/Logs")
@@ -158,7 +158,7 @@ struct RedactorTests {
         var r = redactor()
         #expect(r.redact("Missing: /Users/robin.k/src/secret-merger-plans") == "Missing: <folder>")
         #expect(r.redact("Missing: /Volumes/Ext/Users/robin.k/acme") == "Missing: <folder>")
-        #expect(r.redact("Can’t read /Users/robin.k/src/acme/.claude: denied. Open ~/src/acme.") == "Can’t read <folder>: denied. Open <folder>.")
+        #expect(r.redact("Can't read /Users/robin.k/src/acme/.claude: denied. Open ~/src/acme.") == "Can't read <folder>: denied. Open <folder>.")
     }
 
     @Test func tokenShapedStringsAreStripped() {
@@ -173,6 +173,25 @@ struct RedactorTests {
             #expect(out == "Authorization: Bearer <token> end", "\(token) → \(out)")
         }
         #expect(r.redact("claude-code-sessions local-agent-mode-sessions") == "claude-code-sessions local-agent-mode-sessions")
+    }
+
+    /// Folder names with spaces: a path goes on past a space while the next word continues it with `/`, and the CLI
+    /// logs the folders it was given in curly quotes, so the last name, which the sentence goes on after, is hidden too.
+    @Test func pathsWithSpacesAreHiddenWhole() {
+        var r = redactor()
+        #expect(r.redact("Can't read /Volumes/Backup Disk/Clients/Globex") == "Can't read <folder>")
+        #expect(r.redact("Can't read ~/Library/Application Support/Claude/config.json") == "Can't read ~/Library/Application Support/Claude/config.json")
+        #expect(r.redact("Moved /usr/local/bin/baton /Users/robin.k/src/acme") == "Moved /usr/local/bin/baton <folder>", "two paths stay two")
+        #expect(r.redact("~/Library/Mobile Documents/com~apple~CloudDocs/Client Work/Acme") == "<folder>")
+        let folder = "/Users/robin.k/Client Work/Acme Merger"
+        let message = "Nothing to hand off yet. No Code sessions in \(folder) with a message in the last 24h."
+        let logged = Log.quoting(paths: ["~/Client Work/Acme Merger", folder], in: message)
+        #expect(logged == "Nothing to hand off yet. No Code sessions in “\(folder)” with a message in the last 24h.")
+        #expect(Log.quoting(paths: [folder], in: logged) == logged, "already quoted")
+        let redacted = r.redact(logged)
+        #expect(redacted == "Nothing to hand off yet. No Code sessions in “<quoted>” with a message in the last 24h.")
+        #expect(!["Client", "Acme", "Merger", "robin"].contains { redacted.contains($0) })
+        #expect(Log.quoting(paths: ["work", "/"], in: "no profile work in /") == "no profile work in /", "only paths")
     }
 
     @Test func quotedTitlesAreDropped() {

@@ -41,10 +41,11 @@ package:
 release: app verify notarize package
 
 # The CLI hint names the folder Baton.app stays in: while the old folder keeps its name (a Claude window was open),
-# a link into it would break at the rename, so the hint then names the Baton folder and waits for the rename.
+# a link into it would break at the rename, so the hint then names the Baton folder and waits for the rename. A DEST of
+# the old folder that has been renamed since resolves to the Baton folder (install-app.sh --where).
 install: app
 	sh scripts/install-app.sh $(if $(DEST),"$(DEST)")
-	@dir="$$($(WHERE))"; \
+	@dir="$$($(WHERE))"; dir="$${dir%/}"; \
 	if [ "$$dir" = "$(HOME)/Applications/Claude Profiles" ]; then \
 		echo "Optional CLI, once that folder is renamed to Baton: ln -sf \"$(HOME)/Applications/Baton/Baton.app/Contents/Helpers/baton\" /usr/local/bin/baton"; \
 	elif [ -x "$$dir/Baton.app/Contents/Helpers/baton" ]; then \

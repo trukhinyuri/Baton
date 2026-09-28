@@ -45,16 +45,33 @@ struct LogFileTests {
         let log = LogFile(folder: folder())
         defer { try? fm.removeItem(at: log.folder.deletingLastPathComponent()) }
         let token = "sk-ant-" + String(repeating: "a1B2", count: 10)
-        log.append(level: .error, category: "sync", message: "Can’t read /Users/robin.k/src/secret-app: denied for robin@corp.example")
+        log.append(level: .error, category: "sync", message: "Can't read /Users/robin.k/src/secret-app: denied for robin@corp.example")
         log.append(level: .error, category: "cli", message: "Rejected key \(token)")
         let facts = FeedbackReport.Facts(
             build: BuildInfo(version: "1.0.0", commit: "abc1234"), macOS: "15.1", architecture: "arm64", claudeVersion: "2.9939.4",
             windows: [], diagnostics: [], lastSync: nil, lastSyncDate: nil, errors: [], log: log.tail(limit: FeedbackReport.logLimit),
             home: "/Users/robin.k", user: "robin.k", profiles: [])
         let markdown = FeedbackReport(facts: facts).markdown
-        #expect(markdown.contains("error [sync] Can’t read <folder>: denied for <email-1>"))
+        #expect(markdown.contains("error [sync] Can't read <folder>: denied for <email-1>"))
         #expect(markdown.contains("error [cli] Rejected key <token>"))
         #expect(!markdown.contains("robin") && !markdown.contains(token) && !markdown.contains("secret-app"))
+    }
+
+    /// On a fresh Mac the data folder appears only at the first sync or `baton add`, after the log was enabled at
+    /// start: the lines from then on are kept, and none before it creates the folder.
+    @Test func startsWritingOnceTheDataFolderExists() throws {
+        let data = fm.temporaryDirectory.appending(path: "baton-fresh-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? fm.removeItem(at: data) }
+        let sink = Log.Sink()
+        sink.dataFolder = data
+        #expect(sink.file == nil)
+        #expect(!fm.fileExists(atPath: data.path))
+        try fm.createDirectory(at: data, withIntermediateDirectories: true)
+        sink.file?.append(level: .info, category: "add", message: "Added profile work")
+        #expect(sink.file?.tail(limit: 1).first?.hasSuffix("info [add] Added profile work") == true)
+        try fm.removeItem(at: data)
+        #expect(sink.file == nil, "moved away while running: no line recreates it")
+        #expect(!fm.fileExists(atPath: data.path))
     }
 
     /// The log never creates Baton's data folder: a missing one could be a folder of the earlier name that isn't

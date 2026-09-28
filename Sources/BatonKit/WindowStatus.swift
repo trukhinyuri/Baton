@@ -154,17 +154,17 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
         switch error {
         case let error as ProfileError:
             switch error {
-            case .claudeNotInstalled: "Claude Desktop isn’t installed"
+            case .claudeNotInstalled: "Claude Desktop isn't installed"
             case .invalidLabel, .invalidEmail, .duplicateLabel: "Check the subscription details"
             case .notFound: "Subscription not found"
-            case .cloneFailed: "Couldn’t create the app copy"
-            case .windowStillRunning: "A window didn’t quit"
+            case .cloneFailed: "Couldn't create the app copy"
+            case .windowStillRunning: "A window didn't quit"
             case .notSignedIn: "Not signed in yet"
             case .sameWindow: "Choose another subscription"
             case .coworkNeedsItsOwnHandoff: "Continue this task on its own"
-            case .notAllowed: "A folder rule doesn’t allow this"
-            case .rulesUnreadable: "Can’t read the folder rules"
-            case .windowDidNotAppear: "The window didn’t appear"
+            case .notAllowed: "A folder rule doesn't allow this"
+            case .rulesUnreadable: "Can't read the folder rules"
+            case .windowDidNotAppear: "The window didn't appear"
             case .profileOpen: "The window is still open"
             case .mayStillBeWritten: "It may still be written to"
             case .readOnly: "Demo mode"
@@ -172,9 +172,9 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
         case let error as RestartError:
             switch error {
             case .liveSessions: "Claude Code is still working"
-            case .didNotQuit: "A window didn’t quit"
+            case .didNotQuit: "A window didn't quit"
             }
-        case is CocoaError: "Couldn’t read or write a file"
+        case is CocoaError: "Couldn't read or write a file"
         default: "Something went wrong"
         }
     }

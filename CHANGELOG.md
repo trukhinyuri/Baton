@@ -19,7 +19,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 
 ### Continue work
 
-- **Continue work…** lists the local Code sessions and Cowork tasks of every window, most recent first, with search. Pick one and a subscription to continue in; the one with the most weekly headroom is preselected, those at their limit are marked, and a banner offers this when an open subscription reaches its five-hour or weekly limit
+- **Continue work…** lists the local Code sessions and Cowork tasks of every window, most recent first, with search. Pick one and a subscription to continue in; the signed-in subscription with the most room left (by the higher of its five-hour and weekly usage) is preselected, those at their limit are marked, and a banner offers this when an open subscription reaches its five-hour or weekly limit
 - An idle Code session opens as the same session in the chosen window, which is opened first if needed. The transcript is shared, so nothing is copied
 - A session that a running Claude Code process has open, or one with a message in the last 10 minutes, continues as a copy by default, so two windows never write to one session. **Same session** / `--same` needs confirmation that the original was closed (`--anyway`); **As a copy** / `--fork` always copies
 - A copy takes the whole session with it: transcript, sub-agents, Workflow history (ids rewritten in `workflows/*.json` too), tool outputs, background task outputs, file history (Rewind checkpoints), and the scratchpad's text files under `from-<old id>/`. What is left behind, such as a git worktree inside the scratchpad, is reported. A copy is reused only while its source is unchanged
@@ -30,7 +30,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - Links reach a closed window one by one: the first starts it, the rest follow once its window is on screen, and each continued session is confirmed by the card Claude imports; one that doesn't appear is reported
 - Claude imports continued sessions itself, with its own trust and permission checks; when the destination's model differs from the session's, the sheet and `--dry-run` ask you to choose it first
 - `baton conversations [--all]` and `baton continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]` (or `baton pass`, the same command) do the same as **Continue work…** from the command line. Continuing needs no macOS permissions
-- Usage shows how old each figure is; figures older than 3 hours are marked. The signed-in subscription with the lowest weekly usage is preselected
+- Usage shows how old each figure is; figures older than 3 hours are marked
 
 ### Sharing between accounts
 
@@ -54,7 +54,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - Errors say what failed and what to do; a per-window status panel shows its account, Local only state, pending changes and why sessions were skipped
 - `doctor` shows where Claude Desktop was found and its version, whether this Claude version has each Local only setting, and which sessions Claude has marked as moved between accounts
 - `baton --version` prints the version and commit
-- Claude Desktop is found wherever Launch Services knows it, then in `/Applications` and `~/Applications`, and the app warns only when its version is newer than the newest tested major.minor (or known not to work): every 2.9939.x build counts as tested
+- Claude Desktop is found wherever Launch Services knows it, then in `/Applications` and `~/Applications`, and the app warns when its version is newer or older than the tested major.minor, can't be read, or is known not to work: every 2.9939.x build counts as tested
 - Baton keeps its own text log, `Logs/baton.log` in its data folder (up to 1 MB, three files), written by the app and `baton` next to the macOS log; a problem report attaches its last lines after the same redaction as the rest
 - The main Claude app gets its `claude://` links back at every start if a profile sign-in was interrupted
 
@@ -66,7 +66,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - App copies are rebuilt in a staging bundle, verified and swapped in atomically; the previous copy is restored if the new one fails verification. They are rebuilt only for a newer Claude Desktop, versions compared part by part as numbers, and never replaced with an older one
 - If Baton's data or launchers folder of the earlier name is a link that leads nowhere right now (a disk not connected), the app and `baton` stop with a line naming the link and where it leads, instead of starting a new, empty folder
 - An idle refresh reads no session card or transcript again; only files that changed are read. A remembered Continue copy whose transcript is gone is forgotten at the next sync
-- The window status and the footer's “in step” count a running window that received sessions from other windows as waiting for a restart
+- The window status and the footer's “in step” count a running window that the app shared sessions into since the app started as waiting for a restart
 - Opening a profile no longer fails when sessions can't be shared first; the window opens and the problem is reported
 - A session whose transcript file is empty is dated by the file instead of being listed last
 - The app and `baton` drop every `CLAUDE…` and `ANTHROPIC_…` variable they inherit before starting anything, so a Claude window opened from a terminal or a Claude Code session starts the way a Dock launch starts it, without an API key, proxy or model override from that shell
@@ -98,9 +98,9 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - Profile windows receive supported display preferences, local Code pins, theme, zoom and language from the main app while retaining account-owned interface state
 - Eligible local Code pins are synchronized in interface preferences and IndexedDB as well as Local Storage, because Claude reads those stores first
 - Portable display preferences follow the main app where the profile has no independent change; account-scoped filters stay with their account
-- “No folder” sessions started in another window are listed under “No folder” instead of their scratch folder’s name, and offer side questions (`/btw`) there too
-- A profile window closed right after its first sign-in is no longer reopened, and a profile removed while it was being opened isn’t rebuilt
-- Each window keeps its own account’s local scheduled tasks and scheduler switches (0.1.0 copied the main app’s into profiles); waking the Mac for tasks stays with the main app
+- “No folder” sessions started in another window are listed under “No folder” instead of their scratch folder's name, and offer side questions (`/btw`) there too
+- A profile window closed right after its first sign-in is no longer reopened, and a profile removed while it was being opened isn't rebuilt
+- Each window keeps its own account's local scheduled tasks and scheduler switches (0.1.0 copied the main app's into profiles); waking the Mac for tasks stays with the main app
 - A profile window restarts once after its first sign-in, so shared sessions show up right away
 - New profiles reuse the Claude Code build the main app has already downloaded
 

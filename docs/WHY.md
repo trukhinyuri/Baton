@@ -2,9 +2,9 @@
 
 *A draft in the author's voice. Yuri edits this.*
 
-I pay for more than one Claude subscription. One is mine, others come with work, and on a heavy day I hit a limit in the middle of something. Claude Desktop holds one account at a time, so switching meant signing out, signing in, losing my windows and hunting for the session I was in. The work itself was already on my Mac, in `~/.claude`. Only the window was in the way.
+I pay for more than one Claude subscription. One is mine, others come with work, and a piece of work often belongs in a different account than the one I started it in. Claude Desktop holds one account at a time, so switching meant signing out, signing in, losing my windows and hunting for the session I was in. The work itself was already on my Mac, in `~/.claude`. Only the window was in the way.
 
-So I built the smallest thing that removes that friction without bending anyone's rules. Every subscription gets its own Claude window, the real one, signed by Anthropic and unmodified. I sign in to each myself. When one account runs out, I choose another and the session continues there with everything it had: the transcript, the sub-agents, the Workflow history, the tool outputs. Nothing is pooled, proxied or switched behind my back, and nothing leaves the Mac.
+So I built the smallest thing that removes that friction without bending anyone's rules. Every subscription gets its own Claude window, the real one, signed by Anthropic and unmodified. I sign in to each myself. When I want to carry on in another account, I choose it and the session continues there with everything it had: the transcript, the sub-agents, the Workflow history, the tool outputs. Nothing is pooled, proxied or switched behind my back, and nothing leaves the Mac.
 
 A few rules shaped every decision:
 

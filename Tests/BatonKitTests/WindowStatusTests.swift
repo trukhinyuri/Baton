@@ -66,11 +66,11 @@ struct WindowStatusTests {
     }
 
     @Test func alertTitlesNameTheErrorType() {
-        #expect(WindowStatus.alertTitle(for: ProfileError.claudeNotInstalled("/Applications/Claude.app")) == "Claude Desktop isn’t installed")
+        #expect(WindowStatus.alertTitle(for: ProfileError.claudeNotInstalled("/Applications/Claude.app")) == "Claude Desktop isn't installed")
         #expect(WindowStatus.alertTitle(for: ProfileError.duplicateLabel("WORK")) == "Check the subscription details")
-        #expect(WindowStatus.alertTitle(for: ProfileError.notAllowed(folders: [], accounts: [], label: "W", email: nil)) == "A folder rule doesn’t allow this")
-        #expect(WindowStatus.alertTitle(for: ProfileError.windowDidNotAppear(label: "W", links: 1)) == "The window didn’t appear")
-        #expect(WindowStatus.alertTitle(for: CocoaError(.fileReadNoPermission)) == "Couldn’t read or write a file")
+        #expect(WindowStatus.alertTitle(for: ProfileError.notAllowed(folders: [], accounts: [], label: "W", email: nil)) == "A folder rule doesn't allow this")
+        #expect(WindowStatus.alertTitle(for: ProfileError.windowDidNotAppear(label: "W", links: 1)) == "The window didn't appear")
+        #expect(WindowStatus.alertTitle(for: CocoaError(.fileReadNoPermission)) == "Couldn't read or write a file")
         #expect(WindowStatus.alertTitle(for: URLError(.badURL)) == "Something went wrong")
         #expect(WindowStatus.alertTitle(for: WindowStatus.RestartError.liveSessions(label: "WORK", count: 2)) == "Claude Code is still working")
     }

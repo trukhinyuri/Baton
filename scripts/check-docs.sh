@@ -3,6 +3,7 @@
 # - no mention of features 1.0 removed (Project branches, shared sidebar groups, handoff requests);
 # - every relative link points at a file that exists, and every #anchor at a heading;
 # - the anchors the app and the issue forms link to exist in the README;
+# - apostrophes are straight in the docs and the Swift sources;
 # - VERSION matches the newest CHANGELOG entry.
 set -eu
 
@@ -70,6 +71,18 @@ for root in ["Sources", ".github"]:
 for anchor in sorted(outside):
     if anchor not in readme:
         fail(f"README.md has no heading for #{anchor}, which the app or an issue form links to")
+
+# One apostrophe everywhere, the straight one, in the docs and in every string the app and baton show; curly
+# double quotes stay, since the app puts titles in them.
+curly = re.compile(r"[A-Za-z]’[A-Za-z]|s’[\s.,;:)]")
+texts = docs + ["CHANGELOG.md"]
+for root in ["Sources", "Tests"]:
+    for directory, _, files in os.walk(root):
+        texts += [os.path.join(directory, name) for name in files if name.endswith(".swift")]
+for path in texts:
+    for number, line in enumerate(open(path, encoding="utf-8"), 1):
+        if curly.search(line):
+            fail(f"{path}:{number}: typographic apostrophe; use a straight one (')")
 
 version = open("VERSION").read().strip()
 newest = re.search(r"^## (\S+)", open("CHANGELOG.md", encoding="utf-8").read(), re.MULTILINE)

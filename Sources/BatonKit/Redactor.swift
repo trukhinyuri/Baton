@@ -80,8 +80,10 @@ public struct Redactor: Sendable {
         #"(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*[0-9])(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])"#,
         #"(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[0-9])(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*[A-Z])[A-Za-z0-9+/]{40,}={0,2}"#,
     ]
-    /// An absolute or `~` path starting a word; it runs to the next space, quote or bracket.
-    static let path = #"(?<=^|[\s"“”'‘’(\[])~?/[^\s"“”'‘’()\[\],;:]*"#
+    /// An absolute or `~` path starting a word; it runs to the next quote or bracket, and past a space while the next
+    /// word goes on with a `/`, as in `/Volumes/Backup Disk/Clients`. A last folder name with a space in it can't be
+    /// told from the sentence, so `fail` in the CLI puts the paths it was given in curly quotes (`Log.quoting`).
+    static let path = #"(?<=^|[\s"“”'‘’(\[])~?/[^\s"“”'‘’()\[\],;:]*(?: [^\s"“”'‘’()\[\],;:/~][^\s"“”'‘’()\[\],;:/]*/[^\s"“”'‘’()\[\],;:]*)*"#
     /// Locations that name no one's work. Anything else, such as `~/src/…` or `/Volumes/…`, becomes `<folder>`.
     /// `~/.claude` and temporary folders are not among them: Claude Code names its folders there after the project's path.
     static let safePaths = [
@@ -89,7 +91,8 @@ public struct Redactor: Sendable {
         "/opt/homebrew", "/dev",
     ]
     /// iCloud Drive and cloud storage folders hold the user's own files even though they live in ~/Library.
-    static let syncedFolder = #"~/Library/(?:Mobile Documents|CloudStorage)(?:/[^\s"“”'‘’()\[\],;]*)?"#
+    static let syncedFolder =
+        #"~/Library/(?:Mobile Documents|CloudStorage)(?:/[^\s"“”'‘’()\[\],;]*(?: [^\s"“”'‘’()\[\],;/~][^\s"“”'‘’()\[\],;/]*/[^\s"“”'‘’()\[\],;]*)*)?"#
 
     /// `name` as a whole word, never inside a placeholder such as `<profile-1>`.
     private static func word(_ name: String) -> String {

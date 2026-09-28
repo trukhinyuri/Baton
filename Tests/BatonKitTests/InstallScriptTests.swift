@@ -80,6 +80,17 @@ struct InstallScriptTests {
         #expect(try install(["--where", "--bogus"]).status == 2)
     }
 
+    /// `make install DEST=".../Claude Profiles"` out of habit: once baton migrate has renamed that folder, the CLI hint
+    /// and `make uninstall` with the same DEST look in the Baton folder, where Baton.app is now.
+    @Test func anOldDestThatWasRenamedMeansBatons() throws {
+        defer { cleanUp() }
+        try fm.createDirectory(at: legacy, withIntermediateDirectories: true)
+        #expect(try install(["--where", legacy.path]).output == legacy.path + "\n", "not renamed yet")
+        try fm.moveItem(at: legacy, to: new)
+        #expect(try install(["--where", legacy.path]).output == new.path + "\n", "renamed")
+        #expect(try install(["--where", legacy.path + "/"]).output == new.path + "\n", "renamed, with a trailing slash")
+    }
+
     @Test func aDryRunPlansTheUpgradeAndChangesNothing() throws {
         defer { cleanUp() }
         try makeApp(legacy.appending(path: "Claude Profiles.app"), bundleID: "io.github.trukhinyuri.claudeprofiles")

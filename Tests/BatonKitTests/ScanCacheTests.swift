@@ -103,6 +103,30 @@ struct ScanCacheTests {
         let text = try String(contentsOf: copies.file, encoding: .utf8)
         #expect(text.contains(kept))
         #expect(!text.contains(gone), "its copy is gone")
-        #expect(try copies.dropMissing(transcripts: ConversationIndex.transcriptFiles(in: box.paths.claudeProjectsDir)) == 0)
+        #expect(try copies.dropMissing(in: box.paths.claudeProjectsDir) == 0)
+    }
+
+    /// A projects folder that can't be read says nothing about the copies: none is forgotten, and the next sync that
+    /// can read it tidies up.
+    @Test func anUnreadableProjectsFolderDropsNoCopy() throws {
+        let box = try Sandbox()
+        let projects = box.paths.claudeProjectsDir
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: projects.path)
+            try? fm.removeItem(at: box.root)
+        }
+        let (source, copy) = ("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+        let copies = ContinueCopies(paths: box.paths)
+        try copies.record(source: source, destination: "work", copy: copy)
+        #expect(try copies.dropMissing(in: projects) == 0, "no projects folder: ~/.claude on a volume that isn't mounted")
+        let project = projects.appending(path: "-Users-me-src-app", directoryHint: .isDirectory)
+        try fm.createDirectory(at: project, withIntermediateDirectories: true)
+        try Data("{}\n".utf8).write(to: project.appending(path: "\(copy).jsonl"))
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: projects.path)
+        #expect(try copies.dropMissing(in: projects) == 0, "no permission")
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: projects.path)
+        #expect(try copies.dropMissing(in: projects) == 0, "its copy is there")
+        try fm.removeItem(at: project.appending(path: "\(copy).jsonl"))
+        #expect(try copies.dropMissing(in: projects) == 1, "readable, and the copy is gone")
     }
 }
