@@ -45,6 +45,22 @@ struct ProfileTests {
         #expect(try registry.load() == [profile])
     }
 
+    @Test func olderRegistryReadsWithPermissionModeOff() throws {
+        let box = try Sandbox()
+        try FileManager.default.createDirectory(at: box.paths.stateDir, withIntermediateDirectories: true)
+        try box.write(##"[{"id":"work","label":"WORK","color":"#1971C2","createdAt":"2026-09-01T10:00:00Z"}]"##, to: box.paths.registryFile)
+        let registry = ProfileRegistry(paths: box.paths)
+
+        let loaded = try #require(try registry.load().first)
+        #expect(loaded.carryPermissionMode == nil && !loaded.carriesPermissionMode)
+
+        var owner = loaded
+        owner.carryPermissionMode = true
+        try registry.save([owner])
+        #expect(try registry.load().first?.carriesPermissionMode == true)
+        #expect(box.read(box.paths.registryFile)?.contains(#""carryPermissionMode""#) == true)
+    }
+
     @Test func unexpectedAccountIsCaseInsensitive() {
         let profile = Profile(id: "w", label: "W", email: "Jane@Acme.com", color: "#000000")
         var status = ProfileStatus(profile: profile, accountID: "id", email: "jane@acme.com", usage: nil, isRunning: false)

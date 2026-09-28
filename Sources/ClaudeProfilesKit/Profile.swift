@@ -12,14 +12,23 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     /// Icon badge color, `#RRGGBB`.
     public var color: String
     public var createdAt: Date
+    /// Whether a conversation continued into this profile keeps its permission mode (for example "accept edits").
+    /// Off unless the owner turns it on: a mode chosen under one account is not silently granted in another.
+    /// Missing in older `profiles.json` files, which read as off.
+    public var carryPermissionMode: Bool?
 
-    public init(id: String, label: String, email: String?, color: String, createdAt: Date = Date()) {
+    public init(id: String, label: String, email: String?, color: String, createdAt: Date = Date(),
+                carryPermissionMode: Bool? = nil) {
         self.id = id
         self.label = label
         self.email = email
         self.color = color
         self.createdAt = createdAt
+        self.carryPermissionMode = carryPermissionMode
     }
+
+    /// `carryPermissionMode`, with a missing value read as off.
+    public var carriesPermissionMode: Bool { carryPermissionMode ?? false }
 
     public static let palette = ["#1971C2", "#2F9E44", "#7048E8", "#0C8599", "#C2255C", "#E8590C", "#5C940D", "#862E9C"]
     public static let mainColor = "#D97757"

@@ -17,6 +17,10 @@ public enum ProfileError: LocalizedError, Equatable {
     case rulesUnreadable(String)
     /// The window started but didn't show up in time, so the links it can't keep yet were not handed over.
     case windowDidNotAppear(label: String, links: Int)
+    /// A profile is removed only while its window is closed.
+    case profileOpen(String)
+    /// Continuing the same session while its window may still write to it would give it two writers.
+    case mayStillBeWritten([String])
 
     public var errorDescription: String? {
         switch self {
@@ -38,6 +42,11 @@ public enum ProfileError: LocalizedError, Equatable {
         case .rulesUnreadable(let reason): "Can't read the folder rules, so nothing continues until they are fixed: \(reason)"
         case .windowDidNotAppear(let label, let links):
             "Claude \(label) started but its window didn't appear, so \(links) of the sessions were not handed to it. Open them from its sidebar, or continue them again once it's open."
+        case .profileOpen(let label):
+            "Claude \(label) is open. Quit it first (⌘Q in that window), then remove the profile. Nothing was removed."
+        case .mayStillBeWritten(let titles):
+            titles.map { "“\($0)”" }.joined(separator: ", ") + (titles.count == 1 ? " may still be written to in its window. " : " may still be written to in their windows. ")
+                + "Continue as a copy, or close it there first and continue anyway."
         }
     }
 }
@@ -156,6 +165,23 @@ public final class ProfileManager: @unchecked Sendable {
         }
     }
 
+    /// A warning when the installed Claude Desktop is outside the versions this release was tested with.
+    public var claudeVersionWarning: String? { ClaudeVersion.warning(for: ClaudeVersion.installed(at: paths.claudeApp)) }
+
+    /// Run once when the app or the CLI starts. Gives `claude://` links back to the main app after an abandoned
+    /// sign-in, and says when Claude Desktop is missing or outside the tested versions.
+    /// - Returns: warnings to show; empty when all is well.
+    public func startUpChecks() -> [String] {
+        guard fm.fileExists(atPath: paths.claudeApp.path) else {
+            return ["Claude Desktop wasn't found in Applications. Install it, then open Claude Profiles again."]
+        }
+        var warnings: [String] = []
+        do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) }
+        catch { warnings.append(error.localizedDescription) }
+        if let warning = claudeVersionWarning { warnings.append(warning) }
+        return warnings
+    }
+
     /// The profile whose window currently receives sign-in links, if any.
     public var profileSigningIn: String? { signInRouting.state?.profileID }
 
@@ -236,25 +262,37 @@ public final class ProfileManager: @unchecked Sendable {
         if let email, !Profile.isValidEmail(email) { throw ProfileError.invalidEmail }
 
         lock.lock(); defer { lock.unlock() }
-        var all = try registry.load()
-        guard !all.contains(where: { $0.label.caseInsensitiveCompare(label) == .orderedSame }) else {
-            throw ProfileError.duplicateLabel(label)
-        }
-        var id = Profile.slug(for: label)
-        let base = id
-        var n = 2
-        while all.contains(where: { $0.id == id }) || fm.fileExists(atPath: paths.dataDir(for: id).path) {
-            id = "\(base)-\(n)"; n += 1
-        }
-        let profile = Profile(id: id, label: label, email: email,
-                              color: color ?? Profile.palette[all.count % Profile.palette.count])
-        try fm.createDirectory(at: paths.dataDir(for: id), withIntermediateDirectories: true)
-        try buildEngine(for: profile)
-        try buildLauncher(for: profile)
-        all.append(profile)
-        try registry.save(all)
-        return profile
+        // The app and the CLI each have a manager; without this, two creations at once keep only one profile.
+        return try FileLock.withLock(registryLock, blocking: true) { () throws -> Profile in
+            var all = try registry.load()
+            guard !all.contains(where: { $0.label.caseInsensitiveCompare(label) == .orderedSame }) else {
+                throw ProfileError.duplicateLabel(label)
+            }
+            var id = Profile.slug(for: label)
+            let base = id
+            var n = 2
+            while all.contains(where: { $0.id == id }) || fm.fileExists(atPath: paths.dataDir(for: id).path) {
+                id = "\(base)-\(n)"; n += 1
+            }
+            let profile = Profile(id: id, label: label, email: email,
+                                  color: color ?? Profile.palette[all.count % Profile.palette.count])
+            try fm.createDirectory(at: paths.dataDir(for: id), withIntermediateDirectories: true)
+            if let appBuilder { try appBuilder(profile) } else {
+                try buildEngine(for: profile)
+                try buildLauncher(for: profile)
+            }
+            all.append(profile)
+            try registry.save(all)
+            return profile
+        }!
     }
+
+    /// Held while the profile registry is read and written back.
+    var registryLock: URL { paths.stateDir.appending(path: "registry.lock") }
+    /// Builds a new profile's engine and launcher; tests replace it to skip copying and signing Claude.
+    var appBuilder: (@Sendable (Profile) throws -> Void)?
+    /// Whether the profile's app copy is running; tests replace it.
+    var isProfileRunning: (@Sendable (String) -> Bool)?
 
     // MARK: Open
 
@@ -302,6 +340,9 @@ public final class ProfileManager: @unchecked Sendable {
                 catch { problems.append("Setup: \(error.localizedDescription)") }
                 do { _ = try InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id) }
                 catch { problems.append("Interface: \(error.localizedDescription)") }
+                // Last, so no sync above can put a Remote Control switch back.
+                do { _ = try localOnly.reconcile(window: profile.id) }
+                catch { problems.append("Local only: \(error.localizedDescription)") }
                 if !problems.isEmpty {
                     openWarning = "Claude \(profile.label) opened, but some shared settings could not be refreshed. " + problems.joined(separator: " ")
                 }
@@ -366,6 +407,8 @@ public final class ProfileManager: @unchecked Sendable {
                 var problems: [String] = []
                 do { _ = try prepareSessionsForLaunch() }
                 catch { problems.append("sessions could not be shared first: \(error.localizedDescription)") }
+                do { _ = try localOnly.reconcile(window: "main") }
+                catch { problems.append("Local only could not be applied: \(error.localizedDescription)") }
                 if !problems.isEmpty { lock.withLock { openWarning = "Claude opened, but " + problems.joined(separator: "; ") } }
             }
         } catch {
@@ -398,9 +441,9 @@ public final class ProfileManager: @unchecked Sendable {
     /// Code sessions open there as the same session or as a copy (see `ContinueMode`); Cowork tasks become a
     /// new task there.
     public func continueConversation(_ conversation: Conversation, in destination: String,
-                                     mode: ContinueMode = .auto) async throws -> ContinueResult {
+                                     mode: ContinueMode = .auto, anyway: Bool = false) async throws -> ContinueResult {
         guard conversation.kind == .cowork else {
-            return .openedSession(try await continueAll([conversation], in: destination, mode: mode)[0])
+            return .openedSession(try await continueAll([conversation], in: destination, mode: mode, anyway: anyway)[0])
         }
         let label = try checkDestination(destination)
         if conversation.ownerID == destination { throw ProfileError.sameWindow(label) }
@@ -412,15 +455,17 @@ public final class ProfileManager: @unchecked Sendable {
 
     /// What continuing `conversations` in `destination` would do, without changing anything.
     /// - Parameter folder: a folder a new session will start in as well, which its folder rule covers too.
+    /// - Parameter anyway: continue the same session even though its window may still write to it; without it,
+    ///   such a session throws `ProfileError.mayStillBeWritten`.
     public func plan(_ conversations: [Conversation], in destination: String, mode: ContinueMode = .auto,
-                     newSessionIn folder: String? = nil, now: Date = Date()) throws -> [ContinuePlan] {
+                     newSessionIn folder: String? = nil, anyway: Bool = false, now: Date = Date()) throws -> [ContinuePlan] {
         try checkDestination(destination)
         try checkRules(folders: conversations.flatMap(\.folders) + (folder.map { [$0] } ?? []), destination: destination)
         let dataDir = dataDir(of: destination)
         let isOpen = isWindowOpen(destination)
         let live = conversations.isEmpty ? [] : LiveSessions.ids(claudeDir: paths.claudeDir)
         var supported: Set<String>?
-        return try conversations.map { found in
+        let plans = try conversations.map { found in
             var conversation = found
             conversation.hasLiveProcess = found.hasLiveProcess || live.contains(found.sessionID)
             guard conversation.kind != .cowork else { throw ProfileError.coworkNeedsItsOwnHandoff(conversation.title) }
@@ -434,8 +479,19 @@ public final class ProfileManager: @unchecked Sendable {
                 note = ModelNote.decide(model: model, historyModel: ConversationIndex.lastModel(of: conversation.transcript),
                                         supported: supported?.contains(model) == true, card: source)
             }
-            return ContinuePlan(conversation: conversation, destination: destination, forks: forks, model: note)
+            var plan = ContinuePlan(conversation: conversation, destination: destination, forks: forks, model: note)
+            if let card = conversation.card { plan.wontFollow = Continuation.wontFollow(card: card, target: dataDir, paths: paths) }
+            return plan
         }
+        if !anyway { try Self.refuseSecondWriter(plans, now: now) }
+        return plans
+    }
+
+    /// Refuses to continue the same session while its window may still write to it (`Conversation.mayStillWrite`);
+    /// a copy is always safe.
+    public static func refuseSecondWriter(_ plans: [ContinuePlan], now: Date = Date()) throws {
+        let busy = plans.filter { !$0.forks && $0.conversation.mayStillWrite(now: now) }
+        guard busy.isEmpty else { throw ProfileError.mayStillBeWritten(busy.map(\.conversation.title)) }
     }
 
     /// How long `continueAll` waits for the destination window to import the sessions it was handed.
@@ -446,8 +502,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// imports each session itself, and `ContinuePlan.opened` says whether it did.
     @discardableResult
     public func continueAll(_ conversations: [Conversation], in destination: String, mode: ContinueMode = .auto,
-                            newSessionIn folder: String? = nil, now: Date = Date()) async throws -> [ContinuePlan] {
-        var plans = try plan(conversations, in: destination, mode: mode, newSessionIn: folder, now: now)
+                            newSessionIn folder: String? = nil, anyway: Bool = false, now: Date = Date()) async throws -> [ContinuePlan] {
+        var plans = try plan(conversations, in: destination, mode: mode, newSessionIn: folder, anyway: anyway, now: now)
         var links: [URL] = []
         var madeThisRun: [(id: String, folder: URL)] = []
         do {
@@ -460,7 +516,7 @@ public final class ProfileManager: @unchecked Sendable {
             // "Continue All" never leaves an orphan transcript behind.
             let copies = ContinueCopies(paths: paths)
             for made in madeThisRun {
-                TranscriptFork.removeCopy(made.id, in: made.folder, claudeDir: paths.claudeDir)
+                TranscriptFork.removeCopy(made.id, in: made.folder, claudeDir: paths.claudeDir, tempDir: paths.claudeTempDir)
                 try? copies.forget(copy: made.id)
             }
             throw error
@@ -512,14 +568,19 @@ public final class ProfileManager: @unchecked Sendable {
         else { plan.conversation.title += " · copy" }
         let copies = ContinueCopies(paths: paths)
         let folder = plan.conversation.transcript.deletingLastPathComponent()
-        if let reused = copies.existingCopy(of: plan.conversation.sessionID, in: plan.destination, folder: folder) {
+        if let reused = copies.existingCopy(of: plan.conversation.sessionID, transcript: plan.conversation.transcript, in: plan.destination) {
             plan.sessionID = reused
             return nil
         }
-        let new = try TranscriptFork.fork(plan.conversation, claudeDir: paths.claudeDir)
-        plan.sessionID = new
-        try? copies.record(source: plan.conversation.sessionID, destination: plan.destination, copy: new)
-        return (new, folder)
+        let made = try TranscriptFork.forkReporting(plan.conversation, claudeDir: paths.claudeDir, tempDir: paths.claudeTempDir)
+        plan.sessionID = made.id
+        plan.carried = made
+        try? copies.record(source: plan.conversation.sessionID, destination: plan.destination, copy: made.id,
+                           sourceLength: made.sourceLength, sourceTail: made.sourceTail)
+        if !made.leftBehind.isEmpty || !made.worktrees.isEmpty {
+            Log.logger("continue").info("Copy \(made.id, privacy: .private) left \(made.leftBehind.count) scratchpad items and \(made.worktrees.count) worktrees behind")
+        }
+        return (made.id, folder)
     }
 
     /// The accounts that may continue work touching `folders` (see `FolderRules`); `nil` when no rule applies.
@@ -550,6 +611,26 @@ public final class ProfileManager: @unchecked Sendable {
 
     private func dataDir(of window: String) -> URL {
         window == "main" ? paths.mainDataDir : paths.dataDir(for: window)
+    }
+
+    /// Local only for every window: new Claude Code sessions stay off Remote Control. Applied to a closed
+    /// window right away and to every window before it starts.
+    public var localOnly: LocalOnly { LocalOnly(paths: paths, isRunning: { self.isWindowOpen($0) }) }
+
+    /// Each window's Local only status, MAIN first, for the window list and `doctor`.
+    public func localOnlyStatus() -> [(window: String, label: String, status: LocalOnly.Status)] {
+        let localOnly = localOnly
+        return windows.map { ($0.id, label(of: $0.id), localOnly.status(window: $0.id)) }
+    }
+
+    /// Turns Local only on or off for one window, or with `window` nil for every window without its own choice.
+    /// Closed windows change now; open ones when they next start (`pending`).
+    @discardableResult
+    public func setLocalOnly(_ enabled: Bool, window: String?) throws -> [String: LocalOnly.Status] {
+        if let window {
+            guard window == "main" || profiles.contains(where: { $0.id == window }) else { throw ProfileError.notFound(window) }
+        }
+        return try localOnly.setEnabled(enabled, window: window, windows: windows.map(\.id))
     }
 
     /// Whether the window of `"main"` or a profile id is running with its own data.
@@ -599,13 +680,15 @@ public final class ProfileManager: @unchecked Sendable {
 
     // MARK: Remove
 
-    /// Quits the profile's window and moves its app copy and data (including its sign-in) to the Trash.
+    /// Moves a closed profile's app copy and data (including its sign-in) to the Trash. While its window is open
+    /// it refuses with `ProfileError.profileOpen`: quitting it here could cut off work in progress.
     /// Claude Code sessions stay available in every other profile. Cowork sessions keep their files in the
     /// profile's data, so the ones started in it go to the Trash with it and leave the other windows too.
     public func remove(_ id: String) async throws {
         guard let profile = profiles.first(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         let engine = paths.engine(for: id).standardizedFileURL
-        try await quit(claudeProcesses().filter { $0.bundleURL?.standardizedFileURL == engine }, waiting: 10, force: true)
+        let running = isProfileRunning?(id) ?? claudeProcesses().contains { $0.bundleURL?.standardizedFileURL == engine }
+        guard !running else { throw ProfileError.profileOpen(profile.label) }
 
         // Share cards of sessions started in this window moments ago before its data goes away.
         _ = try? syncSessions()
@@ -615,7 +698,7 @@ public final class ProfileManager: @unchecked Sendable {
             for url in [paths.launcher(for: profile), paths.engine(for: id), paths.dataDir(for: id), remembered] where fm.fileExists(atPath: url.path) {
                 try fm.trashItem(at: url, resultingItemURL: nil)
             }
-            try registry.save(try registry.load().filter { $0.id != id })
+            _ = try FileLock.withLock(registryLock, blocking: true) { try registry.save(try registry.load().filter { $0.id != id }) }
         }
         if signInRouting.state?.profileID == id { signInRouting.end(allProfileIDs: profiles.map(\.id)) }
     }

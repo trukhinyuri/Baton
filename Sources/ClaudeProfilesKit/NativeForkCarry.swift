@@ -151,14 +151,29 @@ public enum NativeForkCarry {
                 guard (created(source) ?? .distantPast) <= forkedAt else { continue }
                 let target = newFolder.appending(path: "\(kind)/\(relative)")
                 if FileManager.default.fileExists(atPath: target.path) { plan.kept += 1; continue }
-                let isAgent = kind == "subagents" && source.pathExtension == "jsonl" && source.lastPathComponent.hasPrefix("agent-")
-                plan.copies.append(Copy(source: source, target: target,
-                                        name: "projects/\(project)/\(lineage.new)/\(kind)/\(relative)", rewritesIDs: isAgent))
+                plan.copies.append(Copy(source: source, target: target, name: "projects/\(project)/\(lineage.new)/\(kind)/\(relative)",
+                                        rewritesIDs: rewritesIDs("\(kind)/\(relative)")))
             }
         }
+        scratchPlan(oldProject: old.deletingLastPathComponent().lastPathComponent, project: project, lineage: lineage,
+                    tempDir: paths.claudeTempDir, madeBy: forkedAt, into: &plan)
+        return plan
+    }
 
-        // The scratchpad and task output go into the new scratchpad, in a folder named after the old session.
-        let oldTemp = paths.claudeTempDir.appending(path: "\(old.deletingLastPathComponent().lastPathComponent)/\(lineage.old)", directoryHint: .isDirectory)
+    /// Whether a file in a session's folder (`subagents/…`, `workflows/…`, `tool-results/…`) gets the new session
+    /// id in a copy. Only sub-agent transcripts do, the way the main transcript does. Workflow journals key their
+    /// entries by hashes of prompts that name the session's own paths, so Workflow state, journals and scripts
+    /// are copied byte for byte: rewriting an id there would make Workflow resume miss its results.
+    static func rewritesIDs(_ relative: String) -> Bool {
+        let name = (relative as NSString).lastPathComponent
+        return relative.hasPrefix("subagents/") && name.hasPrefix("agent-") && name.hasSuffix(".jsonl")
+    }
+
+    /// The old session's scratchpad notes and task output, planned into the new session's scratchpad under
+    /// `from-<old id>`: text files up to 1 MB each and 20 MB in all, made by `madeBy`. Folders of builds, project
+    /// copies and folders of more than 200 files stay behind and are listed; git worktrees are listed, never copied.
+    static func scratchPlan(oldProject: String, project: String, lineage: Lineage, tempDir: URL, madeBy: Date, into plan: inout Plan) {
+        let oldTemp = tempDir.appending(path: "\(oldProject)/\(lineage.old)", directoryHint: .isDirectory)
         let into = "\(project)/\(lineage.new)/scratchpad/from-\(lineage.old.prefix(8))"
         var total = 0
         for kind in ["scratchpad", "tasks"] {
@@ -169,9 +184,9 @@ public enum NativeForkCarry {
             for relative in notes {
                 let source = root.appending(path: relative)
                 let name = "tmp/\(into)/\(kind == "tasks" ? "tasks/" : "")\(relative)"
-                let target = paths.claudeTempDir.appending(path: String(name.dropFirst(4)))
+                let target = tempDir.appending(path: String(name.dropFirst(4)))
                 if FileManager.default.fileExists(atPath: target.path) { plan.kept += 1; continue }
-                guard (created(source) ?? .distantPast) <= forkedAt else { continue }
+                guard (created(source) ?? .distantPast) <= madeBy else { continue }
                 let size = (try? source.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? .max
                 guard size <= maxFileSize, total + size <= maxScratchTotal, isText(source) else {
                     plan.leftBehind.append("\(kind)/\(relative)"); continue
@@ -180,7 +195,6 @@ public enum NativeForkCarry {
                 plan.copies.append(Copy(source: source, target: target, name: name, rewritesIDs: false))
             }
         }
-        return plan
     }
 
     /// Adds one file; `false` if the new session made one with that name first.
