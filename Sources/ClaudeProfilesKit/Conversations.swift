@@ -33,6 +33,8 @@ public struct Conversation: Identifiable, Equatable, Sendable {
     /// choice such as `claude-opus-5-5[1m]` only there, not in the transcript.
     public var model: String?
     public var effort: String?
+    /// A running `claude` process has this session open (see `LiveSessions`), so it may write to it at any time.
+    public var hasLiveProcess = false
 
     public var id: String { sessionID }
 
@@ -47,6 +49,12 @@ public struct Conversation: Identifiable, Equatable, Sendable {
     /// Had a message within `seconds`: probably still running, so stop it before continuing elsewhere.
     public func isActive(now: Date = Date(), within seconds: TimeInterval = 60) -> Bool {
         now.timeIntervalSince(ConversationIndex.lastActivity(of: transcript) ?? lastActivity) < seconds
+    }
+
+    /// Open in a running Claude Code process, or had a message in the last `ContinueMode.forkWindow`: its window
+    /// may still write to it, so continuing it as the same session elsewhere would give it two writers.
+    public func mayStillWrite(now: Date = Date()) -> Bool {
+        kind != .cowork && (hasLiveProcess || isActive(now: now, within: ContinueMode.forkWindow))
     }
 
     /// Whether the conversation works in `folder` or a folder inside it. Links and `..` are resolved first.
@@ -107,10 +115,19 @@ public enum ConversationIndex {
         return found.values.sorted { $0.lastActivity > $1.lastActivity }
     }
 
-    /// Code sessions and Project branches working in `folder` (or inside it) with a message since `since`,
-    /// most recent first. Cowork tasks are left out: they continue one at a time with their files attached.
-    public static func recent(in folder: String, since: Date, from conversations: [Conversation]) -> [Conversation] {
-        conversations.filter { $0.kind != .cowork && $0.lastActivity >= since && $0.works(in: folder) }
+    /// Code sessions and Project branches working in `folder` (or inside it) with a message since `since`, most
+    /// recent first. Cowork tasks are left out: they continue one at a time with their files attached.
+    ///
+    /// A Project's branches can work in other folders and stop with its account's limit all the same, so unless
+    /// `folderOnly` is set, the other branches of the windows whose Project branches work in `folder` come too.
+    public static func recent(in folder: String, since: Date, from conversations: [Conversation],
+                              folderOnly: Bool = false) -> [Conversation] {
+        let current = conversations.filter { $0.kind != .cowork && $0.lastActivity >= since }
+        let inFolder = current.filter { $0.works(in: folder) }
+        guard !folderOnly else { return inFolder }
+        let owners = Set(inFolder.filter { $0.kind == .projectBranch }.compactMap(\.ownerID))
+        let ids = Set(inFolder.map(\.id))
+        return current.filter { ids.contains($0.id) || ($0.kind == .projectBranch && $0.ownerID.map(owners.contains) == true) }
     }
 
     /// An absolute path with `~`, `.`, `..` and symbolic links resolved, without a trailing slash.

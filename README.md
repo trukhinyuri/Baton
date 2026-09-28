@@ -113,7 +113,7 @@ To remove a subscription, choose **⋯ → Remove Subscription…**. Its window 
 
 Click **Continue work…**. It lists the local conversations of every window, most recent first: Code sessions, local Project branches and Cowork tasks. Choose one, choose where to continue, and click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet.
 
-The signed-in subscription with the most weekly headroom is preselected, and those at their limit are marked. A window's usage is only updated while it is open, so each figure shows its age; a figure older than 3 hours is marked *may be higher now*, and **Most headroom** is only given to a subscription measured in the last 3 hours.
+The signed-in subscription with the lowest weekly usage is preselected, and those at their limit are marked. A window's usage is only updated while it is open, so each figure shows its age, and a figure older than 3 hours is marked *may be higher now*; an old figure still counts, because a window that nobody opened has used nothing since. When a folder has a rule (see below), only the windows it allows are offered.
 
 | Conversation | What happens in the other profile |
 |---|---|
@@ -122,11 +122,13 @@ The signed-in subscription with the most weekly headroom is preselected, and tho
 | Cowork task | A new Cowork task opens with a prompt to continue, the full history attached as `history.md`, and copies of the files the task was given and made (up to 10 files, 25 MB each, 50 MB in total). Nothing is sent: review it and send it yourself. Claude shows a caution banner above any prompt that arrives through a link; this one is the prompt Claude Profiles prepared. The prompt names the folders the task worked in; connect them when Claude asks. Connectors, scheduled tasks and Project settings of the original account are not carried over, and the original task stays in its profile. |
 | claude.ai chat or cloud Project | Not on this Mac. **Copy handoff request** copies a request to paste into that chat; paste its answer into a new chat in the other subscription. |
 
-Two windows must not write to one session at the same time. **Automatic** therefore continues a Project branch, whose coordinator may write to it again, and a session with a message in the last 10 minutes as a copy: a new session with the same history and files. Other sessions continue as themselves. **Same session** and **As a copy** override this; for a session that may still be running, **Same session** needs **I stopped it** and then reads **Continue Anyway**. A Cowork task written to less than a minute ago may miss its last steps; stop it first.
+Two windows must not write to one session at the same time. **Automatic** therefore continues as a copy a session that a running Claude Code process still has open, a Project branch, whose coordinator may write to it again, and a session with a message in the last 10 minutes. A copy is a new session with the same history, file history and files. Other sessions continue as themselves. **Same session** and **As a copy** override this; for a session that may still be written to, **Same session** needs **I closed it** and then reads **Continue Anyway**. A Cowork task written to less than a minute ago may miss its last steps; stop it first.
 
-**Continue All in …** continues every Code session and Project branch of the selected conversation's folder with a message in the last day, in one step, and can also start a new session in that folder. Branches that already belong to the destination are left out.
+**Continue All in …** continues every Code session and Project branch of the selected conversation's folder with a message in the last day, in one step, together with the other branches of the same Projects, which often work in other folders; it can also start a new session in the folder. Branches that already belong to the destination are left out. A closed window is started with the first session and receives the others once it is on screen. Each continued session is confirmed by the card Claude imports for it, and one that doesn't appear is reported instead of being counted.
 
-The session keeps its model if the destination has used that model before. When the destination is closed, Claude Profiles prepares the session there with the source's model and permission mode; bypass and auto permission modes become Accept edits. Otherwise the sheet says which model the session will use, or asks you to choose it in the destination before your first message.
+Claude imports each continued session itself, with its usual folder trust and permission checks. The session takes its model from its history; when that differs from the model the destination would use, the sheet and `--dry-run` ask you to choose the model in the destination before your first message.
+
+**Folder rules** keep work where it belongs: `claude-profiles rule ~/Work/acme --only me@acme.com` lets the work in that folder, and inside it, continue only in that account. Continuing it anywhere else, including a new session there, is refused, and the banner offers only allowed windows. The closest folder's rule applies; work that touches folders with different rules continues only in an account they all allow. `claude-profiles rules` lists them, and `--remove` drops one. A rules file that can't be read stops every continuation until it is fixed.
 
 Continuing needs no macOS permissions: the destination window receives a `claude://` link that only that window handles. Nothing is sent on your behalf. Prepared Cowork handoffs are kept in `~/Library/Application Support/Claude Profiles/Handoffs`, readable only by you, and move to the Trash after 30 days.
 
@@ -141,16 +143,20 @@ claude-profiles remove <profile>              Quit it and move its copy and sign
 claude-profiles sync                          Share ordinary local Code session cards across profiles now
 claude-profiles doctor [--json]               Inspect sessions and per-profile setup without changing it
 claude-profiles conversations [--all]         List local conversations that can continue in another profile
-claude-profiles continue <id|last> --to <profile> [--same|--fork] [--anyway] [--dry-run]
+claude-profiles continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
                                                Continue one in another profile, as Continue work… does
-claude-profiles continue --folder <path> --to <profile> [--since 24h] [--same|--fork] [--new] [--dry-run]
+claude-profiles continue --folder <path> --to <profile> [--since 24h] [--same [--anyway]|--fork]
+                         [--folder-only] [--new] [--dry-run]
                                                Continue every session of a folder, as Continue All does
+claude-profiles rules                         Show which accounts may continue the work in which folders
+claude-profiles rule <folder> --only <email>[,<email>…] | --remove
+                                               Keep a folder's work in those accounts, or drop its rule
 claude-profiles handoff --from <profile> --to <profile> --title <text> --context <file>
                        [--folder <absolute-path>] [--source-url <claude.ai-url>] [--open]
 claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
 ```
 
-`continue` takes the start of an id from `conversations`, or `last` for the most recent one. It copies as **Automatic** does; `--fork` always copies, and `--same` keeps the same session but refuses one with a message in the last 10 minutes unless you add `--anyway`. `--folder` continues every session of that folder with a message within `--since` (default `24h`), and `--new` also starts a new session there. `--dry-run` prints what would continue, how, and with which model, without changing anything:
+`continue` takes the start of an id from `conversations`, or `last` for the most recent one. It copies as **Automatic** does; `--fork` always copies, and `--same` keeps the same session but refuses one that may still be written to unless you close it there and add `--anyway`. `--anyway` alone changes nothing else. `--folder` continues every session of that folder with a message within `--since` (default `24h`) and the other branches of their Projects, `--folder-only` leaves those out, and `--new` also starts a new session there. `--dry-run` prints what would continue, how, and with which model, without changing anything:
 
 ```sh
 claude-profiles conversations

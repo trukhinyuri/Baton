@@ -9,7 +9,7 @@ final class ContinueWorkForm: ObservableObject {
     @Published var destination = ""
     @Published var mode: ContinueMode = .auto
     @Published var working = false
-    /// The session you confirmed you stopped in its window, so the same session may continue elsewhere.
+    /// The session you confirmed you closed in its window, so the same session may continue elsewhere.
     @Published var stopped: String?
     @Published var alsoNewSession = true
     @Published var problem: String?
@@ -36,28 +36,50 @@ struct ContinueWorkSheet: View {
 
     private var selected: Conversation? { model.conversations.first { $0.id == form.selection } }
 
-    /// Signed-in windows the selected conversation can move to.
+    /// The accounts the folder rules allow for the selected conversation; `nil` when no rule applies.
+    private var allowed: (accounts: Set<String>, rules: [FolderRule])? {
+        selected.flatMap { model.allowedAccounts(for: $0.folders) }
+    }
+
+    /// Signed-in windows the selected conversation can move to, within its folder rule.
     private var destinations: [ProfileStatus] {
-        model.statuses.filter { $0.isSignedIn && (selected?.kind == .code || $0.id != selected?.ownerID) }
+        model.statuses.filter {
+            $0.isSignedIn && (selected?.kind == .code || $0.id != selected?.ownerID)
+                && DestinationRanking.isAllowed($0, accounts: allowed?.accounts)
+        }
+    }
+
+    /// Why no window is offered, when a folder rule leaves none.
+    private var ruleNote: String? {
+        guard let allowed, destinations.isEmpty else { return nil }
+        let folders = allowed.rules.map { ($0.folder as NSString).abbreviatingWithTildeInPath }.joined(separator: " and ")
+        guard model.folderRules != nil else { return "The folder rules can't be read, so nothing continues until they are fixed." }
+        return "Work in \(folders) continues only in \(allowed.accounts.sorted().joined(separator: " or ")), and no window is signed in with it. Add that account with “Add Profile”, or change the rule with `claude-profiles rule`."
     }
 
     private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.label ?? "" }
 
     private var forks: Bool { selected.map { form.mode.forks($0) } ?? false }
 
-    /// The same session is about to continue elsewhere although it may still be running in its window.
+    /// The same session is about to continue elsewhere although its window may still write to it.
     private func needsStop(_ conversation: Conversation) -> Bool {
-        conversation.kind != .cowork && !form.mode.forks(conversation)
-            && conversation.isActive(within: ContinueMode.forkWindow) && form.stopped != conversation.id
+        !form.mode.forks(conversation) && conversation.mayStillWrite() && form.stopped != conversation.id
     }
 
     private var folder: String? { selected?.kind == .cowork ? nil : selected?.folders.first }
 
-    /// Code sessions and Project branches in the selected session's folder from the last day.
+    /// Code sessions and Project branches in the selected session's folder from the last day, with the other
+    /// branches of their Projects.
     private var folderBatch: [Conversation] {
         guard let folder else { return [] }
         return ConversationIndex.recent(in: folder, since: Date().addingTimeInterval(-Self.folderWindow), from: model.conversations)
             .filter { !($0.kind == .projectBranch && $0.ownerID == form.destination) }
+    }
+
+    /// Whether the chosen window may take the whole batch and the new session under the folder rules.
+    private var batchAllowed: Bool {
+        guard let folder, let status = model.statuses.first(where: { $0.id == form.destination }) else { return false }
+        return DestinationRanking.isAllowed(status, accounts: model.allowedAccounts(for: folderBatch.flatMap(\.folders) + [folder])?.accounts)
     }
 
     var body: some View {
@@ -104,7 +126,7 @@ struct ContinueWorkSheet: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .frame(width: 280)
-                    .help("Automatic continues Project branches and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session.")
+                    .help("Automatic continues Project branches, sessions still open in a running Claude Code process and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session.")
                 }
             }
 
@@ -120,33 +142,40 @@ struct ContinueWorkSheet: View {
                     Label("This task was working less than a minute ago; the attached history may miss its last steps.",
                           systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.orange)
-                } else if selected.kind != .cowork && !forks && selected.isActive(within: ContinueMode.forkWindow) {
+                } else if selected.kind != .cowork && !forks && selected.mayStillWrite() {
                     HStack(spacing: 8) {
-                        Label("It had a message \(relativeAge(since: selected.lastActivity)). Stop it in its window first, so two windows don't write to one session, or continue as a copy.",
+                        Label((selected.hasLiveProcess ? "It's open in a running Claude Code process" : "It had a message \(relativeAge(since: selected.lastActivity))")
+                              + ", so its window may still write to it. Close it there first, so two windows don't write to one session, or continue as a copy.",
                               systemImage: "exclamationmark.triangle")
                             .font(.callout).foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
-                        Toggle("I stopped it", isOn: Binding(get: { form.stopped == selected.id },
-                                                             set: { form.stopped = $0 ? selected.id : nil }))
+                        Toggle("I closed it", isOn: Binding(get: { form.stopped == selected.id },
+                                                            set: { form.stopped = $0 ? selected.id : nil }))
                             .toggleStyle(.checkbox)
                     }
                 }
             }
+            if let ruleNote { Text(ruleNote).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
             if let problem = form.problem { Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
 
             if let folder, !folderBatch.isEmpty {
+                let elsewhere = folderBatch.filter { !$0.works(in: folder) }.count
                 HStack(spacing: 8) {
                     Image(systemName: "folder").foregroundStyle(.secondary)
-                    Text("\(folderBatch.count) in \((folder as NSString).lastPathComponent) from the last day")
+                    Text("\(folderBatch.count - elsewhere) in \((folder as NSString).lastPathComponent)"
+                         + (elsewhere > 0 ? " + \(elsewhere) of their Project in other folders" : "") + " from the last day")
                         .lineLimit(1).truncationMode(.middle)
-                        .help(folderBatch.map(\.title).joined(separator: "\n"))
+                        .help(folderBatch.map { $0.title + ($0.works(in: folder) ? "" : " — " + (($0.folders.first ?? "") as NSString).abbreviatingWithTildeInPath) }
+                            .joined(separator: "\n"))
                     Toggle("Also start a new session there", isOn: $form.alsoNewSession).toggleStyle(.checkbox)
                     Spacer()
                     Button("Continue All in \(destinationLabel.isEmpty ? "…" : destinationLabel)") { goAll() }
-                        .disabled(form.working || form.destination.isEmpty || batchNeedsStop)
-                        .help(batchNeedsStop
-                              ? "Some of them had a message in the last 10 minutes. Choose Automatic or As a copy, or stop them first."
-                              : "Opens every Code session and Project branch of this folder with a message in the last day in one go.")
+                        .disabled(form.working || form.destination.isEmpty || batchNeedsStop || !batchAllowed)
+                        .help(!batchAllowed && !form.destination.isEmpty
+                              ? "A folder rule doesn't let Claude \(destinationLabel) take all of them."
+                              : batchNeedsStop
+                              ? "Some of them may still be written to in their window. Choose Automatic or As a copy, or close them there first."
+                              : "Opens every Code session and Project branch of this folder with a message in the last day, and the other branches of their Projects, in one go.")
                 }
                 .font(.callout)
             }
@@ -175,28 +204,30 @@ struct ContinueWorkSheet: View {
         .onChange(of: model.conversations) { chooseDefaults(); refreshPlan() }
         .onChange(of: form.selection) {
             form.problem = nil
-            if !destinations.contains(where: { $0.id == form.destination }) { form.destination = model.bestDestination(excluding: selected?.ownerID) ?? "" }
+            if !destinations.contains(where: { $0.id == form.destination }) {
+                form.destination = model.bestDestination(excluding: selected?.ownerID, accounts: allowed?.accounts) ?? ""
+            }
             refreshPlan()
         }
         .onChange(of: form.destination) { refreshPlan() }
         .onChange(of: form.mode) { refreshPlan() }
     }
 
-    private var batchNeedsStop: Bool { form.mode == .same && folderBatch.contains { $0.isActive(within: ContinueMode.forkWindow) } }
+    private var batchNeedsStop: Bool { form.mode == .same && folderBatch.contains { $0.mayStillWrite() } }
 
     private var primaryTitle: String {
         if form.working { return "Opening…" }
         let to = destinationLabel.isEmpty ? "" : " in \(destinationLabel)"
         guard let selected, selected.kind != .cowork else { return "Continue" + to }
         if forks { return "Continue as a Copy" + to }
-        if selected.isActive(within: ContinueMode.forkWindow) { return "Continue Anyway" }
+        if selected.mayStillWrite() { return "Continue Anyway" }
         return "Continue" + to
     }
 
     private func chooseDefaults() {
         if form.selection == nil || selected == nil { form.selection = model.preselectedConversation ?? model.conversations.first?.id }
         if form.destination.isEmpty || !destinations.contains(where: { $0.id == form.destination }) {
-            form.destination = model.bestDestination(excluding: selected?.ownerID) ?? ""
+            form.destination = model.bestDestination(excluding: selected?.ownerID, accounts: allowed?.accounts) ?? ""
         }
     }
 
@@ -220,7 +251,8 @@ struct ContinueWorkSheet: View {
     private func explanation(_ conversation: Conversation) -> String {
         let to = "Claude \(destinationLabel.isEmpty ? "…" : destinationLabel)"
         let from = "Claude \(conversation.ownerID.map(model.label(of:)) ?? "")"
-        let why = form.mode == .auto && conversation.kind == .code ? " It had a message in the last 10 minutes." : ""
+        let why = form.mode == .auto && conversation.kind == .code
+            ? (conversation.hasLiveProcess ? " It's open in a running Claude Code process." : " It had a message in the last 10 minutes.") : ""
         switch (conversation.kind, forks) {
         case (.code, false):
             return "Opens this same session in \(to). Its history is shared by all your subscriptions, so nothing is copied."
@@ -253,6 +285,11 @@ struct ContinueWorkSheet: View {
             do {
                 switch try await manager.continueConversation(conversation, in: target, mode: mode) {
                 case .openedSession(let plan):
+                    guard plan.opened != false else {
+                        form.problem = "“\(conversation.title)” did not show up in Claude \(label) within \(Int(manager.importWait)) s. Look for it in its sidebar, or try again with the window open."
+                        form.working = false
+                        return
+                    }
                     var text = plan.forks ? "Opened a copy of “\(conversation.title)” in Claude \(label)." : "Opened “\(conversation.title)” in Claude \(label)."
                     if let note = plan.model, note.isWarning { text += " " + note.message(destination: label) }
                     model.show(notice: text)
@@ -281,6 +318,14 @@ struct ContinueWorkSheet: View {
         Task {
             do {
                 let plans = try await manager.continueAll(batch, in: target, mode: mode, newSessionIn: newSession)
+                let missing = plans.filter { $0.opened == false }
+                guard missing.isEmpty else {
+                    form.problem = "\(missing.count) of \(plans.count) did not show up in Claude \(label) within \(Int(manager.importWait)) s: "
+                        + missing.map { "“\($0.conversation.title)”" }.joined(separator: ", ") + ". The others opened; continue these again with the window open."
+                    form.working = false
+                    model.loadConversations()
+                    return
+                }
                 let copies = plans.filter(\.forks).count
                 var text = "Opened \(plans.count) in Claude \(label)" + (copies > 0 ? ", \(copies) as copies" : "")
                     + (newSession == nil ? "." : " and started a new session there.")

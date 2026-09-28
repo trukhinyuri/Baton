@@ -14,16 +14,23 @@ USAGE
   claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
   claude-profiles doctor [--json]               Read-only session, folder and Remote Control checks
   claude-profiles conversations [--all]         Recent local Code sessions, Project branches and Cowork tasks
-  claude-profiles continue <session|last> --to <profile> [--same|--fork] [--anyway] [--dry-run]
+  claude-profiles continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
                                                  Continue a conversation in another profile: a Code session
                                                  as itself or as a copy, or a new Cowork task with its history
-  claude-profiles continue --folder <path> --to <profile> [--since 24h] [--same|--fork] [--new] [--dry-run]
+  claude-profiles continue --folder <path> --to <profile> [--since 24h] [--same [--anyway]|--fork]
+                           [--folder-only] [--new] [--dry-run]
                                                  Continue every Code session and Project branch of a folder
-                                                 with a message since --since, in one go; --new also starts
-                                                 a new session there
-                                                 By default Project branches and sessions with a message in
-                                                 the last 10 minutes continue as a copy; --same keeps the same
-                                                 session (add --anyway if it is still running), --fork copies
+                                                 with a message since --since, in one go, with the other
+                                                 branches of their Projects unless --folder-only; --new also
+                                                 starts a new session there
+                                                 By default Project branches and sessions still open in a
+                                                 running Claude Code process or with a message in the last
+                                                 10 minutes continue as a copy; --same keeps the same session
+                                                 (add --anyway once you've closed it there), --fork copies
+  claude-profiles rules                         Show which accounts may continue the work in which folders
+  claude-profiles rule <folder> --only <email>[,<email>…] | --remove
+                                                 Let only these accounts continue work in the folder and
+                                                 inside it, or drop the folder's rule
   claude-profiles handoff --from PROFILE --to PROFILE --title TEXT --context FILE
                          [--folder PATH] [--source-url URL] [--open]
                                                  Save reviewed context for a new conversation; never sends it
@@ -80,29 +87,40 @@ func duration(_ text: String) -> TimeInterval? {
 func continueMode() -> ContinueMode {
     if args.contains("--same") && args.contains("--fork") { fail("use either --same or --fork") }
     if args.contains("--fork") { return .fork }
-    return args.contains("--same") || args.contains("--anyway") ? .same : .auto
+    return args.contains("--same") ? .same : .auto
 }
 
 func destinationID(_ name: String) -> String {
     ["main", "claude"].contains(name.lowercased()) ? "main" : resolve(name).id
 }
 
-/// Refuses to write to a session that may still be running in its window unless --anyway says it was stopped.
+/// Refuses to write to a session that may still be running in its window unless --anyway says it was closed there.
 func refuseRunning(_ conversations: [Conversation], mode: ContinueMode) {
     guard mode == .same, !args.contains("--anyway") else { return }
-    let running = conversations.filter { $0.kind != .cowork && $0.isActive(within: ContinueMode.forkWindow) }
+    let running = conversations.filter { $0.mayStillWrite() }
     guard !running.isEmpty else { return }
-    let names = running.map { "“\($0.title)” (\(age($0.lastActivity)))" }.joined(separator: ", ")
-    fail("\(names) had a message in the last 10 minutes. Continue as a copy (drop --same), or stop it in its window first and add --anyway.")
+    let names = running.map { "“\($0.title)” (\($0.hasLiveProcess ? "open in a running Claude Code process" : "a message \(age($0.lastActivity))"))" }
+    fail("\(names.joined(separator: ", ")) may still be written to in its window. Continue as a copy (drop --same), or close it there first and add --anyway.")
 }
 
 func printPlan(_ plans: [ContinuePlan], to destination: String) {
     let label = manager.label(of: destination)
     for plan in plans {
         let how = plan.forks ? "copy" : "same"
-        print("\(how)  \(plan.conversation.sessionID.prefix(8))  \(plan.conversation.title) — \(kindName(plan.conversation))")
+        let status = switch plan.opened { case true?: "✓ "; case false?: "✗ "; case nil: "" }
+        let folder = plan.conversation.folders.first.map { " · " + ($0 as NSString).abbreviatingWithTildeInPath } ?? ""
+        print("\(status)\(how)  \(plan.conversation.sessionID.prefix(8))  \(plan.conversation.title) — \(kindName(plan.conversation))\(folder)")
         if let note = plan.model { print("      \(note.isWarning ? "⚠︎ " : "")\(note.message(destination: label))") }
     }
+}
+
+/// Says what didn't open and exits with an error; returns if everything that can be checked opened.
+func reportUnopened(_ plans: [ContinuePlan], in destination: String) {
+    let missing = plans.filter { $0.opened == false }
+    guard !missing.isEmpty else { return }
+    fail("\(missing.count) of \(plans.count) did not show up in Claude \(manager.label(of: destination)) within \(Int(manager.importWait)) s: "
+         + missing.map { "\($0.sessionID.prefix(8)) “\($0.conversation.title)”" }.joined(separator: ", ")
+         + ". Open them there with `claude-profiles continue <id> --to \(destination) --same`.")
 }
 
 do {
@@ -186,7 +204,8 @@ do {
         let destination = destinationID(to)
         guard let since = duration(value(of: "--since", in: args) ?? "24h") else { fail("--since takes a duration such as 24h, 90m or 2d") }
         let mode = continueMode()
-        let found = ConversationIndex.recent(in: path, since: Date().addingTimeInterval(-since), from: manager.conversations())
+        let found = ConversationIndex.recent(in: path, since: Date().addingTimeInterval(-since), from: manager.conversations(),
+                                             folderOnly: args.contains("--folder-only"))
             .filter { !($0.kind == .projectBranch && $0.ownerID == destination) }
         let newSession = args.contains("--new") ? path : nil
         guard !found.isEmpty || newSession != nil else {
@@ -194,15 +213,20 @@ do {
         }
         refuseRunning(found, mode: mode)
         let label = manager.label(of: destination)
+        let elsewhere = found.filter { !$0.works(in: path) }.count
+        let also = elsewhere > 0 ? " (\(elsewhere) of them Project branches working in other folders)" : ""
         if args.contains("--dry-run") {
-            printPlan(try manager.plan(found, in: destination, mode: mode), to: destination)
-            print("Would open \(found.count) in Claude \(label)" + (newSession.map { " and start a new session in \($0)" } ?? "") + ". Nothing was changed.")
+            printPlan(try manager.plan(found, in: destination, mode: mode, newSessionIn: newSession), to: destination)
+            print("Would open \(found.count)\(also) in Claude \(label)" + (newSession.map { " and start a new session in \($0)" } ?? "") + ". Nothing was changed.")
             break
         }
         let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession)
         printPlan(plans, to: destination)
-        print("Opened \(plans.count) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "") + ". Nothing was sent.")
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
+        reportUnopened(plans, in: destination)
+        let checked = plans.filter { $0.opened == true }.count
+        print("Opened \(plans.count)\(also) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "")
+              + (checked > 0 ? "; \(checked) confirmed imported there" : "") + ". Nothing was sent.")
     case "continue":
         guard args.count >= 2, let to = value(of: "--to", in: args) else { fail("continue needs a session (or “last”) and --to PROFILE") }
         let all = manager.conversations()
@@ -213,6 +237,9 @@ do {
         }
         let destination = destinationID(to)
         let mode = continueMode()
+        if args.contains("--anyway"), !args.contains("--same"), conversation.kind != .cowork {
+            FileHandle.standardError.write(Data("note: --anyway applies only with --same; continuing as planned below.\n".utf8))
+        }
         refuseRunning([conversation], mode: mode)
         if conversation.kind == .cowork, conversation.isActive(), !args.contains("--anyway") {
             fail("“\(conversation.title)” was working less than a minute ago, so its history may miss the last steps. Stop it in its window first, or add --anyway.")
@@ -229,12 +256,34 @@ do {
         switch try await manager.continueConversation(conversation, in: destination, mode: mode) {
         case .openedSession(let plan):
             printPlan([plan], to: destination)
-            print("Opened “\(conversation.title)”\(plan.forks ? " as a copy" : "") in Claude \(manager.label(of: destination)).")
+            reportUnopened([plan], in: destination)
+            print("Opened “\(conversation.title)”\(plan.forks ? " as a copy" : "") in Claude \(manager.label(of: destination))"
+                  + (plan.opened == true ? "; confirmed imported there." : "."))
         case .startedCoworkTask(let handoff):
             print("Started a new Cowork task in Claude \(manager.label(of: destination)) with the history attached. Review it and send it there.")
             print("Prepared files: \(handoff.folder.path)")
         }
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
+    case "rules":
+        let rules: [FolderRule]
+        do { rules = try FolderRules(paths: manager.paths).load() } catch { fail(ProfileError.rulesUnreadable(error.localizedDescription).localizedDescription) }
+        if rules.isEmpty { print("No folder rules: work in any folder can continue in any subscription.") }
+        for rule in rules { print("\((rule.folder as NSString).abbreviatingWithTildeInPath) → only \(rule.accounts.joined(separator: ", "))") }
+    case "rule":
+        guard args.count >= 3, !args[1].hasPrefix("--") else { fail("rule needs a folder and --only EMAIL[,EMAIL] or --remove") }
+        let folder = URL(fileURLWithPath: (args[1] as NSString).expandingTildeInPath).standardizedFileURL.path
+        let rules = FolderRules(paths: manager.paths)
+        if args.contains("--remove") {
+            try rules.set(folder, accounts: [])
+            print("Removed the rule for \(folder).")
+        } else if let only = value(of: "--only", in: args) {
+            let accounts = only.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard !accounts.isEmpty, accounts.allSatisfy(Profile.isValidEmail) else { fail("--only takes email addresses separated by commas") }
+            guard let rule = try rules.set(folder, accounts: accounts) else { fail("--only needs at least one email address") }
+            print("Work in \(rule.folder) and inside it continues only in \(rule.accounts.joined(separator: ", ")).")
+        } else {
+            fail("rule needs --only EMAIL[,EMAIL] or --remove")
+        }
     case "refresh":
         try manager.refresh()
         print("Profiles are up to date with Claude Desktop.")

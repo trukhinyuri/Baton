@@ -29,6 +29,11 @@ struct TranscriptForkTests {
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
         try box.write("tool output", to: results.appending(path: "r1.txt"))
         try box.write(#"{"sessionId":"\#(old)","isSidechain":true}"#, to: agents.appending(path: "agent-1.jsonl"))
+        let history = box.paths.claudeDir.appending(path: "file-history/\(old)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
+        try box.write("checkpoint", to: history.appending(path: "b70b15954277ed43@v1"))
+        let env = box.paths.claudeDir.appending(path: "session-env/\(old)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: env, withIntermediateDirectories: true)
         let before = try Data(contentsOf: transcript)
         let conversation = Conversation(kind: .projectBranch, sessionID: old, title: "t", folders: ["/repo"],
                                         lastActivity: Date(), transcript: transcript, ownerID: "main")
@@ -43,6 +48,12 @@ struct TranscriptForkTests {
         #expect(box.read(folder.appending(path: "\(new)/tool-results/r1.txt")) == "tool output")
         #expect(box.read(folder.appending(path: "\(new)/subagents/agent-1.jsonl"))?.contains(new) == true)
         #expect(box.read(agents.appending(path: "agent-1.jsonl"))?.contains(old) == true)
+        let checkpoint = box.paths.claudeDir.appending(path: "file-history/\(new)/b70b15954277ed43@v1")
+        #expect(box.read(checkpoint) == "checkpoint", "Rewind finds the checkpoints under the copy's id")
+        let links = try FileManager.default.attributesOfItem(atPath: checkpoint.path)[.referenceCount] as? Int
+        #expect(links == 2, "shared by a hard link, as Claude Code does")
+        #expect(box.exists(box.paths.claudeDir.appending(path: "session-env/\(new)")))
+        #expect(box.read(history.appending(path: "b70b15954277ed43@v1")) == "checkpoint")
         let mode = try FileManager.default.attributesOfItem(atPath: folder.appending(path: "\(new).jsonl").path)[.posixPermissions] as? Int
         #expect(mode == 0o600)
         #expect(!(try FileManager.default.contentsOfDirectory(atPath: folder.path)).contains { $0.hasSuffix(".tmp") })
@@ -66,6 +77,24 @@ struct TranscriptForkTests {
         #expect(throws: (any Error).self) { try TranscriptFork.fork(conversation, newID: taken) }
         #expect(box.read(transcript.deletingLastPathComponent().appending(path: "\(taken).jsonl")) == "keep")
     }
+
+    @Test func aFailedCopyLeavesNothingBehind() throws {
+        let box = try Sandbox()
+        let transcript = try box.transcript(lines: [record(Sandbox.cli, at: Date())])
+        let history = box.paths.claudeDir.appending(path: "file-history/\(Sandbox.cli)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
+        try box.write("checkpoint", to: history.appending(path: "a@v1"))
+        // The transcript can't be read, so the copy fails after its checkpoints were linked.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: transcript.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: transcript.path) }
+        let conversation = Conversation(kind: .code, sessionID: Sandbox.cli, title: "t", folders: [],
+                                        lastActivity: Date(), transcript: transcript)
+        let new = "99999999-2222-3333-4444-555555555555"
+
+        #expect(throws: (any Error).self) { try TranscriptFork.fork(conversation, newID: new) }
+        #expect(!box.exists(box.paths.claudeDir.appending(path: "file-history/\(new)")))
+        #expect(!box.exists(transcript.deletingLastPathComponent().appending(path: "\(new).jsonl")))
+    }
 }
 
 @Suite("Same session or a copy")
@@ -85,6 +114,35 @@ struct ContinueModeTests {
         #expect(ContinueMode.auto.forks(busy, now: now), "a message 5 minutes ago: it may still be running")
         let branch = try conversation(.projectBranch, lastMessage: now.addingTimeInterval(-3 * 3600), in: box)
         #expect(ContinueMode.auto.forks(branch, now: now), "its Project's coordinator may write to it again")
+    }
+
+    @Test func aSessionOpenInARunningProcessIsCopiedHoweverQuiet() throws {
+        let box = try Sandbox()
+        let now = Date()
+        var quiet = try conversation(.code, lastMessage: now.addingTimeInterval(-3 * 3600), in: box)
+        quiet.hasLiveProcess = true
+        #expect(quiet.mayStillWrite(now: now), "a background task can finish and write to it at any time")
+        #expect(ContinueMode.auto.forks(quiet, now: now))
+        #expect(!ContinueMode.same.forks(quiet, now: now), "an explicit choice still wins")
+    }
+
+    @Test func runningProcessesAreFoundByTheirListAndArguments() throws {
+        let box = try Sandbox()
+        let registry = box.paths.claudeDir.appending(path: "sessions", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: registry, withIntermediateDirectories: true)
+        let live = "AAAAAAAA-1111-2222-3333-444444444444", gone = "bbbbbbbb-1111-2222-3333-444444444444"
+        try box.write(#"{"pid":101,"sessionId":"\#(live)","status":"idle"}"#, to: registry.appending(path: "101.json"))
+        try box.write(#"{"pid":102,"sessionId":"\#(gone)"}"#, to: registry.appending(path: "102.json"))
+        try box.write(#"{"pid":999,"sessionId":"\#(gone)"}"#, to: registry.appending(path: "103.json"))
+        try box.write("not json", to: registry.appending(path: "104.json"))
+
+        let found = LiveSessions.ids(inRegistry: registry, isRunning: { [101, 103, 104].contains($0) })
+
+        #expect(found == [live.lowercased()], "only running processes, and only records that name their own process")
+        #expect(LiveSessions.sessionIDs(inArguments: ["claude", "--model", "x", "--resume=\(live)"]) == [live.lowercased()])
+        #expect(LiveSessions.sessionIDs(inArguments: ["claude", "-r", gone, "--session-id", "not-a-uuid"]) == [gone])
+        #expect(LiveSessions.sessionIDs(inArguments: ["claude", "--", "--resume=\(live)"]).isEmpty)
+        #expect(!LiveSessions.isClaude(-1) && !LiveSessions.isClaude(0), "never every process at once")
     }
 
     @Test func explicitChoiceWinsAndCoworkIsNeverForked() throws {
@@ -127,6 +185,29 @@ struct FolderBatchTests {
         #expect(found.map(\.sessionID) == ["root", "sub", "viaLink"])
     }
 
+    @Test func bringsTheOtherBranchesOfTheSameProject() {
+        let now = Date()
+        let none = URL(fileURLWithPath: "/nonexistent.jsonl")
+        func make(_ id: String, _ kind: Conversation.Kind, _ folder: String, owner: String?, _ ago: TimeInterval = 60) -> Conversation {
+            Conversation(kind: kind, sessionID: id, title: id, folders: [folder], lastActivity: now.addingTimeInterval(-ago),
+                         transcript: none, ownerID: owner)
+        }
+        let all = [
+            make("branch", .projectBranch, "/work/assistant", owner: "elena"),
+            make("session", .code, "/work/assistant", owner: nil),
+            make("sibling", .projectBranch, "/work/tools", owner: "elena"),
+            make("otherWindow", .projectBranch, "/work/tools", owner: "vir"),
+            make("oldSibling", .projectBranch, "/work/tools", owner: "elena", 3 * 86_400),
+            make("plain", .code, "/work/tools", owner: nil),
+        ]
+        let since = now.addingTimeInterval(-86_400)
+
+        #expect(ConversationIndex.recent(in: "/work/assistant", since: since, from: all).map(\.sessionID) == ["branch", "session", "sibling"])
+        #expect(ConversationIndex.recent(in: "/work/assistant", since: since, from: all, folderOnly: true).map(\.sessionID) == ["branch", "session"])
+        #expect(ConversationIndex.recent(in: "/work/tools", since: since, from: all).map(\.sessionID) == ["branch", "sibling", "otherWindow", "plain"],
+                "a Project branch in the folder brings its Project's others, wherever they work")
+    }
+
     @Test func scanKeepsTheModelAndEffortOfTheOwnersCard() throws {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
@@ -156,19 +237,10 @@ struct FolderBatchTests {
 struct ModelCarryTests {
     let long = "claude-opus-5-5[1m]", base = "claude-opus-5-5"
 
-    @Test func aWrittenCardCarriesOnlyAModelTheDestinationHasRun() {
-        #expect(ModelNote.decide(model: long, historyModel: base, supported: true, card: .written) == ModelNote(model: long, kind: .carried))
-        let missing = ModelNote.decide(model: long, historyModel: base, supported: false, card: .written)
-        #expect(missing == ModelNote(model: long, kind: .notCarried(opensWith: base)))
-        #expect(missing?.isWarning == true)
-        #expect(missing?.message(destination: "TEAM").contains("choose") == false)
-        #expect(missing?.message(destination: "TEAM").contains("Choose \(long)") == true)
-    }
-
-    @Test func anOpenWindowTakesTheModelFromTheHistory() {
+    @Test func anImportedSessionTakesTheModelFromTheHistory() {
         let note = ModelNote.decide(model: long, historyModel: base, supported: true, card: .imported)
         #expect(note == ModelNote(model: long, kind: .chooseBeforeSending))
-        #expect(note?.message(destination: "TEAM").contains("already open") == true)
+        #expect(note?.isWarning == true && note?.message(destination: "TEAM").contains("Choose \(long)") == true)
         #expect(ModelNote.decide(model: base, historyModel: base, supported: true, card: .imported)?.kind == .carried)
         #expect(ModelNote.decide(model: base, historyModel: base, supported: false, card: .imported)?.kind == .unverified)
     }
@@ -176,7 +248,7 @@ struct ModelCarryTests {
     @Test func aSharedCardAlreadyHasTheModel() {
         #expect(ModelNote.decide(model: long, historyModel: base, supported: true, card: .shared)?.kind == .carried)
         #expect(ModelNote.decide(model: long, historyModel: base, supported: false, card: .shared)?.kind == .unverified)
-        #expect(ModelNote.decide(model: nil, historyModel: base, supported: false, card: .written) == nil)
+        #expect(ModelNote.decide(model: nil, historyModel: base, supported: false, card: .imported) == nil)
     }
 
     @Test func modelsComeFromTheWindowsOwnRecords() throws {
@@ -200,27 +272,20 @@ struct ModelCarryTests {
         ])
         #expect(ConversationIndex.lastModel(of: transcript) == "claude-opus-5-5")
     }
-
-    @Test func permissionModeIsNeverWidened() {
-        #expect(ContinuationCard.permissionMode("bypassPermissions") == "acceptEdits")
-        #expect(ContinuationCard.permissionMode("auto") == "acceptEdits")
-        #expect(ContinuationCard.permissionMode("plan") == "plan")
-        #expect(ContinuationCard.permissionMode("acceptEdits") == "acceptEdits")
-        #expect(ContinuationCard.permissionMode(nil) == "default")
-        #expect(ContinuationCard.permissionMode("something-new") == "default")
-    }
 }
 
 @Suite("Preparing the destination")
 struct ContinuePlanTests {
-    /// MAIN owns a Project branch on the long-context model; WORK is signed in and closed.
-    func setUp(workHasRunLongContext: Bool) throws -> (Sandbox, ProfileManager, Conversation, URL) {
+    /// MAIN owns a Project branch on the long-context model; WORK is signed in as `workEmail` and closed.
+    func setUp(workHasRunLongContext: Bool = true, workEmail: String = "me@team.example") throws -> (Sandbox, ProfileManager, Conversation, URL) {
         let box = try Sandbox()
         try ProfileRegistry(paths: box.paths).save([Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")])
         try box.signIn(box.main, account: Sandbox.accountA)
         try box.signIn(box.work, account: Sandbox.accountB)
+        let idb = box.work.appending(path: "IndexedDB/https_claude.ai_0.indexeddb.leveldb", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: idb, withIntermediateDirectories: true)
+        try box.write("uuid\"$\(Sandbox.accountB)\"\remail_address\"\u{0e}\(workEmail)\"", to: idb.appending(path: "000003.log"))
         let a = try box.pair(box.main, account: Sandbox.accountA)
-        // Claude names organization folders by UUID; the card folder is found only among those.
         let b = try box.pair(box.work, account: Sandbox.accountB, org: "cccccccc-cccc-cccc-cccc-cccccccccccc")
         try box.transcript(lines: [record(Sandbox.cli, at: Date().addingTimeInterval(-3600), model: "claude-opus-5-5")])
         let card = #"{"sessionId":"local_branch","cliSessionId":"\#(Sandbox.cli)","projectThreadChild":true,"cwd":"/repo","originCwd":"/repo","title":"Duties","model":"claude-opus-5-5[1m]","effort":"xhigh","permissionMode":"bypassPermissions","remoteControlSpawn":{"folder":"/repo"}}"#
@@ -233,61 +298,101 @@ struct ContinuePlanTests {
         return (box, manager, conversation, b)
     }
 
-    @Test func branchContinuesAsACopyWithItsModelInAClosedWindow() throws {
-        let (box, manager, conversation, b) = try setUp(workHasRunLongContext: true)
+    @Test func branchContinuesAsACopyThatClaudeImportsItself() throws {
+        let (box, manager, conversation, b) = try setUp()
         #expect(conversation.kind == .projectBranch)
 
         var plan = try #require(try manager.plan([conversation], in: "work").first)
-        #expect(plan.forks && plan.model?.kind == .carried && plan.cardFolder?.path == b.path)
-        #expect(!box.exists(b.appending(path: "local_\(plan.sessionID).json")), "planning changes nothing")
+        #expect(plan.forks && plan.opened == nil)
+        #expect(plan.model == ModelNote(model: "claude-opus-5-5[1m]", kind: .chooseBeforeSending),
+                "Claude takes the model from the history, which doesn't say long context")
 
-        try manager.prepare(&plan, now: Date())
+        try manager.prepare(&plan)
 
-        #expect(plan.sessionID != Sandbox.cli && plan.cardWritten)
+        #expect(plan.sessionID != Sandbox.cli)
         #expect(box.exists(box.paths.claudeProjectsDir.appending(path: "-repo/\(plan.sessionID).jsonl")))
-        let card = try #require(ConversationIndex.readCard(b.appending(path: "local_\(plan.sessionID).json")))
-        #expect(card["cliSessionId"] as? String == plan.sessionID)
-        #expect(card["sessionId"] as? String == "local_\(plan.sessionID)")
-        #expect(card["model"] as? String == "claude-opus-5-5[1m]" && card["effort"] as? String == "xhigh")
-        #expect(card["permissionMode"] as? String == "acceptEdits")
-        #expect(card["cwd"] as? String == "/repo" && card["title"] as? String == "Duties (continued)")
-        #expect(card["adoptedFromOtherSurface"] as? Bool == true)
-        #expect(card["projectThreadChild"] == nil && card["remoteControlSpawn"] == nil, "the copy is a regular session")
-        #expect(box.read(b.appending(path: "local_\(plan.sessionID).json"))?.contains(#"\/"#) == false)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: b.path) == ["local_rc.json"],
+                "no card is made by hand: Claude imports the session with its own trust and permission checks")
     }
 
-    @Test func modelTheDestinationHasNotRunIsNotWrittenAndIsFlagged() throws {
-        let (_, manager, conversation, b) = try setUp(workHasRunLongContext: false)
-        var plan = try #require(try manager.plan([conversation], in: "work", mode: .same).first)
-        #expect(!plan.forks)
-        #expect(plan.model == ModelNote(model: "claude-opus-5-5[1m]", kind: .notCarried(opensWith: "claude-opus-5-5")))
-
-        try manager.prepare(&plan, now: Date())
-
-        #expect(plan.sessionID == Sandbox.cli)
-        let card = try #require(ConversationIndex.readCard(b.appending(path: "local_\(Sandbox.cli).json")))
-        #expect(card["model"] as? String == "claude-opus-5-5", "what Claude itself would pick from the history")
-        #expect(card["title"] as? String == "Duties")
+    @Test func aRegularSessionKeepsItsSharedCardInAClosedWindow() throws {
+        let (_, manager, conversation, _) = try setUp(workHasRunLongContext: false)
+        var code = conversation
+        code.kind = .code
+        code.ownerID = nil
+        let plan = try #require(try manager.plan([code], in: "work").first)
+        #expect(!plan.forks && plan.model?.kind == .unverified)
     }
 
-    @Test func existingCardIsLeftForClaudeToOpen() throws {
-        let (box, manager, conversation, b) = try setUp(workHasRunLongContext: true)
-        let existing = b.appending(path: "local_\(Sandbox.cli).json")
-        try box.write(#"{"cliSessionId":"\#(Sandbox.cli)","title":"mine"}"#, to: existing)
-        var plan = try #require(try manager.plan([conversation], in: "work", mode: .same).first)
+    @Test func importedSessionsAreConfirmedByTheirCards() throws {
+        let (box, _, _, b) = try setUp()
+        let since = Date()
+        try box.write(#"{"sessionId":"local_x","cliSessionId":"ABCDEF01-2222-3333-4444-555555555555","title":"t"}"#,
+                      to: b.appending(path: "local_ABCDEF01-2222-3333-4444-555555555555.json"))
+        try box.write(#"{"cliSessionId":"old"}"#, to: b.appending(path: "local_old.json"), modified: since.addingTimeInterval(-600))
+        #expect(SessionCards.sessions(in: b) == ["abcdef01-2222-3333-4444-555555555555", "z", "old"])
+        #expect(SessionCards.sessions(in: b, modifiedSince: since.addingTimeInterval(-60)) == ["abcdef01-2222-3333-4444-555555555555", "z"])
+    }
 
-        try manager.prepare(&plan, now: Date())
+    @Test func folderRuleKeepsWorkInItsAccounts() throws {
+        let (box, manager, conversation, _) = try setUp(workEmail: "me@personal.example")
+        let rules = FolderRules(paths: box.paths)
+        try rules.set("/repo", accounts: ["Me@Team.example "])
 
-        #expect(!plan.cardWritten)
-        #expect(box.read(existing) == #"{"cliSessionId":"\#(Sandbox.cli)","title":"mine"}"#)
+        #expect(throws: ProfileError.notAllowed(folders: ["/repo"], accounts: ["me@team.example"], label: "WORK", email: "me@personal.example")) {
+            try manager.plan([conversation], in: "work")
+        }
+        #expect(try manager.allowedAccounts(for: ["/repo/sub"])?.accounts == ["me@team.example"])
+        #expect(try manager.allowedAccounts(for: ["/elsewhere"]) == nil)
+        #expect(throws: ProfileError.self, "a new session in the folder is work in the folder too") {
+            try manager.plan([], in: "work", newSessionIn: "/repo/sub")
+        }
+
+        try rules.set("/repo", accounts: [])
+        #expect(try manager.plan([conversation], in: "work").count == 1, "no rule, no restriction")
+        try rules.set("/repo", accounts: ["me@personal.example"])
+        #expect(try manager.plan([conversation], in: "work").count == 1)
+    }
+
+    @Test func damagedRulesStopEverything() throws {
+        let (box, manager, conversation, _) = try setUp()
+        try box.write("{", to: FolderRules(paths: box.paths).file)
+        #expect(throws: ProfileError.self) { try manager.plan([conversation], in: "work") }
     }
 
     @Test func refusesCoworkAndTheOwnersOwnWindow() throws {
-        let (_, manager, conversation, _) = try setUp(workHasRunLongContext: true)
+        let (_, manager, conversation, _) = try setUp()
         #expect(throws: ProfileError.sameWindow("MAIN")) { try manager.plan([conversation], in: "main") }
         var cowork = conversation
         cowork.kind = .cowork
         #expect(throws: ProfileError.coworkNeedsItsOwnHandoff(conversation.title)) { try manager.plan([cowork], in: "work") }
+    }
+}
+
+@Suite("Folder rules")
+struct FolderRuleTests {
+    @Test func closestRuleWinsAndBatchesNeedAnAccountInCommon() {
+        let rules = [FolderRule(folder: "/work", accounts: ["a@x.com", "b@x.com"]),
+                     FolderRule(folder: "/work/client", accounts: ["b@x.com"]),
+                     FolderRule(folder: "/other", accounts: ["c@x.com"])]
+        #expect(FolderRules.rule(for: "/work/client/app", in: rules)?.folder == "/work/client")
+        #expect(FolderRules.rule(for: "/workshop", in: rules) == nil, "a folder with the same prefix isn't inside it")
+        #expect(FolderRules.allowedAccounts(for: ["/work/app"], in: rules)?.accounts == ["a@x.com", "b@x.com"])
+        #expect(FolderRules.allowedAccounts(for: ["/work/app", "/work/client"], in: rules)?.accounts == ["b@x.com"])
+        #expect(FolderRules.allowedAccounts(for: ["/work", "/other"], in: rules)?.accounts == [])
+        #expect(FolderRules.allowedAccounts(for: ["/tmp", "/"], in: rules) == nil)
+    }
+
+    @Test func rulesSurviveProfileChangesAndAreEditedPerFolder() throws {
+        let box = try Sandbox()
+        let rules = FolderRules(paths: box.paths)
+        #expect(try rules.load().isEmpty)
+        try rules.set("/work", accounts: ["a@x.com"])
+        try rules.set("/other", accounts: ["c@x.com"])
+        try rules.set("/work", accounts: ["b@x.com"])
+        #expect(try rules.load() == [FolderRule(folder: "/other", accounts: ["c@x.com"]), FolderRule(folder: "/work", accounts: ["b@x.com"])])
+        #expect(try rules.set("/other", accounts: []) == nil)
+        #expect(try rules.load().map(\.folder) == ["/work"])
     }
 }
 
@@ -297,12 +402,12 @@ struct DestinationRankingTests {
 
     func status(_ id: String, week: Int?, fiveHour: Int? = 0, age: TimeInterval = 600, signedIn: Bool = true) -> ProfileStatus {
         ProfileStatus(profile: id == "main" ? nil : Profile(id: id, label: id.uppercased(), email: nil, color: "#123456"),
-                      accountID: signedIn ? "acct-\(id)" : nil, email: nil,
+                      accountID: signedIn ? "acct-\(id)" : nil, email: signedIn ? "\(id)@x.com" : nil,
                       usage: week.map { Usage(fiveHour: fiveHour, week: $0, sampledAt: now.addingTimeInterval(-age)) },
                       isRunning: false)
     }
 
-    @Test func freshSamplesComeFirstThenOldOnesThenNone() {
+    @Test func lowestWeeklyUsageFirstHoweverOldItsSampleThenNone() {
         let statuses = [
             status("main", week: 100),
             status("stale", week: 3, age: 5 * 3600),
@@ -313,9 +418,20 @@ struct DestinationRankingTests {
             status("new", week: 5, signedIn: false),
         ]
 
-        #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["light", "busy", "stale", "unknown"])
-        #expect(DestinationRanking.best(statuses, excluding: "light", now: now) == "busy")
+        #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["stale", "light", "busy", "unknown"],
+                "a reserve kept closed is sampled rarely, and its old sample is still its latest usage")
+        #expect(DestinationRanking.best(statuses, excluding: "stale", now: now) == "light")
+        #expect(DestinationRanking.ranked([status("old", week: 20, age: 5 * 3600), status("new", week: 20)], now: now).map(\.id) == ["new", "old"])
         #expect(DestinationRanking.isAtLimit(statuses[0], now: now) && DestinationRanking.isAtLimit(statuses[5], now: now))
+    }
+
+    @Test func onlyWindowsWithAnAllowedAccountAreOffered() {
+        let statuses = [status("personal", week: 10), status("team", week: 90, age: 6 * 3600), status("other", week: 0)]
+        #expect(DestinationRanking.ranked(statuses, accounts: ["team@x.com"], now: now).map(\.id) == ["team"])
+        #expect(DestinationRanking.best(statuses, accounts: [], now: now) == nil)
+        #expect(DestinationRanking.best(statuses, now: now) == "other")
+        #expect(!DestinationRanking.isAllowed(status("new", week: nil, signedIn: false), accounts: ["new@x.com"]),
+                "an account whose email isn't known is never taken for an allowed one")
     }
 
     @Test func mostHeadroomNeedsTwoFreshSamplesAndNeverPicksAStaleOne() {
