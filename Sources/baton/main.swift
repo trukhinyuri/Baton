@@ -12,45 +12,45 @@ let usage = """
     USAGE
       baton list                          Show every profile, its account and plan usage
       baton add <email> [--label TEXT] [--color #RRGGBB]
-                                           Create a profile and open it to sign in
+                                          Create a profile and open it to sign in
       baton open <profile>                Open a profile's window (id or label)
       baton remove <profile>              Move a closed profile's copy and sign-in to the Trash
       baton sync [--dry-run]              Share local Code sessions; inspect Cowork without copying it
       baton refresh                       Rebuild app copies and launchers after a Claude Desktop update
       baton migrate                       Rename ~/Applications/Claude Profiles to Baton once no Claude window
-                                           is open. Exit 3: kept for now; the printed line says why.
+                                          is open. Exit 3: kept for now; the printed line says why.
       baton doctor [--json]               Read-only session and folder checks
       baton local-only on|off|status [PROFILE|main] [--json]
-                                           Keep new Claude Code sessions off Remote Control; on by
-                                           default. No profile: every window without its own choice
+                                          Keep new Claude Code sessions off Remote Control; on by
+                                          default. No profile: every window without its own choice
       baton local-only cloud-lock on|off|status
-                                           Optional, off by default: also deny the one MCP tool that
-                                           moves a Claude Code session to the cloud, Mac-wide, in
-                                           ~/.claude/settings.json
+                                          Optional, off by default: also deny the one MCP tool that
+                                          moves a Claude Code session to the cloud, Mac-wide, in
+                                          ~/.claude/settings.json
       baton conversations [--all]         Recent local Code sessions and Cowork tasks
       baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
-                                           Continue a conversation in another profile: a Code session
-                                           as itself or as a copy, or a new Cowork task with its history
+                                          Continue a conversation in another profile: a Code session
+                                          as itself or as a copy, or a new Cowork task with its history
       baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
                      [--new] [--dry-run]
-                                           Continue the Code sessions of a folder with a message since
-                                           --since, in one go: the --max most recent (6 unless given);
-                                           --new also starts a new session
-                                           By default sessions still open in a running Claude Code
-                                           process or with a message in the last 10 minutes continue
-                                           as a copy; --same keeps the same session (add --anyway once
-                                           you've closed it there), --fork copies
+                                          Continue the Code sessions of a folder with a message since
+                                          --since, in one go: the --max most recent (6 unless given);
+                                          --new also starts a new session
+                                          By default sessions still open in a running Claude Code
+                                          process or with a message in the last 10 minutes continue
+                                          as a copy; --same keeps the same session (add --anyway once
+                                          you've closed it there), --fork copies
       baton pass <session|last> --to <profile>
-                                           Same as `continue`, easier to shout across the track.
+                                          Same as `continue`, easier to shout across the track.
       baton rules                         Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
-                                           Let only these accounts continue work in the folder and
-                                           inside it, or drop the folder's rule
+                                          Let only these accounts continue work in the folder and
+                                          inside it, or drop the folder's rule
       baton carry [--dry-run]             Bring sub-agents, Workflow runs, tool outputs and the scratchpad
-                                           into sessions Claude Desktop continued as a new copy itself
-      baton report [--save PATH] [--open]  Print a redacted problem report; --save writes it to a file,
-                                           --open opens a prefilled GitHub issue to review and submit.
-                                           Nothing is sent
+                                          into sessions Claude Desktop continued as a new copy itself
+      baton report [--save PATH] [--open] Print a redacted problem report; --save writes it to a file,
+                                          --open opens a prefilled GitHub issue to review and submit.
+                                          Nothing is sent
       baton --version                     Print the version and commit
     """
 
