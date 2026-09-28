@@ -62,6 +62,8 @@ public struct ProfileStatus: Identifiable, Equatable, Sendable {
     public var accountID: String?
     public var email: String?
     public var usage: Usage?
+    /// Five-hour and weekly limits with their reset times, when known (see `Limits`).
+    public var limits: Limits
     public var isRunning: Bool
     /// The profile's app copy is open without the profile's data (opened from its own Dock icon or reopened
     /// by macOS at login), so that window shows the main app's account.
@@ -69,12 +71,13 @@ public struct ProfileStatus: Identifiable, Equatable, Sendable {
 
     public init(
         profile: Profile?, accountID: String?, email: String?, usage: Usage?, isRunning: Bool,
-        isOpenWithoutProfile: Bool = false
+        isOpenWithoutProfile: Bool = false, limits: Limits? = nil
     ) {
         self.profile = profile
         self.accountID = accountID
         self.email = email
         self.usage = usage
+        self.limits = limits ?? Limits(usage: usage)
         self.isRunning = isRunning
         self.isOpenWithoutProfile = isOpenWithoutProfile
     }
@@ -111,6 +114,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// Serializes changes to the registry and to engines within this process; `FileLock` does it across processes.
     private let lock = NSRecursiveLock()
     private var emailCache: [String: (account: String, email: String?, checkedAt: Date)] = [:]
+    /// Which window ran which Claude Code session, for its limit messages (see `LimitTracker`).
+    public let limitTracker = LimitTracker()
     private var openWarning: String?
     /// Opening can succeed using the profile's saved settings even if portable setup could not be refreshed.
     public var lastOpenWarning: String? { lock.withLock { openWarning } }
@@ -170,8 +175,9 @@ public final class ProfileManager: @unchecked Sendable {
                 entry.isOpenWithoutProfile = running.contains { $0.isStartedWithoutDataDir(engine: paths.engine(for: profile.id)) }
                 return entry
             }
-        finishSignInIfDone(all)
-        return all
+        let found = withLimits(all)
+        finishSignInIfDone(found)
+        return found
     }
 
     /// Returns `claude://` links to the main app once the profile signing in is done with them.
@@ -211,7 +217,7 @@ public final class ProfileManager: @unchecked Sendable {
         return ProfileStatus(
             profile: profile, accountID: account,
             email: account.flatMap { email(in: dataDir, accountID: $0) },
-            usage: DesktopData.usage(in: dataDir), isRunning: running)
+            usage: nil, isRunning: running)  // with its limits in `withLimits`
     }
 
     /// Scanning IndexedDB is expensive, so a found email is kept until the account changes
@@ -514,11 +520,13 @@ public final class ProfileManager: @unchecked Sendable {
         let dataDir = dataDir(of: destination)
         let isOpen = isWindowOpen(destination)
         let live = conversations.isEmpty ? [] : LiveSessions.ids(claudeDir: paths.claudeDir)
+        let liveIn = conversations.isEmpty ? [:] : limitTracker.liveWindows(paths: paths, windows: windows)
         var supported: Set<String>?
-        let plans = try conversations.map { found in
+        var plans = try conversations.map { found in
             var conversation = found
             conversation.hasLiveProcess = found.hasLiveProcess || live.contains(found.sessionID)
             guard conversation.kind != .cowork else { throw ProfileError.coworkNeedsItsOwnHandoff(conversation.title) }
+            if liveIn[conversation.sessionID]?.contains(destination) == true { throw ProfileError.sameWindow(label(of: destination)) }
             let forks = mode.forks(conversation, now: now)
             // A closed window reads the shared card of a regular Code session, with its model, when it starts;
             // anything else Claude imports there and takes the model from the history.
@@ -535,6 +543,7 @@ public final class ProfileManager: @unchecked Sendable {
             return plan
         }
         if !anyway { try Self.refuseSecondWriter(plans, now: now) }
+        previewAutoResume(&plans, now: now)
         return plans
     }
 
@@ -575,6 +584,8 @@ public final class ProfileManager: @unchecked Sendable {
             }
             throw error
         }
+        // Before the window opens: another window's auto-continue would otherwise run the same work there too.
+        settleAutoResume(&plans, now: Date())
         let newSession = folder.map { ClaudeLink.newCodeSession(folder: $0) }
         guard !links.isEmpty else {
             try await openWindow(destination, links: newSession.map { [$0] } ?? [])
@@ -727,9 +738,12 @@ public final class ProfileManager: @unchecked Sendable {
     /// Local conversations of every window, most recent first, each marked if a running Claude Code process has it open.
     public func conversations() -> [Conversation] {
         let live = LiveSessions.ids(claudeDir: paths.claudeDir)
+        let windows = windows
+        let ranIn = limitTracker.lastWindows(paths: paths, windows: windows)
         return ConversationIndex.scan(paths: paths, windows: windows).map { found in
             var conversation = found
             conversation.hasLiveProcess = conversation.kind != .cowork && live.contains(conversation.sessionID)
+            conversation.runningIn = conversation.kind == .cowork ? nil : ranIn[conversation.sessionID]
             return conversation
         }
     }

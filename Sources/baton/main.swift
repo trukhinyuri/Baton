@@ -28,11 +28,11 @@ let usage = """
                                           moves a Claude Code session to the cloud, Mac-wide, in
                                           ~/.claude/settings.json
       baton conversations [--all]         Recent local Code sessions and Cowork tasks
-      baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
+      baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                           Continue a conversation in another profile: a Code session
                                           as itself or as a copy, or a new Cowork task with its history
       baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
-                     [--new] [--dry-run]
+                     [--new] [--now] [--dry-run]
                                           Continue the Code sessions of a folder with a message since
                                           --since, in one go: the --max most recent (6 unless given);
                                           --new also starts a new session
@@ -40,6 +40,8 @@ let usage = """
                                           process or with a message in the last 10 minutes continue
                                           as a copy; --same keeps the same session (add --anyway once
                                           you've closed it there), --fork copies
+                                          If the session's window resets within 15 minutes and
+                                          continues it by itself, nothing happens (exit 3) unless --now
       baton pass <session|last> --to <profile>
                                           Same as `continue`, easier to shout across the track.
       baton rules                         Show which accounts may continue the work in which folders
@@ -126,11 +128,16 @@ func kindName(_ conversation: Conversation) -> String {
     }
 }
 
-func describe(_ usage: Usage?) -> String {
-    guard let usage else { return "usage unknown" }
-    let five = usage.isFiveHourStale() ? "reset" : usage.fiveHour.map { "\($0)%" } ?? "?"
-    let week = usage.week.map { "\($0)%" } ?? "?"
-    return "5h \(five) · week \(week) · as of \(age(usage.sampledAt))" + (usage.isFresh() ? "" : " (stale: may be higher now)")
+/// "5h 100% · resets 02:10 · week 62% · as of 3m ago" (see `LimitText.summary`).
+func describe(_ status: ProfileStatus) -> String { LimitText.summary(status.limits, usage: status.usage) }
+
+/// Before continuing: when the source window picks the session up by itself within minutes, say so and stop,
+/// unless `--now` says to continue anyway. Exits with 3, so a script can tell that nothing was done and why.
+func offerToWait(_ conversations: [Conversation], in destination: String) {
+    guard !args.contains("--now"), let offer = manager.autoResumeOffer(for: conversations, in: destination) else { return }
+    print(offer.message())
+    print("Wait for it there, or add --now to continue in Claude \(manager.label(of: destination)) anyway. Nothing was changed.")
+    exit(3)
 }
 
 /// `24h`, `90m`, `2d`, or hours as a plain number.
@@ -167,6 +174,7 @@ func printPlan(_ plans: [ContinuePlan], to destination: String) {
             let names = item.names.isEmpty ? "" : " (\(item.names.joined(separator: ", ")))"
             print("      stays behind: \(item.detail)\(names)")
         }
+        for note in plan.autoResume { print("      \(note.isWarning ? "⚠︎ " : "")\(note.message())") }
     }
 }
 
@@ -200,7 +208,7 @@ do {
             let who = s.email ?? (s.isSignedIn ? "signed in" : "not signed in")
             let state = s.isRunning ? "open" : "closed"
             print(
-                "\(name.padding(toLength: 18, withPad: " ", startingAt: 0)) \(state.padding(toLength: 7, withPad: " ", startingAt: 0)) \(who.padding(toLength: 32, withPad: " ", startingAt: 0)) \(describe(s.usage))"
+                "\(name.padding(toLength: 18, withPad: " ", startingAt: 0)) \(state.padding(toLength: 7, withPad: " ", startingAt: 0)) \(who.padding(toLength: 32, withPad: " ", startingAt: 0)) \(describe(s))"
             )
             if s.isUnexpectedAccount, let expected = s.profile?.email { print("  ⚠︎ expected \(expected)") }
             if s.isOpenWithoutProfile, let id = s.profile?.id {
@@ -333,6 +341,7 @@ do {
                     + leftOutNote)
             break
         }
+        offerToWait(found, in: destination)
         let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession, anyway: anyway)
         printPlan(plans, to: destination)
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
@@ -375,6 +384,7 @@ do {
             }
             break
         }
+        offerToWait([conversation], in: destination)
         switch try await manager.continueConversation(conversation, in: destination, mode: mode, anyway: anyway) {
         case .openedSession(let plan):
             printPlan([plan], to: destination)

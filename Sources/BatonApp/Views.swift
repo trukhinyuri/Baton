@@ -66,14 +66,26 @@ struct UsageColumn: View {
 
     var body: some View {
         if let usage = status.usage, status.isSignedIn {
+            let now = Date()
+            let limits = status.limits
+            let allBelow = limits.states.allSatisfy { $0.phase(now: now) == .below }
+            let notes = limits.states.compactMap { LimitText.note($0, now: now) }
             VStack(alignment: .leading, spacing: 5) {
-                UsageMeter(title: "5-hour", percent: usage.fiveHour, isStale: usage.isFiveHourStale())
-                UsageMeter(title: "Weekly", percent: usage.week)
-                (Text("Updated \(usage.sampledAt, format: .relative(presentation: .named))") + Text(usage.isFresh() ? "" : " · may be higher now"))
+                UsageMeter(
+                    title: "5-hour", percent: limits.fiveHour.percent,
+                    isStale: [.below, .reset].contains(limits.fiveHour.phase(now: now)) && usage.isFiveHourStale(now: now)
+                        || limits.fiveHour.phase(now: now) == .reset)
+                UsageMeter(title: "Weekly", percent: limits.week.percent, isStale: limits.week.phase(now: now) == .reset)
+                (Text("Updated \(usage.sampledAt, format: .relative(presentation: .named))")
+                    + Text(notes.map { " · " + $0 }.joined())
+                    + Text(usage.isFresh(now: now) || !allBelow ? "" : " · may be higher now"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 56)
-                    .help(usage.isFresh() ? "" : "Claude records usage only while this window is open and in use, so this sample can be behind.")
+                    .help(
+                        usage.isFresh(now: now)
+                            ? notes.isEmpty ? "" : "Reset times come from Claude: its limit messages and Auto-continue when limits reset."
+                            : "Claude records usage only while this window is open and in use, so this sample can be behind.")
             }
         } else {
             Text(status.isSignedIn ? "Usage appears after the first message" : "Usage appears after sign-in")
@@ -115,7 +127,9 @@ struct ProfileRow: View {
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(Capsule().fill(Color.green.opacity(0.18)))
                             .foregroundStyle(.green)
-                            .help("Lowest weekly usage among your signed-in subscriptions with usage recorded in the last 3 hours")
+                            .help(
+                                "Most room left among your signed-in subscriptions with usage recorded in the last 3 hours, by the higher of five-hour and weekly usage"
+                            )
                     }
                 }
                 HStack(spacing: 6) {
@@ -221,10 +235,13 @@ struct LimitBanner: View {
     var note = ""
     let action: () -> Void
 
+    /// " It resets 02:10." or " It resets about Wed 05:00."; empty when the reset time isn't known.
+    private var resets: String { LimitText.bindingReset(tired.limits).map { " It \($0)." } ?? "" }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.orange).accessibilityHidden(true)
-            Text("\(tired.isMain ? "Claude (main)" : "Claude \(tired.label)") has reached its usage limit.")
+            Text("\(tired.isMain ? "Claude (main)" : "Claude \(tired.label)") has reached its usage limit.\(resets)")
                 .font(.callout.weight(.medium))
             Spacer()
             if !note.isEmpty { Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(.secondary) }

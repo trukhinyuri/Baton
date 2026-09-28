@@ -109,7 +109,11 @@ struct MenuBarContent: View {
         let name = status.isMain ? "Claude" : "Claude \(status.label)"
         let who = status.email ?? (status.isSignedIn ? "signed in" : "not signed in")
         var usage = ""
-        if let week = status.usage?.week { usage = " · \(week)% of week" }
+        if status.isSignedIn, status.limits.isAtLimit() {
+            usage = " · at its limit" + (LimitText.bindingReset(status.limits).map { ", \($0)" } ?? "")
+        } else if let week = status.usage?.week {
+            usage = " · \(week)% of week"
+        }
         return "\(status.isRunning ? "●" : "○")  \(name) — \(who)\(usage)"
     }
 }

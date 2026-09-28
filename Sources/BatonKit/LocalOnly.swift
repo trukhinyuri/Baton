@@ -260,7 +260,7 @@ public struct LocalOnly: Sendable {
         try saveState(state)
     }
 
-    private static func replace(_ url: URL, with data: Data) throws {
+    static func replace(_ url: URL, with data: Data) throws {
         let fm = FileManager.default
         let permissions = (try? fm.attributesOfItem(atPath: url.path)[.posixPermissions]) ?? NSNumber(value: 0o600)
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -517,7 +517,7 @@ struct JSONPatch {
         }
     }
 
-    private func object(at open: Int) throws -> Object {
+    func object(at open: Int) throws -> Object {
         try expect(open, "{")
         var members: [Member] = []
         var i = skipSpace(open + 1)
