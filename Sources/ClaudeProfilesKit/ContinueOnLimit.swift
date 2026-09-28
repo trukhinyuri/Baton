@@ -6,8 +6,8 @@ public enum ContinueMode: String, Sendable, CaseIterable {
     case same
     /// A copy under a new id: the original can keep running, and nothing writes to one session from two windows.
     case fork
-    /// A copy for Project branches, which their Project's coordinator may write to again, and for sessions with a
-    /// message in the last `forkWindow`; the same session otherwise.
+    /// A copy for Project branches, which their Project's coordinator may write to again, and for sessions that
+    /// may still be written to (see `Conversation.mayStillWrite`); the same session otherwise.
     case auto
 
     /// A session with a message this recent may still be running in its window.
@@ -18,7 +18,7 @@ public enum ContinueMode: String, Sendable, CaseIterable {
         switch self {
         case .same: return false
         case .fork: return true
-        case .auto: return conversation.kind == .projectBranch || conversation.isActive(now: now, within: Self.forkWindow)
+        case .auto: return conversation.kind == .projectBranch || conversation.mayStillWrite(now: now)
         }
     }
 }
@@ -33,23 +33,26 @@ public struct ContinuePlan: Equatable, Sendable {
     public var model: ModelNote?
     /// The session that opens there: the conversation's own or, once prepared, its copy.
     public var sessionID: String
-    /// Where its card is written before the window starts, so it opens with the original model; `nil` when the
-    /// window is open (Claude makes the card when it imports the session) or already shares the card.
-    public var cardFolder: URL?
-    public var cardWritten = false
+    /// Whether the destination window took the session in: `true` once Claude has imported it there, `false` if it
+    /// didn't within the wait, `nil` when the window knew the session already, so there is nothing to see.
+    public var opened: Bool?
 
-    public init(conversation: Conversation, destination: String, forks: Bool, model: ModelNote?, cardFolder: URL?) {
+    public init(conversation: Conversation, destination: String, forks: Bool, model: ModelNote?) {
         self.conversation = conversation; self.destination = destination; self.forks = forks
-        self.model = model; self.cardFolder = cardFolder; self.sessionID = conversation.sessionID
+        self.model = model; self.sessionID = conversation.sessionID
     }
 }
 
 /// Copies a Claude Code transcript under a new session id, the way Claude Code's own `--fork-session` starts a
-/// new session from an existing history. The original is only read.
+/// new session from an existing history: with the session's tool results and sub-agents, and its file checkpoints,
+/// so Rewind works in the copy. The original is only read.
 public enum TranscriptFork {
+    /// - Parameter claudeDir: Claude Code's folder (`~/.claude`) with `file-history` and `session-env`; by default
+    ///   the one the transcript is in (`<claudeDir>/projects/<folder>/<id>.jsonl`).
     /// - Returns: the new session id, lowercased like the ones Claude Code makes.
     @discardableResult
-    public static func fork(_ conversation: Conversation, newID: String = UUID().uuidString.lowercased()) throws -> String {
+    public static func fork(_ conversation: Conversation, claudeDir: URL? = nil,
+                            newID: String = UUID().uuidString.lowercased()) throws -> String {
         let fm = FileManager.default
         let source = conversation.transcript
         let directory = source.deletingLastPathComponent()
@@ -57,28 +60,54 @@ public enum TranscriptFork {
         let target = directory.appending(path: "\(newID).jsonl")
         let folder = directory.appending(path: oldID, directoryHint: .isDirectory)
         let newFolder = directory.appending(path: newID, directoryHint: .isDirectory)
-        guard !fm.fileExists(atPath: target.path), !fm.fileExists(atPath: newFolder.path) else {
+        let home = claudeDir ?? directory.deletingLastPathComponent().deletingLastPathComponent()
+        // Claude Code keeps a session's file checkpoints and hook environment under the session id.
+        let perSession = ["file-history", "session-env"].map {
+            (home.appending(path: "\($0)/\(oldID)", directoryHint: .isDirectory), home.appending(path: "\($0)/\(newID)", directoryHint: .isDirectory))
+        }
+        guard !fm.fileExists(atPath: target.path), !fm.fileExists(atPath: newFolder.path),
+              !perSession.contains(where: { fm.fileExists(atPath: $0.1.path) }) else {
             throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
         }
 
-        // Tool results and sub-agent transcripts live next to the transcript, which refers to them by path.
-        // They are copied first, so the new transcript never appears without them.
-        var isDirectory: ObjCBool = false
-        if fm.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            try fm.copyItem(at: folder, to: newFolder)
-            if let walker = fm.enumerator(at: newFolder, includingPropertiesForKeys: [.isRegularFileKey]) {
-                for case let url as URL in walker where url.pathExtension == "jsonl" {
-                    try write(replacing(oldID, with: newID, in: Data(contentsOf: url)), to: url)
+        // Everything the transcript refers to is copied first, so the new transcript never appears without it.
+        var made: [URL] = []
+        do {
+            var isDirectory: ObjCBool = false
+            // Tool results and sub-agent transcripts live next to the transcript, which refers to them by path.
+            if fm.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                try fm.copyItem(at: folder, to: newFolder)
+                made.append(newFolder)
+                if let walker = fm.enumerator(at: newFolder, includingPropertiesForKeys: [.isRegularFileKey]) {
+                    for case let url as URL in walker where url.pathExtension == "jsonl" {
+                        try write(replacing(oldID, with: newID, in: Data(contentsOf: url)), to: url)
+                    }
                 }
             }
-        }
-        do {
+            for (old, new) in perSession where fm.fileExists(atPath: old.path, isDirectory: &isDirectory) && isDirectory.boolValue {
+                made.append(new)
+                try linkOrCopy(old, to: new)
+            }
             try write(replacing(oldID, with: newID, in: completeRecords(Data(contentsOf: source))), to: target)
         } catch {
-            try? fm.removeItem(at: newFolder)   // made by this call a moment ago
+            for url in made { try? fm.removeItem(at: url) }   // made by this call a moment ago
             throw error
         }
         return newID
+    }
+
+    /// Checkpoint files never change once written (a new version gets a new name), so the copy shares them by
+    /// hard links, as Claude Code does, and falls back to copying.
+    static func linkOrCopy(_ folder: URL, to target: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        for name in try fm.contentsOfDirectory(atPath: folder.path) {
+            let from = folder.appending(path: name), to = target.appending(path: name)
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: from.path, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue { try fm.copyItem(at: from, to: to); continue }
+            do { try fm.linkItem(at: from, to: to) } catch { try fm.copyItem(at: from, to: to) }
+        }
     }
 
     /// A session that is still running may be halfway through writing its last record; that part is left out.
@@ -126,6 +155,25 @@ public enum TranscriptFork {
     }
 }
 
+/// The sessions a window has cards for, read from one card folder.
+enum SessionCards {
+    /// The `cliSessionId` of every `local_*.json` card in `folder`, lowercased; only cards modified since
+    /// `modifiedSince` if given. Cards can be large, so the id is found without parsing the whole file.
+    static func sessions(in folder: URL, modifiedSince: Date? = nil) -> Set<String> {
+        let key = Data(#""cliSessionId":""#.utf8)
+        var found = Set<String>()
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
+            let url = folder.appending(path: name)
+            if let modifiedSince, (SyncFolders.modificationDate(url) ?? .distantPast) < modifiedSince { continue }
+            guard let data = try? Data(contentsOf: url), let start = data.range(of: key)?.upperBound,
+                  let end = data[start...].firstIndex(of: UInt8(ascii: "\"")), end - start <= 64,
+                  let id = String(data: data[start..<end], encoding: .utf8), !id.isEmpty else { continue }
+            found.insert(id.lowercased())
+        }
+        return found
+    }
+}
+
 /// What happens to the model a conversation ran with when it continues in another window.
 public struct ModelNote: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
@@ -133,9 +181,8 @@ public struct ModelNote: Equatable, Sendable {
         case carried
         /// It continues with the same model, which that window's account has not run before.
         case unverified
-        /// That window's account has not run the model, so the session opens with `opensWith` instead.
-        case notCarried(opensWith: String?)
-        /// The window is already open and picks the model from the history; choose it before sending.
+        /// Claude imports the session there and picks the model from the history, which doesn't record a choice
+        /// such as long context; choose it before sending.
         case chooseBeforeSending
     }
 
@@ -153,10 +200,8 @@ public struct ModelNote: Equatable, Sendable {
             return "Continues with \(model)."
         case .unverified:
             return "Continues with \(model), which Claude \(destination) hasn't run before. If it isn't offered there, choose another model before you send."
-        case .notCarried(let other):
-            return "Claude \(destination) hasn't run \(model), so this opens with \(other ?? "its default model"). Choose \(model) in the model menu before you send if it's offered there."
         case .chooseBeforeSending:
-            return "Claude \(destination) is already open and takes the model from the history. Choose \(model) in the model menu before you send."
+            return "Claude \(destination) takes the model from the history when it opens this. Choose \(model) in the model menu before you send."
         }
     }
 
@@ -164,13 +209,10 @@ public struct ModelNote: Equatable, Sendable {
     ///   - model: the model on the conversation's card.
     ///   - historyModel: the model of the last answer in the transcript, which Claude uses when it imports it.
     ///   - supported: the destination's account has run `model` before.
-    ///   - card: how the destination gets its card: written before the window starts, already shared by every
-    ///     window, or made by Claude itself when an open window imports the session.
+    ///   - card: whether the destination has the conversation's card already or Claude imports the session there.
     public static func decide(model: String?, historyModel: String?, supported: Bool, card: CardSource) -> ModelNote? {
         guard let model else { return nil }
         switch card {
-        case .written:
-            return ModelNote(model: model, kind: supported ? .carried : .notCarried(opensWith: historyModel))
         case .shared:
             return ModelNote(model: model, kind: supported ? .carried : .unverified)
         case .imported:
@@ -179,7 +221,7 @@ public struct ModelNote: Equatable, Sendable {
         }
     }
 
-    public enum CardSource: Sendable { case written, shared, imported }
+    public enum CardSource: Sendable { case shared, imported }
 }
 
 /// Models a window's account has run, from records Claude Desktop keeps only in that window.
@@ -213,43 +255,6 @@ public enum ModelSupport {
     }
 }
 
-/// The session card Claude Desktop makes when it imports a Claude Code session, written before the destination
-/// window starts so that it opens the session with the original model and effort.
-enum ContinuationCard {
-    /// Claude itself turns bypass into accept-edits when it imports a session; auto mode is not carried either.
-    static func permissionMode(_ mode: String?) -> String {
-        switch mode ?? "" {
-        case "default", "acceptEdits", "plan": return mode ?? "default"
-        case "bypassPermissions", "auto": return "acceptEdits"
-        default: return "default"
-        }
-    }
-
-    static func make(for conversation: Conversation, source: [String: Any]?, sessionID: String, forked: Bool,
-                     model: String?, effort: String?, now: Date) -> Data? {
-        let folder = conversation.folders.first
-        guard let cwd = (source?["cwd"] as? String) ?? folder else { return nil }
-        let millis = Int((now.timeIntervalSince1970 * 1000).rounded())
-        var card: [String: Any] = [
-            "sessionId": "local_\(sessionID)",
-            "cliSessionId": sessionID,
-            "cwd": cwd,
-            "originCwd": (source?["originCwd"] as? String) ?? cwd,
-            "createdAt": millis, "lastActivityAt": millis, "indexedAt": millis,
-            "isArchived": false,
-            "title": forked ? "\(conversation.title) (continued)" : conversation.title,
-            "titleSource": "auto",
-            "permissionMode": permissionMode(source?["permissionMode"] as? String),
-            "sessionPermissionUpdates": [Any](),
-            "alwaysAllowedReasons": [Any](),
-            "adoptedFromOtherSurface": true,
-        ]
-        if let model { card["model"] = model }
-        if let effort { card["effort"] = effort }
-        return try? JSONSerialization.data(withJSONObject: card, options: [.sortedKeys, .withoutEscapingSlashes])
-    }
-}
-
 /// Where to continue: which signed-in subscriptions have headroom, judged by samples that may be hours old.
 public enum DestinationRanking {
     /// Out of five-hour or weekly quota by its latest recorded usage.
@@ -260,25 +265,32 @@ public enum DestinationRanking {
         return false
     }
 
-    /// Signed-in subscriptions not at their limit, best first: those with a fresh sample by weekly usage, then
-    /// those with an older sample (weekly usage only grows until it resets, so an old value can be too low), then
-    /// those without usage data.
-    public static func ranked(_ statuses: [ProfileStatus], excluding excluded: String? = nil, now: Date = Date()) -> [ProfileStatus] {
-        let candidates = statuses.filter { $0.isSignedIn && $0.id != excluded && !isAtLimit($0, now: now) }
-        func tier(_ status: ProfileStatus) -> Int {
-            guard let usage = status.usage, usage.week != nil else { return 2 }
-            return usage.isFresh(now: now) ? 0 : 1
+    /// Whether `status` is signed in with one of `accounts` (email addresses); any window when `accounts` is `nil`.
+    public static func isAllowed(_ status: ProfileStatus, accounts: Set<String>?) -> Bool {
+        guard let accounts else { return true }
+        return status.email.map { accounts.contains($0.lowercased()) } ?? false
+    }
+
+    /// Signed-in subscriptions not at their limit, and signed in with one of `accounts` if given, by the weekly
+    /// usage of their latest sample, lowest first; a newer sample first when two are equal, then those without
+    /// usage data. An old sample isn't pushed back: a subscription kept in reserve is sampled only when its window
+    /// is used, so its sample is old precisely because nobody has used it since.
+    public static func ranked(_ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
+                              now: Date = Date()) -> [ProfileStatus] {
+        let candidates = statuses.filter {
+            $0.isSignedIn && $0.id != excluded && !isAtLimit($0, now: now) && isAllowed($0, accounts: accounts)
         }
         return candidates.enumerated().sorted { a, b in
-            let (ta, tb) = (tier(a.element), tier(b.element))
-            if ta != tb { return ta < tb }
             let (wa, wb) = (a.element.usage?.week ?? 101, b.element.usage?.week ?? 101)
-            return wa != wb ? wa < wb : a.offset < b.offset
+            if wa != wb { return wa < wb }
+            let (sa, sb) = (a.element.usage?.sampledAt ?? .distantPast, b.element.usage?.sampledAt ?? .distantPast)
+            return sa != sb ? sa > sb : a.offset < b.offset
         }.map(\.element)
     }
 
-    public static func best(_ statuses: [ProfileStatus], excluding excluded: String? = nil, now: Date = Date()) -> String? {
-        ranked(statuses, excluding: excluded, now: now).first?.id
+    public static func best(_ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
+                            now: Date = Date()) -> String? {
+        ranked(statuses, excluding: excluded, accounts: accounts, now: now).first?.id
     }
 
     /// The one to mark “Most headroom”: only when at least two subscriptions have a fresh sample to compare,

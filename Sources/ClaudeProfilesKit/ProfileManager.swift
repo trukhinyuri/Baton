@@ -12,6 +12,11 @@ public enum ProfileError: LocalizedError, Equatable {
     case notSignedIn(String)
     case sameWindow(String)
     case coworkNeedsItsOwnHandoff(String)
+    /// Work under a folder rule may continue only with the rule's accounts.
+    case notAllowed(folders: [String], accounts: [String], label: String, email: String?)
+    case rulesUnreadable(String)
+    /// The window started but didn't show up in time, so the links it can't keep yet were not handed over.
+    case windowDidNotAppear(label: String, links: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -25,6 +30,14 @@ public enum ProfileError: LocalizedError, Equatable {
         case .notSignedIn(let label): "Sign in to Claude \(label) first, then continue there."
         case .sameWindow(let label): "This already belongs to Claude \(label). Choose another profile to continue in."
         case .coworkNeedsItsOwnHandoff(let title): "“\(title)” is a Cowork task. Continue it on its own, so its history and files are attached."
+        case .notAllowed(let folders, let accounts, let label, let email):
+            "Work in \(folders.map { ($0 as NSString).abbreviatingWithTildeInPath }.joined(separator: " and ")) continues only in "
+                + (accounts.isEmpty ? "no account (its folder rules have none in common)" : accounts.joined(separator: " or "))
+                + ", and Claude \(label) is signed in as \(email ?? "an account whose email can't be read"). Nothing was changed. "
+                + "Continue in a window signed in with that account, or change the rule with `claude-profiles rule`."
+        case .rulesUnreadable(let reason): "Can't read the folder rules, so nothing continues until they are fixed: \(reason)"
+        case .windowDidNotAppear(let label, let links):
+            "Claude \(label) started but its window didn't appear, so \(links) of the sessions were not handed to it. Open them from its sidebar, or continue them again once it's open."
         }
     }
 }
@@ -295,11 +308,42 @@ public final class ProfileManager: @unchecked Sendable {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         configuration.arguments = ["--user-data-dir=\(paths.dataDir(for: profile.id).path)"]
-        if !links.isEmpty {
-            _ = try await NSWorkspace.shared.open(links, withApplicationAt: engine, configuration: configuration)
-        } else {
-            _ = try await NSWorkspace.shared.openApplication(at: engine, configuration: configuration)
+        try await launch(engine, configuration: configuration, links: links, label: profile.label)
+    }
+
+    /// Starts a new copy of the app at `app` and hands it `links`. Until its window exists, Claude keeps only the
+    /// last link it receives (`open-url` stores one pending URL), so only the first goes with the launch; the rest
+    /// follow once the window is on screen.
+    private func launch(_ app: URL, configuration: NSWorkspace.OpenConfiguration, links: [URL], label: String) async throws {
+        guard let first = links.first else {
+            _ = try await NSWorkspace.shared.openApplication(at: app, configuration: configuration)
+            return
         }
+        let started = try await NSWorkspace.shared.open([first], withApplicationAt: app, configuration: configuration)
+        let rest = Array(links.dropFirst())
+        guard !rest.isEmpty else { return }
+        guard try await waitForWindow(of: started.processIdentifier, seconds: 90) else {
+            throw ProfileError.windowDidNotAppear(label: label, links: rest.count)
+        }
+        try await Task.sleep(for: .seconds(1))
+        try await deliver(rest, to: app)
+    }
+
+    /// Waits until process `pid` shows a window: Claude makes its main window before it starts taking links.
+    /// Reading which process owns a window needs no permission.
+    func waitForWindow(of pid: pid_t, seconds: Double) async throws -> Bool {
+        for _ in 0..<Int(seconds * 4) {
+            if Self.hasWindow(pid) { return true }
+            if NSRunningApplication(processIdentifier: pid)?.isTerminated ?? true { return false }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        return Self.hasWindow(pid)
+    }
+
+    static func hasWindow(_ pid: pid_t) -> Bool {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return false }
+        return windows.contains { ($0[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
     }
 
     public func openMain(link: URL? = nil) async throws {
@@ -325,11 +369,7 @@ public final class ProfileManager: @unchecked Sendable {
         // Profile windows run the same app; a new instance keeps this one from reusing theirs.
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
-        if !links.isEmpty {
-            _ = try await NSWorkspace.shared.open(links, withApplicationAt: paths.claudeApp, configuration: configuration)
-        } else {
-            _ = try await NSWorkspace.shared.openApplication(at: paths.claudeApp, configuration: configuration)
-        }
+        try await launch(paths.claudeApp, configuration: configuration, links: links, label: "(main)")
     }
 
     /// Hands a `claude://` link to the running window of the app at `app`. macOS delivers it to that exact copy,
@@ -359,69 +399,101 @@ public final class ProfileManager: @unchecked Sendable {
         }
         let label = try checkDestination(destination)
         if conversation.ownerID == destination { throw ProfileError.sameWindow(label) }
+        try checkRules(folders: conversation.folders, destination: destination)
         let handoff = try CoworkHandoff.prepare(conversation, sourceLabel: self.label(of: conversation.ownerID ?? "main"), paths: paths)
         try await openWindow(destination, links: [handoff.link])
         return .startedCoworkTask(handoff)
     }
 
     /// What continuing `conversations` in `destination` would do, without changing anything.
+    /// - Parameter folder: a folder a new session will start in as well, which its folder rule covers too.
     public func plan(_ conversations: [Conversation], in destination: String, mode: ContinueMode = .auto,
-                     now: Date = Date()) throws -> [ContinuePlan] {
+                     newSessionIn folder: String? = nil, now: Date = Date()) throws -> [ContinuePlan] {
         let label = try checkDestination(destination)
+        try checkRules(folders: conversations.flatMap(\.folders) + (folder.map { [$0] } ?? []), destination: destination)
         let dataDir = dataDir(of: destination)
         let isOpen = isWindowOpen(destination)
-        let cardFolder = isOpen ? nil : cardFolder(in: dataDir)
+        let live = conversations.isEmpty ? [] : LiveSessions.ids(claudeDir: paths.claudeDir)
         var supported: Set<String>?
-        return try conversations.map { conversation in
+        return try conversations.map { found in
+            var conversation = found
+            conversation.hasLiveProcess = found.hasLiveProcess || live.contains(found.sessionID)
             guard conversation.kind != .cowork else { throw ProfileError.coworkNeedsItsOwnHandoff(conversation.title) }
             if conversation.kind == .projectBranch, conversation.ownerID == destination { throw ProfileError.sameWindow(label) }
             let forks = mode.forks(conversation, now: now)
-            // A regular Code session's card is shared by every window already, with its model on it.
-            let source: ModelNote.CardSource = cardFolder == nil ? .imported : (forks || conversation.kind == .projectBranch ? .written : .shared)
+            // A closed window reads the shared card of a regular Code session, with its model, when it starts;
+            // anything else Claude imports there and takes the model from the history.
+            let source: ModelNote.CardSource = !isOpen && !forks && conversation.kind == .code ? .shared : .imported
             var note: ModelNote?
             if let model = conversation.model {
                 if supported == nil { supported = ModelSupport.modelsUsed(in: dataDir) }
                 note = ModelNote.decide(model: model, historyModel: ConversationIndex.lastModel(of: conversation.transcript),
                                         supported: supported?.contains(model) == true, card: source)
             }
-            return ContinuePlan(conversation: conversation, destination: destination, forks: forks, model: note,
-                                cardFolder: source == .written ? cardFolder : nil)
+            return ContinuePlan(conversation: conversation, destination: destination, forks: forks, model: note)
         }
     }
 
+    /// How long `continueAll` waits for the destination window to import the sessions it was handed.
+    public var importWait: TimeInterval = 45
+
     /// Continues every one of `conversations` in `destination`, opening that window once with all of them and,
-    /// if `folder` is given, a new session in that folder. Copies and cards are prepared before the window opens.
+    /// if `folder` is given, a new session in that folder. Copies are made before the window opens; Claude
+    /// imports each session itself, and `ContinuePlan.opened` says whether it did.
     @discardableResult
     public func continueAll(_ conversations: [Conversation], in destination: String, mode: ContinueMode = .auto,
                             newSessionIn folder: String? = nil, now: Date = Date()) async throws -> [ContinuePlan] {
-        var plans = try plan(conversations, in: destination, mode: mode, now: now)
+        var plans = try plan(conversations, in: destination, mode: mode, newSessionIn: folder, now: now)
         var links: [URL] = []
         for i in plans.indices {
-            try prepare(&plans[i], now: now)
+            try prepare(&plans[i])
             links.append(ClaudeLink.resume(plans[i].sessionID))
         }
         if let folder { links.append(ClaudeLink.newCodeSession(folder: folder)) }
+        let cards = cardFolder(in: dataDir(of: destination))
+        let known = cards.map { SessionCards.sessions(in: $0) } ?? []
+        let started = Date()
         try await openWindow(destination, links: links)
+        await confirmImported(&plans, known: known, cards: cards, since: started)
         return plans
     }
 
-    /// Makes the copy and writes the card a plan calls for.
-    func prepare(_ plan: inout ContinuePlan, now: Date) throws {
-        if plan.forks { plan.sessionID = try TranscriptFork.fork(plan.conversation) }
-        guard let folder = plan.cardFolder else { return }
-        let target = folder.appending(path: SessionSync.cardName(for: plan.sessionID))
-        // A window that opened this session before has its card already; Claude opens that one.
-        guard !fm.fileExists(atPath: target.path) else { plan.cardWritten = false; return }
-        let source = plan.conversation.card.flatMap(ConversationIndex.readCard)
-        let carried = plan.model.map { $0.kind == .carried }
-        let model = carried == true ? plan.conversation.model : ConversationIndex.lastModel(of: plan.conversation.transcript)
-        guard let card = ContinuationCard.make(for: plan.conversation, source: source, sessionID: plan.sessionID,
-                                               forked: plan.forks, model: model, effort: plan.conversation.effort, now: now)
-        else { return }
-        let localized = SessionSync(paths: paths, dataDirs: dataDirs).localized(card, for: dataDir(of: plan.destination))
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        try localized.write(to: target, options: .atomic)
-        plan.cardWritten = true
+    /// Claude writes `local_<session id>.json` when it imports a session; sessions the window knew already
+    /// are left as `nil`.
+    private func confirmImported(_ plans: inout [ContinuePlan], known: Set<String>, cards: URL?, since: Date) async {
+        let awaited = plans.indices.filter { !known.contains(plans[$0].sessionID) }
+        guard let cards, !awaited.isEmpty else { return }
+        let deadline = Date().addingTimeInterval(importWait)
+        var seen = Set<String>()
+        repeat {
+            seen = SessionCards.sessions(in: cards, modifiedSince: since.addingTimeInterval(-2))
+            if awaited.allSatisfy({ seen.contains(plans[$0].sessionID) }) { break }
+            try? await Task.sleep(for: .seconds(1))
+        } while Date() < deadline
+        for i in awaited { plans[i].opened = seen.contains(plans[i].sessionID) }
+    }
+
+    /// Makes the copy a plan calls for.
+    func prepare(_ plan: inout ContinuePlan) throws {
+        if plan.forks { plan.sessionID = try TranscriptFork.fork(plan.conversation, claudeDir: paths.claudeDir) }
+    }
+
+    /// The accounts that may continue work touching `folders` (see `FolderRules`); `nil` when no rule applies.
+    public func allowedAccounts(for folders: [String]) throws -> (accounts: Set<String>, rules: [FolderRule])? {
+        let rules: [FolderRule]
+        do { rules = try FolderRules(paths: paths).load() } catch { throw ProfileError.rulesUnreadable(error.localizedDescription) }
+        return FolderRules.allowedAccounts(for: folders, in: rules)
+    }
+
+    /// Refuses a destination whose account a folder rule doesn't list; an account whose email can't be read is refused too.
+    func checkRules(folders: [String], destination: String) throws {
+        guard let allowed = try allowedAccounts(for: folders) else { return }
+        let dataDir = dataDir(of: destination)
+        let email = DesktopData.accountID(in: dataDir).flatMap { email(in: dataDir, accountID: $0) }
+        guard let email, allowed.accounts.contains(email.lowercased()) else {
+            throw ProfileError.notAllowed(folders: allowed.rules.map(\.folder), accounts: allowed.accounts.sorted(),
+                                          label: label(of: destination), email: email)
+        }
     }
 
     @discardableResult
@@ -456,9 +528,14 @@ public final class ProfileManager: @unchecked Sendable {
         if destination == "main" { try await openMain(links: links) } else { try await open(destination, links: links) }
     }
 
-    /// Local conversations of every window, most recent first.
+    /// Local conversations of every window, most recent first, each marked if a running Claude Code process has it open.
     public func conversations() -> [Conversation] {
-        ConversationIndex.scan(paths: paths, windows: windows)
+        let live = LiveSessions.ids(claudeDir: paths.claudeDir)
+        return ConversationIndex.scan(paths: paths, windows: windows).map { found in
+            var conversation = found
+            conversation.hasLiveProcess = conversation.kind != .cowork && live.contains(conversation.sessionID)
+            return conversation
+        }
     }
 
     /// Refreshes session cards before a cold launch, even when the manager is not running.

@@ -23,6 +23,8 @@ final class AppModel: ObservableObject {
     @Published var diagnostics: [Diagnostics.Entry] = []
     @Published private(set) var setupWarning: String?
     @Published var pendingRemoval: ProfileStatus?
+    /// Which accounts may continue work in which folders; `nil` if the rules file can't be read.
+    @Published private(set) var folderRules: [FolderRule]? = []
 
     let manager: ProfileManager
     let isDemo = ProcessInfo.processInfo.environment["CLAUDE_PROFILES_DEMO"] == "1"
@@ -79,9 +81,18 @@ final class AppModel: ObservableObject {
     /// An open subscription that has reached its limit, so its work may need to continue elsewhere.
     var limitReached: ProfileStatus? { statuses.first { $0.isRunning && isAtLimit($0) } }
 
-    /// Where to continue by default: the signed-in subscription not at its limit with the most weekly headroom,
-    /// preferring recent samples (see `DestinationRanking.ranked`).
-    func bestDestination(excluding excluded: String?) -> String? { DestinationRanking.best(statuses, excluding: excluded) }
+    /// Where to continue by default: the signed-in subscription not at its limit with the most weekly headroom
+    /// (see `DestinationRanking.ranked`), among those signed in with `accounts` if given.
+    func bestDestination(excluding excluded: String?, accounts: Set<String>? = nil) -> String? {
+        DestinationRanking.best(statuses, excluding: excluded, accounts: accounts)
+    }
+
+    /// The accounts that may continue work touching `folders`, by the folder rules; `nil` when no rule applies.
+    /// Rules that can't be read allow nothing.
+    func allowedAccounts(for folders: [String]) -> (accounts: Set<String>, rules: [FolderRule])? {
+        guard let rules = folderRules else { return ([], []) }
+        return FolderRules.allowedAccounts(for: folders, in: rules)
+    }
 
     /// “ · usage as of 5h ago” when a subscription's sample is too old to compare by; empty otherwise.
     func staleNote(_ id: String) -> String {
@@ -118,9 +129,11 @@ final class AppModel: ObservableObject {
         Task.detached {
             let fresh = manager.statuses()
             let problem = manager.registryError
+            let rules = try? FolderRules(paths: manager.paths).load()
             await MainActor.run {
                 if self.statuses != fresh { self.statuses = fresh }
                 if self.registryError != problem { self.registryError = problem }
+                if self.folderRules != rules { self.folderRules = rules }
                 self.restartAfterFirstSignIn(fresh)
             }
         }
