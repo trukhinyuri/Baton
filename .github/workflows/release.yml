@@ -28,6 +28,10 @@ jobs:
             echo 'Release tag must be v<major.minor.patch> and match VERSION.' >&2
             exit 1
           fi
+          if grep -qxF "## $version — unreleased" CHANGELOG.md; then
+            echo "CHANGELOG.md still says $version is unreleased; give it the release date." >&2
+            exit 1
+          fi
           notes_file="$RUNNER_TEMP/release-notes.md"
           awk -v version="$version" '
             /^## / {

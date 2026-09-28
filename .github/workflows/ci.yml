@@ -76,3 +76,13 @@ jobs:
         env:
           LEVELDB_COMPAT: "1"
         run: swift test --filter LevelDBCompat
+
+  repo:
+    name: Docs and repository files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Docs
+        run: scripts/check-docs.sh
+      - name: Repository files
+        run: scripts/check-repo.sh
