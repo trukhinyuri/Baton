@@ -8,6 +8,9 @@ import Foundation
 /// directory of every profile lets you continue a session from any window.
 /// Native Project / Remote Control workers retain their account-and-organization scope; copying a card
 /// does not grant access to its server project or bridge. Ambiguous copies made by old releases are preserved.
+/// A copy for another account leaves out what the first account granted or connected (Remote Control bridges,
+/// connectors, browser and computer-use grants, and the permission mode unless the profile keeps it); copies
+/// between windows of one account are exact.
 ///
 /// Cards are copied, not symlinked: Claude Desktop creates these directories with `mkdir` and fails on symlinks.
 ///
@@ -52,6 +55,9 @@ public struct SessionSync: Sendable {
     public var liveSessionIDs: Set<String>?
     /// Email of an account signed in to a data directory, for folder rules.
     public var email: @Sendable (URL, String) -> String? = { DesktopData.email(in: $0, accountID: $1) }
+    /// Whether copies from other accounts keep `permissionMode` in a data directory's cards: the profile's
+    /// “carry permission mode” choice. `nil` reads `carryPermissionMode` from each profile in the registry.
+    public var carriesPermissionMode: (@Sendable (URL) -> Bool)?
 
     /// - Parameter dataDirs: every Claude Desktop data directory to keep in sync, main one included.
     public init(paths: Paths, dataDirs: [URL]) {
@@ -104,8 +110,10 @@ public struct SessionSync: Sendable {
                         if facts.imported, Self.cardName(for: transcript) == name { importedByFolder[pair.path, default: []].insert(name) }
                     }
                     guard let modified = SyncFolders.modificationDate(url) else { continue }
-                    if let known = cards[name], known.modified >= modified { continue }
-                    cards[name] = Card(modified: modified, data: data, facts: facts)
+                    let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantFuture
+                    let found = Card(modified: modified, data: data, facts: facts, account: Self.account(of: pair), created: created)
+                    if let known = cards[name], !found.supersedes(known) { continue }
+                    cards[name] = found
                 } else if name.hasPrefix("deleted_") {
                     tombstones.insert(name)
                     tombstonesByScope[scope, default: []].insert(name)
@@ -148,10 +156,12 @@ public struct SessionSync: Sendable {
             return allowed.accounts.contains(known)
         }
 
+        let carriers = carriesPermissionMode == nil ? permissionModeCarriers() : []
         let backup = Backup(paths: paths, now: now)
         for pair in pairs {
             let dataDir = dataDir(of: pair)
-            let scope = Self.scope(of: pair)
+            let scope = Self.scope(of: pair), account = Self.account(of: pair)
+            let keepsPermissionMode = carriesPermissionMode?(dataDir) ?? carriers.contains(dataDir.standardizedFileURL.path)
             let windowOpen = isWindowOpen?(dataDir) ?? !propagateDeletions
             let applicableTombstones = markers(in: scope)
             var deletedNames = Set(applicableTombstones.map { Self.cardName(for: String($0.dropFirst("deleted_".count))) })
@@ -197,12 +207,19 @@ public struct SessionSync: Sendable {
                 if !present.contains(name), let transcript = card.facts.transcript, heldTranscripts.contains(transcript) { continue }
                 // A native worker's cwd is coupled to remoteControlSpawn.folder and its server bridge.
                 // Even within one account/organization, preserve the complete card byte-for-byte.
-                var data = native ? card.data : localized(card.data, for: dataDir, linking: !dryRun), modified = card.modified
+                let existing = present.contains(name) ? try? Data(contentsOf: target) : nil
+                // What another account granted or connected stays with that account; this window keeps its own.
+                func shared(_ base: Data) -> Data {
+                    let local = localized(base, for: dataDir, linking: !dryRun)
+                    guard card.account != account else { return local }
+                    return Self.withoutAccountFields(local, winner: card.data, existing: existing, keepPermissionMode: keepsPermissionMode)
+                }
+                var data = native ? card.data : shared(card.data), modified = card.modified
                 if present.contains(name) {
-                    guard let current = SyncFolders.modificationDate(target), let own = try? Data(contentsOf: target) else { continue }
+                    guard let current = SyncFolders.modificationDate(target), let own = existing else { continue }
                     if current >= card.modified.addingTimeInterval(-1) {
                         // This copy is as new as any; it may still need this window's scratch folder path.
-                        data = native ? own : localized(own, for: dataDir, linking: !dryRun)
+                        data = native ? own : shared(own)
                         modified = current
                     }
                     guard own != data else { continue }
@@ -267,6 +284,61 @@ public struct SessionSync: Sendable {
         var modified: Date
         var data: Data
         var facts: CardFacts
+        /// The account of the folder this copy was found in.
+        var account: String
+        var created: Date
+
+        /// Newer than `other`. Of copies that are the same file, the one written first is where the card was made.
+        func supersedes(_ other: Card) -> Bool {
+            if data == other.data { return created < other.created }
+            return modified > other.modified
+        }
+    }
+
+    static func account(of pair: URL) -> String { pair.deletingLastPathComponent().lastPathComponent }
+
+    /// Data directories of profiles that chose to keep `permissionMode` in cards shared from other accounts.
+    func permissionModeCarriers() -> Set<String> {
+        guard let data = try? Data(contentsOf: paths.registryFile),
+              let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
+        return Set(entries.compactMap { entry in
+            guard entry["carryPermissionMode"] as? Bool == true, let id = entry["id"] as? String else { return nil }
+            return paths.dataDir(for: id).standardizedFileURL.path
+        })
+    }
+
+    /// Card fields that belong to the account a session was used under: Remote Control bridges and messages,
+    /// connectors and their tools, browser and computer-use grants, and the permission mode unless kept.
+    static func isAccountScoped(_ key: String, keepPermissionMode: Bool) -> Bool {
+        ["bridgeSessionIds", "peerReceipts", "remoteMcpServersConfig", "enabledMcpTools", "chromePermissionMode", "cuGrantFlags"].contains(key)
+            || key.hasPrefix("remoteControl") || (key == "permissionMode" && !keepPermissionMode)
+    }
+
+    /// `base` as another account's window gets it: account-scoped fields dropped, local stdio tools (`local:`) kept
+    /// enabled, and this window's own value of each such field kept. A value that equals the `winner`'s came from
+    /// the other account, by an earlier copy; one that differs was set here. Unchanged fields keep their bytes.
+    static func withoutAccountFields(_ base: Data, winner: Data, existing: Data?, keepPermissionMode: Bool) -> Data {
+        guard let members = JSONMembers.parse([UInt8](base)) else { return base }
+        let theirs = JSONMembers.parse([UInt8](winner)).map(JSONMembers.values) ?? [:]
+        let mine = existing.flatMap { JSONMembers.parse([UInt8]($0)) }.map(JSONMembers.values) ?? [:]
+        func own(_ key: String) -> ArraySlice<UInt8>? { mine[key].flatMap { $0 == theirs[key] ? nil : $0 } }
+        var result: [JSONMembers.Member] = [], changed = false
+        for member in members {
+            guard isAccountScoped(member.name, keepPermissionMode: keepPermissionMode) else { result.append(member); continue }
+            var value = own(member.name)
+            if value == nil, member.name == "enabledMcpTools", let tools = JSONMembers.parse(Array(member.value)) {
+                value = JSONMembers.object(tools.filter { $0.name.hasPrefix("local:") })
+            }
+            if let value { result.append(JSONMembers.Member(name: member.name, key: member.key, value: value)) }
+            changed = changed || value != member.value
+        }
+        let names = Set(members.map(\.name))
+        for member in (existing.flatMap { JSONMembers.parse([UInt8]($0)) } ?? [])
+        where !names.contains(member.name) && isAccountScoped(member.name, keepPermissionMode: keepPermissionMode) && own(member.name) != nil {
+            result.append(member)
+            changed = true
+        }
+        return changed ? Data(JSONMembers.object(result)) : base
     }
 
     /// The data directory a session folder belongs to, as given rather than as listed: Claude writes paths with
@@ -552,5 +624,100 @@ struct Backup {
             if (try? discard(day)) != nil { moved += 1 }
         }
         return moved
+    }
+}
+
+/// The top-level members of a JSON object, each with the exact bytes of its key and value, so that an object can
+/// be rebuilt with some members dropped or replaced and everything else as it was.
+enum JSONMembers {
+    struct Member {
+        /// The decoded key.
+        var name: String
+        /// The key as written, quotes included.
+        var key: ArraySlice<UInt8>
+        var value: ArraySlice<UInt8>
+    }
+
+    static func values(_ members: [Member]) -> [String: ArraySlice<UInt8>] {
+        Dictionary(members.map { ($0.name, $0.value) }, uniquingKeysWith: { _, last in last })
+    }
+
+    /// Compact, the way `JSON.stringify` writes it.
+    static func object(_ members: [Member]) -> ArraySlice<UInt8> {
+        var bytes: [UInt8] = [UInt8(ascii: "{")]
+        for (i, member) in members.enumerated() {
+            if i > 0 { bytes.append(UInt8(ascii: ",")) }
+            bytes += member.key
+            bytes.append(UInt8(ascii: ":"))
+            bytes += member.value
+        }
+        bytes.append(UInt8(ascii: "}"))
+        return bytes[...]
+    }
+
+    /// `nil` if `json` isn't exactly one well-formed object at the top.
+    static func parse(_ json: [UInt8]) -> [Member]? {
+        var i = 0
+        func skipSpace() { while i < json.count, [0x20, 0x09, 0x0A, 0x0D].contains(json[i]) { i += 1 } }
+        /// Moves past the string starting at `i`.
+        func skipString() -> Bool {
+            i += 1
+            while i < json.count, json[i] != UInt8(ascii: "\"") { i += json[i] == UInt8(ascii: "\\") ? 2 : 1 }
+            guard i < json.count else { return false }
+            i += 1
+            return true
+        }
+        func skipValue() -> Bool {
+            guard i < json.count else { return false }
+            switch json[i] {
+            case UInt8(ascii: "\""): return skipString()
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                var depth = 0
+                while i < json.count {
+                    switch json[i] {
+                    case UInt8(ascii: "\""): if !skipString() { return false }; continue
+                    case UInt8(ascii: "{"), UInt8(ascii: "["): depth += 1
+                    case UInt8(ascii: "}"), UInt8(ascii: "]"): depth -= 1
+                    default: break
+                    }
+                    i += 1
+                    if depth == 0 { return true }
+                }
+                return false
+            default:
+                let start = i
+                while i < json.count, ![UInt8(ascii: ","), UInt8(ascii: "}"), UInt8(ascii: "]"), 0x20, 0x09, 0x0A, 0x0D].contains(json[i]) { i += 1 }
+                return i > start
+            }
+        }
+        skipSpace()
+        guard i < json.count, json[i] == UInt8(ascii: "{") else { return nil }
+        i += 1
+        skipSpace()
+        var members: [Member] = []
+        if i < json.count, json[i] == UInt8(ascii: "}") {
+            i += 1
+        } else {
+            while true {
+                guard i < json.count, json[i] == UInt8(ascii: "\""), case let keyStart = i, skipString() else { return nil }
+                let key = json[keyStart..<i]
+                guard let name = (try? JSONSerialization.jsonObject(with: Data(key), options: .fragmentsAllowed)) as? String else { return nil }
+                skipSpace()
+                guard i < json.count, json[i] == UInt8(ascii: ":") else { return nil }
+                i += 1
+                skipSpace()
+                let valueStart = i
+                guard skipValue() else { return nil }
+                members.append(Member(name: name, key: key, value: json[valueStart..<i]))
+                skipSpace()
+                guard i < json.count else { return nil }
+                if json[i] == UInt8(ascii: ",") { i += 1; skipSpace(); continue }
+                guard json[i] == UInt8(ascii: "}") else { return nil }
+                i += 1
+                break
+            }
+        }
+        skipSpace()
+        return i == json.count ? members : nil
     }
 }

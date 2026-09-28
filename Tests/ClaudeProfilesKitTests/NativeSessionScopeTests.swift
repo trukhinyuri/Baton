@@ -24,10 +24,12 @@ struct NativeSessionScopeTests {
         #expect(report.accountBoundCards == 1)
         #expect(report.ambiguousAccountBoundCards == 0)
         #expect(box.read(same.appending(path: "local_worker.json")) == Self.worker)
+        #expect(box.read(otherOrg.appending(path: "local_ordinary.json")) == Self.ordinary,
+                "bridgeSessionIds by itself does not prevent an ordinary local session being continued")
+        #expect(box.read(otherAccount.appending(path: "local_ordinary.json")) == #"{"sessionId":"local_ordinary","title":"Normal local session","cwd":"/shared/repo"}"#,
+                "another account gets the session without the Remote Control fields of this one")
         for pair in [otherAccount, otherOrg] {
             #expect(!box.exists(pair.appending(path: "local_worker.json")))
-            #expect(box.read(pair.appending(path: "local_ordinary.json")) == Self.ordinary,
-                    "bridgeSessionIds by itself does not prevent an ordinary local session being continued")
             let index = try #require(SettingsSync.readJSON(pair.appending(path: "archived-sessions.idx")))
             #expect(index["archived"] as? [String] == ["local_ordinary"])
         }
