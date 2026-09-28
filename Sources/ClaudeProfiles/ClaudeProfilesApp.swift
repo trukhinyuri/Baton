@@ -21,6 +21,9 @@ struct ClaudeProfilesApp: App {
                 Button("Continue work…") { model.isContinuing = true }
                 Button("Check sessions…") { model.checkSessions() }
             }
+            CommandGroup(replacing: .help) {
+                Button("Report a problem…") { model.isReporting = true }
+            }
         }
 
         MenuBarExtra {
@@ -60,6 +63,11 @@ struct MenuBarContent: View {
             openWindow(id: "main")
             NSApp.activate()
             model.isContinuing = true
+        }
+        Button("Report a problem…") {
+            openWindow(id: "main")
+            NSApp.activate()
+            model.isReporting = true
         }
         Divider()
         Button("Quit Claude Profiles") { NSApp.terminate(nil) }.keyboardShortcut("q")

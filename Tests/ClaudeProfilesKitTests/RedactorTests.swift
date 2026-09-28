@@ -150,6 +150,7 @@ struct RedactorTests {
         var r = redactor()
         #expect(r.redact("Missing: /Users/robin.k/src/secret-merger-plans") == "Missing: <folder>")
         #expect(r.redact("Missing: /Volumes/Ext/Users/robin.k/acme") == "Missing: <folder>")
+        #expect(r.redact("Can’t read /Users/robin.k/src/acme/.claude: denied. Open ~/src/acme.") == "Can’t read <folder>: denied. Open <folder>.")
     }
 
     @Test func tokenShapedStringsAreStripped() {

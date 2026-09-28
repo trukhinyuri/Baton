@@ -248,6 +248,7 @@ struct ContentView: View {
         .sheet(isPresented: $model.isAdding) { AddProfileSheet(model: model) }
         .sheet(isPresented: $model.isContinuing) { ContinueWorkSheet(model: model) }
         .sheet(isPresented: $model.isCheckingSessions) { DiagnosticsSheet(entries: model.diagnostics) }
+        .sheet(isPresented: $model.isReporting) { ReportSheet(model: model) }
         .confirmationDialog(
             "Remove \(model.pendingRemoval.map { $0.email ?? "Claude \($0.label)" } ?? "")?",
             isPresented: Binding(get: { model.pendingRemoval != nil }, set: { if !$0 { model.pendingRemoval = nil } }),
@@ -312,6 +313,8 @@ struct ContentView: View {
             }
             Spacer()
             Button("Check sessions…") { model.checkSessions() }
+            Button("Report a problem…") { model.isReporting = true }
+                .help("Shows a redacted report to review, then opens a prefilled GitHub issue. Nothing is sent automatically.")
             Link(destination: URL(string: "https://github.com/trukhinyuri/ClaudeProfiles#staying-within-anthropics-terms")!) {
                 Label("Fair use", systemImage: "checkmark.shield")
             }

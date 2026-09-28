@@ -47,8 +47,10 @@ public struct Redactor: Sendable {
         }
         for pattern in Self.tokens { text = Self.replace(pattern, in: text) { _ in "<token>" } }
         text = Self.replace(Self.syncedFolder, in: text) { _ in "<folder>" }
-        text = Self.replace(Self.path, in: text) { path in
-            Self.safePaths.contains { path == $0 || path.hasPrefix($0 + "/") } ? path : "<folder>"
+        text = Self.replace(Self.path, in: text) { match in
+            // A sentence's closing period stays outside the path.
+            let path = String(match.reversed().drop { $0 == "." }.reversed()), end = String(match.dropFirst(path.count))
+            return (Self.safePaths.contains { path == $0 || path.hasPrefix($0 + "/") } ? path : "<folder>") + end
         }
         for (i, names) in profiles.enumerated() {
             for name in names.sorted(by: { $0.count > $1.count }) {
@@ -76,7 +78,7 @@ public struct Redactor: Sendable {
         #"(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[0-9])(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*[A-Z])[A-Za-z0-9+/]{40,}={0,2}"#,
     ]
     /// An absolute or `~` path starting a word; it runs to the next space, quote or bracket.
-    static let path = #"(?<=^|[\s"“”'‘’(\[])~?/[^\s"“”'‘’()\[\],;]*"#
+    static let path = #"(?<=^|[\s"“”'‘’(\[])~?/[^\s"“”'‘’()\[\],;:]*"#
     /// Locations that name no one's work. Anything else, such as `~/src/…` or `/Volumes/…`, becomes `<folder>`.
     /// `~/.claude` and temporary folders are not among them: Claude Code names its folders there after the project's path.
     static let safePaths = ["~/Library", "~/Applications", "/Applications", "/Library", "/System", "/usr", "/bin", "/sbin",

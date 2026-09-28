@@ -130,6 +130,139 @@ public struct FeedbackReport: Sendable {
 
     public static let logLimit = 200
 
+    // MARK: Sharing
+
+    /// Where issues go. One place, so a renamed project changes only this.
+    public static let repository = "trukhinyuri/ClaudeProfiles"
+    /// GitHub answers 414 to a long link; about 6,000 URL-encoded characters of body are safe.
+    public static let urlBodyLimit = 6_000
+
+    /// The report followed by the user's own words, which are shown and sent exactly as typed.
+    public func document(description: String) -> String {
+        let words = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return markdown }
+        return markdown + "\n### What happened (written by the user, not redacted)\n" + words + "\n"
+    }
+
+    public struct IssueLink: Sendable, Equatable {
+        public var url: URL
+        /// `false` when the link carries only the summary and the full report has to be attached.
+        public var isComplete: Bool
+    }
+
+    /// A prefilled "new issue" form. Opening it sends nothing: the user reviews the text on GitHub and submits it.
+    /// - Parameter attachment: the file name to mention when the report is too long for the link.
+    public func issueLink(title: String, description: String, attachment: String? = nil) -> IssueLink {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        func link(_ body: String) -> URL {
+            let query = [("template", "bug_report.yml"), ("title", title.isEmpty ? "Problem report" : title), ("body", body)]
+                .map { "\($0)=\(Self.encode($1))" }.joined(separator: "&")
+            return URL(string: "https://github.com/\(Self.repository)/issues/new?\(query)")!
+        }
+        let full = document(description: description)
+        if Self.encode(full).count <= Self.urlBodyLimit { return IssueLink(url: link(full), isComplete: true) }
+        let note = "\n### Full report\nThe full report is too long for this form. It is on the clipboard and saved as "
+            + "\(attachment.map { "“\($0)”" } ?? "a file"): attach that file here or paste it below.\n"
+        var words = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        func short() -> String { summary + note + (words.isEmpty ? "" : "\n### What happened (written by the user, not redacted)\n" + words + "\n") }
+        while Self.encode(short()).count > Self.urlBodyLimit && !words.isEmpty {
+            words = String(words.prefix(max(0, words.count - max(50, words.count / 4)))) + (words.count > 50 ? "…" : "")
+            if words == "…" { words = "" }
+        }
+        return IssueLink(url: link(short()), isComplete: false)
+    }
+
+    /// Opens the issue form. A report too long for the link is also copied and saved in `folder`, for the user
+    /// to attach. Nothing is uploaded: `open` hands the link to the browser.
+    public func share(title: String, description: String, saveIn folder: URL, copy: (String) -> Void,
+                      open: (URL) -> Void) throws -> (link: IssueLink, file: URL?) {
+        var link = issueLink(title: title, description: description)
+        var file: URL?
+        if !link.isComplete {
+            let text = document(description: description)
+            let saved = try Self.save(text, in: folder)
+            copy(text)
+            link = issueLink(title: title, description: description, attachment: saved.lastPathComponent)
+            file = saved
+        }
+        open(link.url)
+        return (link, file)
+    }
+
+    /// Writes `text` as a new dated file in `folder`, never replacing one.
+    public static func save(_ text: String, in folder: URL, now: Date = Date()) throws -> URL {
+        let stamp = now.formatted(Date.VerbatimFormatStyle(format: "\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased))\(minute: .twoDigits)\(second: .twoDigits)",
+                                                           timeZone: .current, calendar: Calendar(identifier: .gregorian)))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var url = folder.appending(path: "Claude Profiles report \(stamp).md")
+        var n = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = folder.appending(path: "Claude Profiles report \(stamp) \(n).md"); n += 1
+        }
+        try Data(text.utf8).write(to: url, options: .withoutOverwriting)
+        return url
+    }
+
+    /// Percent-encodes everything but unreserved characters, so `+`, `&` and `#` survive in a query value.
+    static func encode(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")) ?? ""
+    }
+
+    // MARK: CLI
+
+    public enum CommandError: LocalizedError {
+        case usage(String)
+        public var errorDescription: String? { switch self { case .usage(let text): text } }
+    }
+
+    /// `claude-profiles report [--save PATH] [--open]`: prints the report, saves it with `--save`, and with
+    /// `--open` opens the prefilled issue form (a long report is also copied and saved, in `downloads` unless
+    /// `--save` says where). Returns what to print.
+    public static func command(_ arguments: [String], paths: Paths, user: String = NSUserName(), errors: [String] = [],
+                               log: [String] = [], downloads: URL, copy: (String) -> Void, open: (URL) -> Void) throws -> String {
+        var savePath: String?
+        var opens = false
+        var rest = arguments.dropFirst()
+        while let argument = rest.popFirst() {
+            switch argument {
+            case "--open": opens = true
+            case "--save":
+                guard let path = rest.popFirst(), !path.hasPrefix("--") else { throw CommandError.usage("--save needs a file path") }
+                savePath = path
+            default: throw CommandError.usage("report takes only --save PATH and --open, not “\(argument)”")
+            }
+        }
+        let report = FeedbackReport(facts: .collect(paths: paths, user: user, errors: errors, log: log))
+        let text = report.document(description: "")
+        var lines = [text]
+        var saved: URL?
+        if let savePath {
+            let url = URL(fileURLWithPath: (savePath as NSString).expandingTildeInPath)
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                saved = try save(text, in: url)
+            } else {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data(text.utf8).write(to: url)
+                saved = url
+            }
+            lines.append("Saved to \(saved!.path).")
+        }
+        if opens {
+            var link = report.issueLink(title: "", description: "", attachment: saved?.lastPathComponent)
+            if !link.isComplete {
+                let file = try saved ?? save(text, in: downloads)
+                copy(text)
+                link = report.issueLink(title: "", description: "", attachment: file.lastPathComponent)
+                lines.append("The report is too long for the link: it is on the clipboard and in \(file.path). Attach that file to the issue.")
+            }
+            open(link.url)
+            lines.append("Opened a prefilled GitHub issue in your browser. Review it there and submit it yourself.")
+        }
+        lines.append("Nothing was sent.")
+        return lines.joined(separator: "\n")
+    }
+
     static var architecture: String {
         #if arch(arm64)
         "arm64"

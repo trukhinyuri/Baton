@@ -7,10 +7,14 @@ final class AppModel: ObservableObject {
     @Published private(set) var statuses: [ProfileStatus] = []
     @Published private(set) var lastSync: Date?
     @Published private(set) var lastSyncChanges = 0
-    @Published private(set) var syncError: String?
-    @Published private(set) var registryError: String?
+    @Published private(set) var syncError: String? { didSet { remember(syncError) } }
+    @Published private(set) var registryError: String? { didSet { remember(registryError) } }
     @Published var busyMessage: String?
-    @Published var errorMessage: String?
+    @Published var errorMessage: String? { didSet { remember(errorMessage) } }
+    @Published var isReporting = false
+    /// Errors and warnings the window showed, newest last, for a problem report. Kept only in memory.
+    private(set) var recentErrors: [String] = []
+    private var lastSyncReport: SyncReport?
     @Published var isAdding = false
     @Published var isContinuing = false
     @Published private(set) var conversations: [Conversation] = []
@@ -21,7 +25,7 @@ final class AppModel: ObservableObject {
     private var noticeTask: Task<Void, Never>?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
-    @Published private(set) var setupWarning: String?
+    @Published private(set) var setupWarning: String? { didSet { remember(setupWarning) } }
     @Published var pendingRemoval: ProfileStatus?
     /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
     @Published private(set) var installWarning: String?
@@ -79,6 +83,19 @@ final class AppModel: ObservableObject {
               let app = running.first(where: { $0.processIdentifier == other }) else { return }
         app.activate()
         exit(0)
+    }
+
+    private func remember(_ message: String?) {
+        guard let message, recentErrors.last != message else { return }
+        recentErrors = Array((recentErrors + [message]).suffix(20))
+    }
+
+    /// The problem report for the preview sheet, from what the app already knows. Nothing is sent.
+    func makeReport() async -> FeedbackReport {
+        let (paths, errors, sync, date) = (manager.paths, recentErrors, lastSyncReport, lastSync)
+        return await Task.detached {
+            FeedbackReport(facts: .collect(paths: paths, errors: errors, lastSync: sync, lastSyncDate: date))
+        }.value
     }
 
     var profiles: [ProfileStatus] { statuses }
@@ -186,6 +203,7 @@ final class AppModel: ObservableObject {
                 guard let report = try manager.syncSessions() else { return }
                 await MainActor.run {
                     self.lastSync = Date()
+                    self.lastSyncReport = report
                     self.lastSyncChanges = report.changes
                     self.syncError = nil
                 }

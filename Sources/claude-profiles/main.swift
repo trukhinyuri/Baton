@@ -1,3 +1,4 @@
+import AppKit
 import ClaudeProfilesKit
 import Foundation
 
@@ -30,6 +31,9 @@ USAGE
   claude-profiles rule <folder> --only <email>[,<email>…] | --remove
                                                  Let only these accounts continue work in the folder and
                                                  inside it, or drop the folder's rule
+  claude-profiles report [--save PATH] [--open]  Print a redacted problem report; --save writes it to a file,
+                                                 --open opens a prefilled GitHub issue to review and submit.
+                                                 Nothing is sent
   claude-profiles --version                     Print the version and commit
 """
 
@@ -272,6 +276,12 @@ do {
         } else {
             try IconRenderer.icnsData(for: IconRenderer.appIcon()).write(to: url)
         }
+    case "report":
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? manager.paths.home
+        print(try FeedbackReport.command(args, paths: manager.paths, downloads: downloads, copy: { text in
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }, open: { NSWorkspace.shared.open($0) }))
     case "--version", "version":
         print(BuildInfo.current.description)
     case "help", "-h", "--help":
