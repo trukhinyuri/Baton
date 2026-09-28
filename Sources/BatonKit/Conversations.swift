@@ -32,6 +32,9 @@ public struct Conversation: Identifiable, Equatable, Sendable {
     public var effort: String?
     /// A running `claude` process has this session open (see `LiveSessions`), so it may write to it at any time.
     public var hasLiveProcess = false
+    /// The window that last ran this Code session, as far as Baton saw (`LimitTracker`); `nil` when unknown. It is
+    /// never offered as the place to continue it.
+    public var runningIn: String?
 
     public var id: String { sessionID }
 
@@ -133,7 +136,8 @@ public enum ConversationIndex {
         in folder: String, since: Date, from conversations: [Conversation], to destination: String,
         limit: Int = continueAllLimit
     ) -> (batch: [Conversation], leftOut: Int) {
-        let matching = recent(in: folder, since: since, from: conversations).sorted { $0.lastActivity > $1.lastActivity }
+        let matching = recent(in: folder, since: since, from: conversations).filter { $0.runningIn != destination }
+            .sorted { $0.lastActivity > $1.lastActivity }
         let batch = Array(matching.prefix(max(limit, 0)))
         return (batch, matching.count - batch.count)
     }

@@ -42,6 +42,8 @@ public struct ContinuePlan: Equatable, Sendable {
     public var carried: TranscriptFork.Report?
     /// What stays behind in the source window: remote connectors, Remote Control, scheduled tasks, Rewind points.
     public var wontFollow: [Continuation.WontFollowItem] = []
+    /// What happens to other windows' "Auto-continue when limits reset" for this session (see `AutoResume`).
+    public var autoResume: [AutoResumeNote] = []
 
     public init(conversation: Conversation, destination: String, forks: Bool, model: ModelNote?) {
         self.conversation = conversation; self.destination = destination; self.forks = forks
@@ -501,14 +503,12 @@ public enum ModelSupport {
     }
 }
 
-/// Where to continue: which signed-in subscriptions have headroom, judged by samples that may be hours old.
+/// Where to continue: which signed-in subscriptions have headroom, judged by samples that may be hours old and by the
+/// reset times Claude recorded (see `Limits`).
 public enum DestinationRanking {
-    /// Out of five-hour or weekly quota by its latest recorded usage.
+    /// Blocked at its five-hour or weekly limit: reached, its reset not yet passed, and no extra usage to go on with.
     public static func isAtLimit(_ status: ProfileStatus, now: Date = Date()) -> Bool {
-        guard status.isSignedIn, let usage = status.usage else { return false }
-        if let five = usage.fiveHour, five >= 100, !usage.isFiveHourStale(now: now) { return true }
-        if let week = usage.week, week >= 100, now.timeIntervalSince(usage.sampledAt) < 7 * 86_400 { return true }
-        return false
+        status.isSignedIn && status.limits.isAtLimit(now: now)
     }
 
     /// Whether `status` is signed in with one of `accounts` (email addresses); any window when `accounts` is `nil`.
@@ -517,10 +517,11 @@ public enum DestinationRanking {
         return status.email.map { accounts.contains($0.lowercased()) } ?? false
     }
 
-    /// Signed-in subscriptions not at their limit, and signed in with one of `accounts` if given, by the weekly
-    /// usage of their latest sample, lowest first; a newer sample first when two are equal, then those without
-    /// usage data. An old sample isn't pushed back: a subscription kept in reserve is sampled only when its window
-    /// is used, so its sample is old precisely because nobody has used it since.
+    /// Signed-in subscriptions not at their limit, and signed in with one of `accounts` if given, by the limit that
+    /// binds them, lowest first: the higher of five-hour usage (while its five hours last) and weekly usage. A newer
+    /// sample comes first when two are equal, then those without usage data. An old weekly sample isn't pushed back:
+    /// a subscription kept in reserve is sampled only when its window is used, so its sample is old precisely because
+    /// nobody has used it since.
     public static func ranked(
         _ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
         now: Date = Date()
@@ -529,8 +530,8 @@ public enum DestinationRanking {
             $0.isSignedIn && $0.id != excluded && !isAtLimit($0, now: now) && isAllowed($0, accounts: accounts)
         }
         return candidates.enumerated().sorted { a, b in
-            let (wa, wb) = (a.element.usage?.week ?? 101, b.element.usage?.week ?? 101)
-            if wa != wb { return wa < wb }
+            let (la, lb) = (a.element.limits.load(now: now) ?? 101, b.element.limits.load(now: now) ?? 101)
+            if la != lb { return la < lb }
             let (sa, sb) = (a.element.usage?.sampledAt ?? .distantPast, b.element.usage?.sampledAt ?? .distantPast)
             return sa != sb ? sa > sb : a.offset < b.offset
         }.map(\.element)

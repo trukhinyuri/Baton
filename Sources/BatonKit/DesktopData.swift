@@ -115,20 +115,10 @@ public enum DesktopData {
         return .ambiguous(reason: "several organizations: open the Code tab once")
     }
 
+    /// The newest sample of the signed-in account's organizations in this window; the newest overall only when the
+    /// file or the window doesn't say which organization a sample is for (`UsageHistory.current`).
     public static func usage(in dataDir: URL) -> Usage? {
-        struct History: Decodable {
-            struct Sample: Decodable {
-                struct Values: Decodable { let fh: Int?; let sd: Int? }
-                let t: Double
-                let u: Values?
-            }
-            let samples: [Sample]
-        }
-        guard let data = try? Data(contentsOf: dataDir.appending(path: "plan-usage-history.json")),
-            let history = try? JSONDecoder().decode(History.self, from: data),
-            let last = history.samples.max(by: { $0.t < $1.t })
-        else { return nil }
-        return Usage(fiveHour: last.u?.fh, week: last.u?.sd, sampledAt: Date(timeIntervalSince1970: last.t / 1000))
+        UsageHistory.samples(in: dataDir).last?.usage
     }
 
     /// Email of the signed-in account, taken from the claude.ai profile that Claude Desktop caches in IndexedDB.
