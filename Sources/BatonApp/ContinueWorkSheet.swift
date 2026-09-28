@@ -13,6 +13,10 @@ final class ContinueWorkForm: ObservableObject {
     @Published var alsoNewSession = true
     @Published var problem: String?
     @Published var plan: ContinuePlan?
+    /// The source window resets within minutes and continues the session by itself: offered before continuing.
+    @Published var offer: AutoResumeOffer?
+    /// Whether the offer came from “Continue All”.
+    @Published var offerForAll = false
 }
 
 struct ContinueWorkSheet: View {
@@ -34,6 +38,9 @@ struct ContinueWorkSheet: View {
 
     private var selected: Conversation? { model.conversations.first { $0.id == form.selection } }
 
+    /// The window the selected conversation belongs to or last ran in: never offered for it.
+    private var source: String? { selected.flatMap { $0.ownerID ?? $0.runningIn } }
+
     /// The accounts the folder rules allow for the selected conversation; `nil` when no rule applies.
     private var allowed: (accounts: Set<String>, rules: [FolderRule])? {
         selected.flatMap { model.allowedAccounts(for: $0.folders) }
@@ -42,7 +49,7 @@ struct ContinueWorkSheet: View {
     /// Signed-in windows the selected conversation can move to, within its folder rule.
     private var destinations: [ProfileStatus] {
         model.statuses.filter {
-            $0.isSignedIn && $0.id != selected?.ownerID && DestinationRanking.isAllowed($0, accounts: allowed?.accounts)
+            $0.isSignedIn && $0.id != source && DestinationRanking.isAllowed($0, accounts: allowed?.accounts)
         }
     }
 
@@ -141,6 +148,13 @@ struct ContinueWorkSheet: View {
                         .font(.callout).foregroundStyle(note.isWarning ? Color.orange : Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let notes = form.plan?.autoResume, form.plan?.conversation.id == selected.id, form.plan?.destination == form.destination {
+                    ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
+                        Label(note.message(), systemImage: note.isWarning ? "exclamationmark.triangle" : "arrow.uturn.forward")
+                            .font(.callout).foregroundStyle(note.isWarning ? Color.orange : Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 if selected.kind == .cowork && selected.isActive() {
                     Label(
                         "This task was working less than a minute ago; the attached history may miss its last steps.",
@@ -219,12 +233,38 @@ struct ContinueWorkSheet: View {
         .onChange(of: form.selection) {
             form.problem = nil
             if !destinations.contains(where: { $0.id == form.destination }) {
-                form.destination = model.bestDestination(excluding: selected?.ownerID, accounts: allowed?.accounts) ?? ""
+                form.destination = model.bestDestination(excluding: source, accounts: allowed?.accounts) ?? ""
             }
             refreshPlan()
         }
         .onChange(of: form.destination) { refreshPlan() }
         .onChange(of: form.mode) { refreshPlan() }
+        .alert(
+            "The limit resets soon", isPresented: Binding(get: { form.offer != nil }, set: { if !$0 { form.offer = nil } }),
+            presenting: form.offer
+        ) { offer in
+            Button("Wait") { wait(offer) }.keyboardShortcut(.defaultAction)
+            Button("Continue Now") {
+                form.offer = nil
+                if form.offerForAll { goAll(now: true) } else { go(now: true) }
+            }
+        } message: { offer in
+            Text(offer.message())
+        }
+    }
+
+    /// Leaves the session to its own window, which picks it up after the reset; nothing is changed.
+    private func wait(_ offer: AutoResumeOffer) {
+        form.offer = nil
+        model.show(notice: offer.message())
+        dismiss()
+    }
+
+    /// The offer to wait, when the source window resets within minutes and would continue the work by itself.
+    private func offer(for conversations: [Conversation], in target: String) async -> AutoResumeOffer? {
+        guard !model.isDemo else { return nil }
+        let manager = model.manager
+        return await Task.detached { manager.autoResumeOffer(for: conversations, in: target) }.value
     }
 
     private var batchNeedsStop: Bool { form.mode == .same && folderBatch.contains { $0.mayStillWrite() } }
@@ -241,7 +281,7 @@ struct ContinueWorkSheet: View {
     private func chooseDefaults() {
         if form.selection == nil || selected == nil { form.selection = model.preselectedConversation ?? model.conversations.first?.id }
         if form.destination.isEmpty || !destinations.contains(where: { $0.id == form.destination }) {
-            form.destination = model.bestDestination(excluding: selected?.ownerID, accounts: allowed?.accounts) ?? ""
+            form.destination = model.bestDestination(excluding: source, accounts: allowed?.accounts) ?? ""
         }
     }
 
@@ -257,9 +297,9 @@ struct ContinueWorkSheet: View {
 
     private func destinationTitle(_ status: ProfileStatus) -> String {
         let name = status.isMain ? "Claude (main)" : "Claude \(status.label)"
-        if model.isAtLimit(status) { return name + " · limit reached" }
-        guard let usage = status.usage, let week = usage.week else { return name }
-        return name + " · \(week)% of week · as of \(relativeAge(since: usage.sampledAt))" + (usage.isFresh() ? "" : ", may be higher")
+        if model.isAtLimit(status) { return name + " · limit reached" + (LimitText.bindingReset(status.limits).map { ", \($0)" } ?? "") }
+        guard status.usage != nil else { return name }
+        return name + " · " + LimitText.summary(status.limits, usage: status.usage)
     }
 
     private func explanation(_ conversation: Conversation) -> String {
@@ -279,7 +319,7 @@ struct ContinueWorkSheet: View {
         }
     }
 
-    private func go() {
+    private func go(now: Bool = false) {
         guard let conversation = selected, !needsStop(conversation) else { return }
         form.working = true
         form.problem = nil
@@ -289,6 +329,12 @@ struct ContinueWorkSheet: View {
         let mode = form.mode
         let anyway = form.stopped == conversation.id
         Task {
+            if !now, let offer = await offer(for: [conversation], in: target) {
+                form.offerForAll = false
+                form.offer = offer
+                form.working = false
+                return
+            }
             do {
                 switch try await manager.continueConversation(conversation, in: target, mode: mode, anyway: anyway) {
                 case .openedSession(let plan):
@@ -302,8 +348,11 @@ struct ContinueWorkSheet: View {
                         plan.forks
                         ? "Baton passed to Claude \(label): a copy of “\(conversation.title)” is open there."
                         : "Baton passed to Claude \(label): “\(conversation.title)” is open there."
-                    // The footer shows two lines: a model warning goes before the light touch, never after it.
-                    if let note = plan.model, note.isWarning {
+                    // The footer shows two lines: another window continuing it by itself goes first, then a model warning,
+                    // before the light touch, never after it.
+                    if let note = plan.autoResume.first(where: \.isWarning) ?? plan.autoResume.first {
+                        text += " " + note.message()
+                    } else if let note = plan.model, note.isWarning {
                         text += " " + note.message(destination: label)
                     } else {
                         text += plan.forks ? " Same history, next runner." : " Same conversation, next runner."
@@ -321,7 +370,7 @@ struct ContinueWorkSheet: View {
         }
     }
 
-    private func goAll() {
+    private func goAll(now: Bool = false) {
         guard let folder, !batchNeedsStop else { return }
         let batch = folderBatch
         form.working = true
@@ -332,6 +381,12 @@ struct ContinueWorkSheet: View {
         let mode = form.mode
         let newSession = form.alsoNewSession ? folder : nil
         Task {
+            if !now, let offer = await offer(for: batch, in: target) {
+                form.offerForAll = true
+                form.offer = offer
+                form.working = false
+                return
+            }
             do {
                 let plans = try await manager.continueAll(batch, in: target, mode: mode, newSessionIn: newSession)
                 let missing = plans.filter { $0.opened == false }
@@ -348,7 +403,11 @@ struct ContinueWorkSheet: View {
                 var text =
                     "Baton passed to Claude \(label): opened \(plans.count) there" + (copies > 0 ? ", \(copies) as copies" : "")
                     + (newSession == nil ? "." : ", and started a new session.")
-                if let warning = plans.compactMap(\.model).first(where: \.isWarning) { text += " " + warning.message(destination: label) }
+                if let note = plans.flatMap(\.autoResume).first(where: \.isWarning) {
+                    text += " " + note.message()
+                } else if let warning = plans.compactMap(\.model).first(where: \.isWarning) {
+                    text += " " + warning.message(destination: label)
+                }
                 model.show(notice: text)
                 model.preselectedConversation = nil
                 dismiss()

@@ -38,6 +38,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var folderRules: [FolderRule]? = []
     /// Local only's optional extra, Mac-wide: off by default. See `CloudMoveLock`.
     @Published private(set) var cloudMoveLockOn = false
+    /// Windows blocked at a limit as of the last reload (see `LimitWatch`).
+    @Published private(set) var atLimit: Set<String> = []
+    private let limitWatch = LimitWatch()
 
     let manager: ProfileManager
     let isDemo = ProcessInfo.processInfo.environment["BATON_DEMO"] == "1"
@@ -94,6 +97,7 @@ final class AppModel: ObservableObject {
             else { return }
             Task { @MainActor in self?.reopenIfStartedWithoutProfile(pid) }
         }
+        limitWatch.start(self)
         // macOS reopens windows at login by starting each app copy without its arguments, possibly before this app.
         manager.recentlyStartedWithoutDataDir(within: 120).forEach(reopenIfStartedWithoutProfile)
     }
@@ -170,18 +174,18 @@ final class AppModel: ObservableObject {
     var profiles: [ProfileStatus] { statuses }
     var existingLabels: Set<String> { Set(statuses.compactMap { $0.profile?.label }) }
 
-    /// The signed-in profile with the most weekly headroom by a sample from the last three hours, if at least two
-    /// have such a sample. An older sample can be far too low: Claude records usage only while its window is used.
+    /// The signed-in profile with the most headroom by its binding limit and a sample from the last three hours, if at
+    /// least two have such a sample. An older sample can be far too low: Claude records usage only while its window is used.
     var suggestedID: String? { DestinationRanking.mostHeadroom(statuses) }
 
-    /// Out of five-hour or weekly quota by its latest recorded usage.
-    func isAtLimit(_ status: ProfileStatus, now: Date = Date()) -> Bool { DestinationRanking.isAtLimit(status, now: now) }
+    /// At its five-hour or weekly limit, and the reset Claude recorded for it hasn't passed (as of the last reload).
+    func isAtLimit(_ status: ProfileStatus) -> Bool { atLimit.contains(status.id) }
 
     /// An open subscription that has reached its limit, so its work may need to continue elsewhere.
     var limitReached: ProfileStatus? { statuses.first { $0.isRunning && isAtLimit($0) } }
 
-    /// Where to continue by default: the signed-in subscription not at its limit with the most weekly headroom
-    /// (see `DestinationRanking.ranked`), among those signed in with `accounts` if given.
+    /// Where to continue by default: the signed-in subscription not at its limit with the most headroom by its binding
+    /// limit (see `DestinationRanking.ranked`), among those signed in with `accounts` if given.
     func bestDestination(excluding excluded: String?, accounts: Set<String>? = nil) -> String? {
         DestinationRanking.best(statuses, excluding: excluded, accounts: accounts)
     }
@@ -232,6 +236,8 @@ final class AppModel: ObservableObject {
             let cloudLock = manager.cloudMoveLock.status() == .on
             await MainActor.run {
                 if self.statuses != fresh { self.statuses = fresh }
+                let blocked = self.limitWatch.update(fresh, model: self)
+                if self.atLimit != blocked { self.atLimit = blocked }
                 if self.registryError != problem { self.registryError = problem }
                 if self.folderRules != rules { self.folderRules = rules }
                 if self.cloudMoveLockOn != cloudLock { self.cloudMoveLockOn = cloudLock }
