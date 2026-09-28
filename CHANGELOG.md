@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Continue All in …** continues every Code session and Project branch of a folder with a message in the last day in one step, together with the branches of the same Projects that work in other folders, and can start a new session there; `claude-profiles continue --folder <path> --to <profile> [--since 24h] [--folder-only] [--new] [--dry-run]` does the same
+- **Continue All in …** continues the six most recent Code sessions and Project branches of a folder with a message in the last day in one step, together with the branches of the same Projects that work in other folders, and can start a new session there; `claude-profiles continue --folder <path> --to <profile> [--since 24h] [--max 6] [--folder-only] [--new] [--dry-run]` does the same and says how many older ones it left out
 - A session that a running Claude Code process has open, a Project branch, or a session with a message in the last 10 minutes continues as a copy by default, so two windows never write to one session; the copy takes the session's file history and environment with it. **Same session** / `--same` needs confirmation that the original was closed (`--anyway`), **As a copy** / `--fork` always copies
 - Links reach a closed window one by one: the first starts it, the rest follow once its window is on screen, and each continued session is confirmed by the card Claude imports; one that doesn't appear is reported
 - Folder rules (`claude-profiles rule <folder> --only <email>`) keep a folder's work in the listed accounts; continuing it into any other account is refused, and a damaged rules file stops every continuation

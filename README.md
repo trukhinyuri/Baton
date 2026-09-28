@@ -124,7 +124,7 @@ The signed-in subscription with the lowest weekly usage is preselected, and thos
 
 Two windows must not write to one session at the same time. **Automatic** therefore continues as a copy a session that a running Claude Code process still has open, a Project branch, whose coordinator may write to it again, and a session with a message in the last 10 minutes. A copy is a new session with the same history, file history and files. Other sessions continue as themselves. **Same session** and **As a copy** override this; for a session that may still be written to, **Same session** needs **I closed it** and then reads **Continue Anyway**. A Cowork task written to less than a minute ago may miss its last steps; stop it first.
 
-**Continue All in …** continues every Code session and Project branch of the selected conversation's folder with a message in the last day, in one step, together with the other branches of the same Projects, which often work in other folders; it can also start a new session in the folder. Branches that already belong to the destination are left out. A closed window is started with the first session and receives the others once it is on screen; the new session comes last, after the others are imported, so it is what the window shows. Each continued session is confirmed by the card Claude imports for it, and one that doesn't appear is reported instead of being counted.
+**Continue All in …** continues the six most recent Code sessions and Project branches of the selected conversation's folder with a message in the last day, in one step, together with the other branches of the same Projects, which often work in other folders; it can also start a new session in the folder. Branches that already belong to the destination are left out. Each one becomes a session in the destination window, so a busy folder moved whole would spend that subscription in minutes; continue older ones one at a time, or use `--max` on the command line. A closed window is started with the first session and receives the others once it is on screen; the new session comes last, after the others are imported, so it is what the window shows. Each continued session is confirmed by the card Claude imports for it, and one that doesn't appear is reported instead of being counted.
 
 Claude imports each continued session itself, with its usual folder trust and permission checks. The session takes its model from its history; when that differs from the model the destination would use, the sheet and `--dry-run` ask you to choose the model in the destination before your first message.
 
@@ -145,9 +145,9 @@ claude-profiles doctor [--json]               Inspect sessions and per-profile s
 claude-profiles conversations [--all]         List local conversations that can continue in another profile
 claude-profiles continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
                                                Continue one in another profile, as Continue work… does
-claude-profiles continue --folder <path> --to <profile> [--since 24h] [--same [--anyway]|--fork]
+claude-profiles continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
                          [--folder-only] [--new] [--dry-run]
-                                               Continue every session of a folder, as Continue All does
+                                               Continue the most recent sessions of a folder, as Continue All does
 claude-profiles rules                         Show which accounts may continue the work in which folders
 claude-profiles rule <folder> --only <email>[,<email>…] | --remove
                                                Keep a folder's work in those accounts, or drop its rule

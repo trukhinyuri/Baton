@@ -17,12 +17,12 @@ USAGE
   claude-profiles continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
                                                  Continue a conversation in another profile: a Code session
                                                  as itself or as a copy, or a new Cowork task with its history
-  claude-profiles continue --folder <path> --to <profile> [--since 24h] [--same [--anyway]|--fork]
+  claude-profiles continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
                            [--folder-only] [--new] [--dry-run]
-                                                 Continue every Code session and Project branch of a folder
+                                                 Continue the Code sessions and Project branches of a folder
                                                  with a message since --since, in one go, with the other
-                                                 branches of their Projects unless --folder-only; --new also
-                                                 starts a new session there
+                                                 branches of their Projects unless --folder-only: the --max
+                                                 most recent (6 unless given); --new also starts a new session
                                                  By default Project branches and sessions still open in a
                                                  running Claude Code process or with a message in the last
                                                  10 minutes continue as a copy; --same keeps the same session
@@ -204,9 +204,13 @@ do {
         let destination = destinationID(to)
         guard let since = duration(value(of: "--since", in: args) ?? "24h") else { fail("--since takes a duration such as 24h, 90m or 2d") }
         let mode = continueMode()
-        let found = ConversationIndex.recent(in: path, since: Date().addingTimeInterval(-since), from: manager.conversations(),
-                                             folderOnly: args.contains("--folder-only"))
-            .filter { !($0.kind == .projectBranch && $0.ownerID == destination) }
+        guard let limit = Int(value(of: "--max", in: args) ?? String(ConversationIndex.continueAllLimit)), limit > 0 else {
+            fail("--max takes a positive number, such as 6")
+        }
+        let (found, leftOut) = ConversationIndex.continueAllBatch(in: path, since: Date().addingTimeInterval(-since),
+                                                                  from: manager.conversations(), to: destination,
+                                                                  folderOnly: args.contains("--folder-only"), limit: limit)
+        let leftOutNote = leftOut == 0 ? "" : " Left out \(leftOut) older ones: continue them one at a time or raise --max."
         let newSession = args.contains("--new") ? path : nil
         guard !found.isEmpty || newSession != nil else {
             fail("no Code sessions or Project branches in \(path) with a message in the last \(value(of: "--since", in: args) ?? "24h"). Widen --since or add --new.")
@@ -217,7 +221,7 @@ do {
         let also = elsewhere > 0 ? " (\(elsewhere) of them Project branches working in other folders)" : ""
         if args.contains("--dry-run") {
             printPlan(try manager.plan(found, in: destination, mode: mode, newSessionIn: newSession), to: destination)
-            print("Would open \(found.count)\(also) in Claude \(label)" + (newSession.map { " and start a new session in \($0)" } ?? "") + ". Nothing was changed.")
+            print("Would open \(found.count)\(also) in Claude \(label)" + (newSession.map { " and start a new session in \($0)" } ?? "") + ". Nothing was changed." + leftOutNote)
             break
         }
         let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession)
@@ -226,7 +230,7 @@ do {
         reportUnopened(plans, in: destination)
         let checked = plans.filter { $0.opened == true }.count
         print("Opened \(plans.count)\(also) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "")
-              + (checked > 0 ? "; \(checked) confirmed imported there" : "") + ". Nothing was sent.")
+              + (checked > 0 ? "; \(checked) confirmed imported there" : "") + ". Nothing was sent." + leftOutNote)
     case "continue":
         guard args.count >= 2, let to = value(of: "--to", in: args) else { fail("continue needs a session (or “last”) and --to PROFILE") }
         let all = manager.conversations()
