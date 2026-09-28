@@ -439,7 +439,9 @@ public final class ProfileManager: @unchecked Sendable {
                 note = ModelNote.decide(model: model, historyModel: ConversationIndex.lastModel(of: conversation.transcript),
                                         supported: supported?.contains(model) == true, card: source)
             }
-            return ContinuePlan(conversation: conversation, destination: destination, forks: forks, model: note)
+            var plan = ContinuePlan(conversation: conversation, destination: destination, forks: forks, model: note)
+            if let card = conversation.card { plan.wontFollow = Continuation.wontFollow(card: card, target: dataDir, paths: paths) }
+            return plan
         }
     }
 

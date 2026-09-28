@@ -40,6 +40,8 @@ public struct ContinuePlan: Equatable, Sendable {
     /// What the copy brought along from the session's scratchpad and what stayed there; `nil` until a copy is
     /// made, and for a copy reused from an earlier Continue.
     public var carried: TranscriptFork.Report?
+    /// What stays behind in the source window: remote connectors, Remote Control, scheduled tasks, Rewind points.
+    public var wontFollow: [Continuation.WontFollowItem] = []
 
     public init(conversation: Conversation, destination: String, forks: Bool, model: ModelNote?) {
         self.conversation = conversation; self.destination = destination; self.forks = forks

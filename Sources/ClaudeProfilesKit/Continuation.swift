@@ -178,3 +178,134 @@ public struct CoworkHandoff: Sendable {
         }
     }
 }
+
+/// What a conversation leaves behind when it continues in another window, said before it continues.
+public enum Continuation {
+    public struct WontFollowItem: Equatable, Sendable {
+        public enum Kind: String, Sendable {
+            /// Connectors that run on Anthropic's side for the source account.
+            case remoteConnectors
+            /// The conversation is reachable through Remote Control from the source window.
+            case remoteControlBridge
+            /// A Remote Control or Project worker: its cloud session belongs to the source account.
+            case accountBoundWorker
+            /// Scheduled tasks of the source account, which keep running in their own window.
+            case scheduledTasks
+            /// Claude Desktop copied this conversation itself; Rewind can't go back past that copy.
+            case rewindLimit
+        }
+
+        public var kind: Kind
+        /// One plain sentence for the Continue sheet.
+        public var detail: String
+        /// Connector or task names, when known.
+        public var names: [String]
+    }
+
+    /// Everything about the conversation of `card` that does not come along into the window whose data directory
+    /// is `target`. Reads only; names and counts, never URLs or other values from the card.
+    public static func wontFollow(card: URL, target: URL, paths: Paths) -> [WontFollowItem] {
+        guard let data = try? Data(contentsOf: card),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [] }
+        let account = card.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+        let source = card.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let sameAccount = DesktopData.accountID(in: target)?.lowercased() == account.lowercased()
+        var items: [WontFollowItem] = []
+
+        if !sameAccount {
+            let connectors = remoteConnectors(in: object)
+            if !connectors.isEmpty {
+                items.append(WontFollowItem(kind: .remoteConnectors,
+                                            detail: "Connectors of the other account don't come along; connect them again in this window if you need them.",
+                                            names: connectors))
+            }
+        }
+        if hasBridge(object) {
+            items.append(WontFollowItem(kind: .remoteControlBridge,
+                                        detail: "Remote Control keeps pointing at the original window; the continued conversation is local to this one.",
+                                        names: []))
+        }
+        if SessionSync.isAccountBoundCard(object) {
+            items.append(WontFollowItem(kind: .accountBoundWorker,
+                                        detail: "This is a Remote Control or Project worker; its cloud session stays with its own account.",
+                                        names: []))
+        }
+        if !sameAccount, let tasks = scheduledTasks(in: source, account: account) {
+            items.append(WontFollowItem(kind: .scheduledTasks,
+                                        detail: "Scheduled tasks stay with the original account and keep running in its window.",
+                                        names: tasks))
+        }
+        let id = (object["cliSessionId"] as? String)?.lowercased()
+        if ((object["priorCliSessionIds"] as? [String]) ?? []).contains(where: { $0.lowercased() != id }) {
+            items.append(WontFollowItem(kind: .rewindLimit,
+                                        detail: "Claude Desktop copied this conversation earlier; Rewind to points before that copy works only in the original conversation.",
+                                        names: []))
+        }
+        return items
+    }
+
+    /// Remote connector names: the account's remote MCP servers and every tool that isn't a local (`local:`) one.
+    static func remoteConnectors(in card: [String: Any]) -> [String] {
+        var names = Set<String>()
+        switch card["remoteMcpServersConfig"] {
+        case let servers as [String: Any]: names.formUnion(servers.keys)
+        case let servers as [Any]:
+            for server in servers {
+                if let name = server as? String { names.insert(name) }
+                else if let name = (server as? [String: Any])?["name"] as? String { names.insert(name) }
+            }
+        default: break
+        }
+        for key in ((card["enabledMcpTools"] as? [String: Any]) ?? [:]).keys where !key.hasPrefix("local:") {
+            let parts = key.split(separator: ":", omittingEmptySubsequences: false)
+            names.insert(parts.count > 1 ? parts.dropLast().joined(separator: ":") : key)
+        }
+        return names.filter { !$0.isEmpty }.sorted()
+    }
+
+    static func hasBridge(_ card: [String: Any]) -> Bool {
+        if let ids = card["bridgeSessionIds"] as? [Any], !ids.isEmpty { return true }
+        return card.contains { key, value in
+            guard key.hasPrefix("remoteControl"), key != "remoteControlSpawn" else { return false }
+            switch value {
+            case is NSNull: return false
+            case let flag as Bool: return flag
+            case let text as String: return !text.isEmpty
+            case let list as [Any]: return !list.isEmpty
+            case let object as [String: Any]: return !object.isEmpty
+            default: return true
+            }
+        }
+    }
+
+    /// The source account's scheduled task names, `[]` when its window has them switched on but none can be named,
+    /// or nil when it has none.
+    static func scheduledTasks(in dataDir: URL, account: String) -> [String]? {
+        var names: [String] = [], found = false
+        for folder in [SessionSync.sessionsFolder, CoworkSync.sessionsFolder] {
+            let accountDir = dataDir.appending(path: "\(folder)/\(account)", directoryHint: .isDirectory)
+            for org in (try? FileManager.default.contentsOfDirectory(at: accountDir, includingPropertiesForKeys: nil)) ?? [] {
+                guard let data = try? Data(contentsOf: org.appending(path: "scheduled-tasks.json")),
+                      let object = try? JSONSerialization.jsonObject(with: data) else { continue }
+                let tasks: [Any]
+                switch object {
+                case let list as [Any]: tasks = list
+                case let wrapper as [String: Any] where wrapper["tasks"] is [Any]: tasks = wrapper["tasks"] as! [Any]
+                case let byID as [String: Any]: tasks = Array(byID.values)
+                default: tasks = []
+                }
+                guard !tasks.isEmpty else { continue }
+                found = true
+                for task in tasks {
+                    let fields = task as? [String: Any] ?? [:]
+                    if let name = (fields["name"] ?? fields["title"] ?? fields["id"]) as? String { names.append(name) }
+                }
+            }
+        }
+        if !found {
+            let prefs = (SettingsSync.readJSON(dataDir.appending(path: "claude_desktop_config.json"))?["preferences"] as? [String: Any]) ?? [:]
+            found = SettingsSync.windowPreferences.contains { prefs[$0] as? Bool == true }
+        }
+        return found ? Array(Set(names)).sorted() : nil
+    }
+}

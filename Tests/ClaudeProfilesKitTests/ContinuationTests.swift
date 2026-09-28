@@ -339,3 +339,52 @@ struct ContinueValidationTests {
         #expect(!box.exists(box.paths.handoffsDir), "nothing is prepared for a window that cannot take it")
     }
 }
+
+@Suite("What stays behind when a conversation continues")
+struct WontFollowTests {
+    @Test func wontFollowListsConnectorsBridgeAndTasks() throws {
+        let box = try Sandbox()
+        try box.signIn(box.main, account: Sandbox.accountA)
+        try box.signIn(box.work, account: Sandbox.accountB)
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let card = a.appending(path: "local_1.json")
+        try box.write(#"""
+        {"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","priorCliSessionIds":["99999999-2222-3333-4444-555555555555"],
+         "remoteMcpServersConfig":{"Linear":{"url":"https://example.invalid/mcp"},"Drive":{"url":"https://example.invalid/d"}},
+         "enabledMcpTools":{"local:files:read_file":true,"Linear:create_issue":true,"Slack:post":false},
+         "bridgeSessionIds":["bridge-1"]}
+        """#, to: card)
+        try box.transcript(lines: [#"{"type":"history-suppression","cause":"fork_inherit","sessionId":"\#(Sandbox.cli)"}"#,
+                                   #"{"type":"user","sessionId":"\#(Sandbox.cli)","message":{"role":"user","content":"hi"}}"#])
+        try box.write(#"{"preferences":{"ccdScheduledTasksEnabled":true}}"#, to: box.main.appending(path: "claude_desktop_config.json"))
+        let cowork = box.main.appending(path: "local-agent-mode-sessions/\(Sandbox.accountA)/org-1", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: cowork, withIntermediateDirectories: true)
+        try box.write(#"[{"id":"t1","name":"Morning digest"},{"id":"t2","name":"Weekly report"}]"#, to: cowork.appending(path: "scheduled-tasks.json"))
+
+        let items = Continuation.wontFollow(card: card, target: box.work, paths: box.paths)
+
+        let kinds = items.map(\.kind)
+        #expect(kinds == [.remoteConnectors, .remoteControlBridge, .scheduledTasks, .rewindLimit])
+        let connectors = try #require(items.first { $0.kind == .remoteConnectors })
+        #expect(connectors.names == ["Drive", "Linear", "Slack"], "local stdio tools follow; remote ones don't")
+        #expect(items.first { $0.kind == .scheduledTasks }?.names == ["Morning digest", "Weekly report"])
+        #expect(items.allSatisfy { !$0.detail.isEmpty && !$0.detail.contains("example.invalid") })
+
+        // Another window of the same account has the same connectors and tasks.
+        try box.signIn(box.work, account: Sandbox.accountA)
+        #expect(Continuation.wontFollow(card: card, target: box.work, paths: box.paths).map(\.kind) == [.remoteControlBridge, .rewindLimit])
+
+        // A Remote Control or Project worker belongs to its account.
+        try box.signIn(box.work, account: Sandbox.accountB)
+        try box.write(#"{"sessionId":"local_2","cliSessionId":"22222222-2222-3333-4444-555555555555","rcChild":true}"#, to: a.appending(path: "local_2.json"))
+        #expect(Continuation.wontFollow(card: a.appending(path: "local_2.json"), target: box.work, paths: box.paths).map(\.kind)
+                .contains(.accountBoundWorker))
+
+        // An ordinary local session leaves nothing behind.
+        try box.write(#"{}"#, to: box.main.appending(path: "claude_desktop_config.json"))
+        try FileManager.default.removeItem(at: cowork.appending(path: "scheduled-tasks.json"))
+        try box.write(#"{"sessionId":"local_3","cliSessionId":"33333333-2222-3333-4444-555555555555","cwd":"/repo","enabledMcpTools":{"local:files:read_file":true}}"#,
+                      to: a.appending(path: "local_3.json"))
+        #expect(Continuation.wontFollow(card: a.appending(path: "local_3.json"), target: box.work, paths: box.paths).isEmpty)
+    }
+}
