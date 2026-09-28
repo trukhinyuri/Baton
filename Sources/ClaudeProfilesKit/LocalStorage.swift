@@ -50,6 +50,8 @@ public struct LocalStorage: Sendable {
 /// A LevelDB database directory, read and appended to without opening it the way LevelDB does.
 struct LevelDBStore: Sendable {
     let dir: URL
+    /// Runs just before a new log file is moved into place; tests use it to open the database at that moment.
+    var willRename: (@Sendable () -> Void)?
     private var fm: FileManager { .default }
 
     var exists: Bool { fm.fileExists(atPath: dir.appending(path: "CURRENT").path) }
@@ -129,6 +131,13 @@ struct LevelDBStore: Sendable {
         try handle.write(contentsOf: Data(bytes))
         try handle.synchronize()
         try handle.close()
+        // A window that opened the database since the first check would never replay the new log's batch
+        // in order with its own writes, so the log isn't put in place.
+        willRename?()
+        guard !isInUse else {
+            try? fm.removeItem(at: tmpURL)
+            throw LocalStorageError.databaseInUse
+        }
         try fm.moveItem(at: tmpURL, to: finalURL)
         let dirFD = open(dir.path, O_RDONLY)
         if dirFD >= 0 { fsync(dirFD); close(dirFD) }

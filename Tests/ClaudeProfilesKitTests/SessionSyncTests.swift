@@ -31,8 +31,11 @@ struct Sandbox {
         if let modified { try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path) }
     }
 
+    /// Assumes no running `claude` process, so tests never look at this Mac's processes.
     func sync(propagateDeletions: Bool = false) throws -> SessionSync.Report {
-        try SessionSync(paths: paths, dataDirs: [main, work]).run(propagateDeletions: propagateDeletions)
+        var sync = SessionSync(paths: paths, dataDirs: [main, work])
+        sync.liveSessionIDs = []
+        return try sync.run(propagateDeletions: propagateDeletions)
     }
 
     func read(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
