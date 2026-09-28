@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/trukhinyuri/ClaudeProfiles/security/advisories/new
+    about: Report it privately, not in a public issue.
+  - name: Claude Desktop or Claude Code itself
+    url: https://support.claude.com
+    about: Problems that also happen without Claude Profiles belong to Anthropic support.

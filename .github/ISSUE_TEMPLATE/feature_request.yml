@@ -1,0 +1,23 @@
+name: Suggest a change
+description: Something Claude Profiles could do better.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The work you are doing and where Claude Profiles gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      description: Claude Profiles stays local and within Anthropic's terms ([why](https://github.com/trukhinyuri/ClaudeProfiles#staying-within-anthropics-terms)).
+      options:
+        - label: This does not need sign-in tokens, network calls, pooled limits or switching accounts automatically.
+          required: true
