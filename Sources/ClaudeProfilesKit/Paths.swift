@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Every location Claude Profiles reads or writes. Injected everywhere so tests can run in a sandbox.
@@ -18,9 +19,33 @@ public struct Paths: Sendable, Equatable {
     }
 
     public static var standard: Paths {
-        Paths(home: FileManager.default.homeDirectoryForCurrentUser,
-              claudeApp: URL(fileURLWithPath: "/Applications/Claude.app"),
-              claudeTempDir: URL(fileURLWithPath: "/private/tmp/claude-\(getuid())", isDirectory: true))
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return Paths(home: home,
+                     claudeApp: findClaude(home: home, lookup: launchServicesApps),
+                     claudeTempDir: URL(fileURLWithPath: "/private/tmp/claude-\(getuid())", isDirectory: true))
+    }
+
+    /// Claude Desktop: where Launch Services has it, else in /Applications, else in ~/Applications. Profile engines
+    /// and launchers carry its bundle id too and are never taken for it, nor is a copy in the Trash.
+    /// - Returns: `/Applications/Claude.app` when there is no Claude anywhere, so the error names the usual place.
+    public static func findClaude(home: URL, systemApplications: URL = URL(fileURLWithPath: "/Applications", isDirectory: true),
+                                  lookup: (String) -> [URL]) -> URL {
+        let own = Paths(home: home, claudeApp: home).launchersDir.standardizedFileURL.path + "/"
+        func isClaude(_ app: URL) -> Bool {
+            let path = app.standardizedFileURL.path
+            guard !path.hasPrefix(own), !path.contains("/.Trash/") else { return false }
+            return ClaudeVersion.bundleInfo(at: app)?["CFBundleIdentifier"] as? String == ClaudeVersion.bundleIdentifier
+        }
+        let candidates = lookup(ClaudeVersion.bundleIdentifier)
+            + [systemApplications.appending(path: "Claude.app"), home.appending(path: "Applications/Claude.app")]
+        return candidates.first(where: isClaude) ?? systemApplications.appending(path: "Claude.app", directoryHint: .isDirectory)
+    }
+
+    /// Launch Services' preferred copy first, then every other copy it knows.
+    static func launchServicesApps(_ bundleIdentifier: String) -> [URL] {
+        let workspace = NSWorkspace.shared
+        return [workspace.urlForApplication(withBundleIdentifier: bundleIdentifier)].compactMap { $0 }
+            + workspace.urlsForApplications(withBundleIdentifier: bundleIdentifier)
     }
 
     public var applicationSupport: URL { home.appending(path: "Library/Application Support", directoryHint: .isDirectory) }

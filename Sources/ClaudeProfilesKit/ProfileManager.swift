@@ -156,6 +156,23 @@ public final class ProfileManager: @unchecked Sendable {
         }
     }
 
+    /// A warning when the installed Claude Desktop is outside the versions this release was tested with.
+    public var claudeVersionWarning: String? { ClaudeVersion.warning(for: ClaudeVersion.installed(at: paths.claudeApp)) }
+
+    /// Run once when the app or the CLI starts. Gives `claude://` links back to the main app after an abandoned
+    /// sign-in, and says when Claude Desktop is missing or outside the tested versions.
+    /// - Returns: warnings to show; empty when all is well.
+    public func startUpChecks() -> [String] {
+        guard fm.fileExists(atPath: paths.claudeApp.path) else {
+            return ["Claude Desktop wasn't found in Applications. Install it, then open Claude Profiles again."]
+        }
+        var warnings: [String] = []
+        do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) }
+        catch { warnings.append(error.localizedDescription) }
+        if let warning = claudeVersionWarning { warnings.append(warning) }
+        return warnings
+    }
+
     /// The profile whose window currently receives sign-in links, if any.
     public var profileSigningIn: String? { signInRouting.state?.profileID }
 

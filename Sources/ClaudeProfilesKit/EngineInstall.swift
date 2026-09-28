@@ -144,3 +144,61 @@ enum EngineInstall {
         }
     }
 }
+
+/// The Claude Desktop versions this release of Claude Profiles was tested with, and a warning outside them.
+public enum ClaudeVersion {
+    public static let bundleIdentifier = "com.anthropic.claudefordesktop"
+    /// Move the upper end after testing a newer Claude Desktop: card fields, preference keys and links can change.
+    public static let tested: ClosedRange<Version> = "2.9939.2"..."2.9939.2"
+
+    /// A dotted version compared part by part as numbers, so 2.10000 is newer than 2.9939.
+    public struct Version: Comparable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
+        public let text: String
+        public init(_ text: String) { self.text = text }
+        public init(stringLiteral text: String) { self.text = text }
+        public var description: String { text }
+
+        var parts: [Int] { text.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 } }
+
+        private static func compare(_ a: Version, _ b: Version) -> Int {
+            let x = a.parts, y = b.parts
+            for i in 0..<max(x.count, y.count) {
+                let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
+                if l != r { return l < r ? -1 : 1 }
+            }
+            return 0
+        }
+        public static func < (a: Version, b: Version) -> Bool { compare(a, b) < 0 }
+        public static func == (a: Version, b: Version) -> Bool { compare(a, b) == 0 }
+    }
+
+    static func bundleInfo(at app: URL) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: app.appending(path: "Contents/Info.plist")) else { return nil }
+        return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
+    }
+
+    /// The marketing version of the Claude Desktop at `app`, such as `2.9939.2`.
+    public static func installed(at app: URL) -> String? {
+        bundleInfo(at: app)?["CFBundleShortVersionString"] as? String
+    }
+
+    static var testedText: String {
+        tested.lowerBound == tested.upperBound ? tested.lowerBound.text : "\(tested.lowerBound)–\(tested.upperBound)"
+    }
+
+    /// nil inside the tested range; otherwise one sentence for the window list, `doctor` and the start-up check.
+    public static func warning(for version: String?) -> String? {
+        guard let version, !version.isEmpty else {
+            return "Couldn't read which version of Claude Desktop is installed; Claude Profiles was tested with \(testedText)."
+        }
+        let installed = Version(version)
+        if installed < tested.lowerBound {
+            return "Claude Desktop \(version) is older than the versions Claude Profiles was tested with (\(testedText)). Update Claude Desktop."
+        }
+        if installed > tested.upperBound {
+            return "Claude Desktop \(version) is newer than the versions Claude Profiles was tested with (\(testedText)). "
+                + "Sessions are still shared and Local only checks each setting before writing it; if something looks wrong, send feedback."
+        }
+        return nil
+    }
+}
