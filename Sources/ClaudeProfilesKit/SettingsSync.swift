@@ -31,6 +31,8 @@ public struct SettingsSync: Sendable {
 
     public let paths: Paths
     private var fm: FileManager { .default }
+    /// Where builds older than the two newest go; the Trash unless a test substitutes it.
+    var discard: @Sendable (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
 
     public init(paths: Paths) { self.paths = paths }
 
@@ -326,14 +328,27 @@ public struct SettingsSync: Sendable {
 
     /// Copies Claude Code versions the profile doesn't have yet. Only finished downloads (with `.verified`) are
     /// copied, under a temporary name first, so a profile never sees half a build.
+    /// Keeps the current Claude Code build and the one before it in the profile: the newest two finished builds
+    /// of the main app and the profile together. Older finished builds in the profile go to the Trash; a download
+    /// in progress (no `.verified`) is left alone.
     private func copyBuilds(into dataDir: URL) throws -> Int {
         let from = paths.mainDataDir.appending(path: Self.builds, directoryHint: .isDirectory)
         let to = dataDir.appending(path: Self.builds, directoryHint: .isDirectory)
+        func finished(in folder: URL) -> [String] {
+            ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).filter {
+                !$0.hasPrefix(".") && fm.fileExists(atPath: folder.appending(path: "\($0)/.verified").path)
+            }
+        }
+        let main = finished(in: from), own = finished(in: to)
+        let keep = Set(Set(main + own).sorted { ClaudeVersion.Version($0) > ClaudeVersion.Version($1) }.prefix(2))
         var copied = 0
-        for version in (try? fm.contentsOfDirectory(atPath: from.path)) ?? [] where !version.hasPrefix(".") {
+        for version in own where !keep.contains(version) {
+            try discard(to.appending(path: version, directoryHint: .isDirectory))
+            copied += 1
+        }
+        for version in main where keep.contains(version) {
             let build = from.appending(path: version, directoryHint: .isDirectory)
-            guard fm.fileExists(atPath: build.appending(path: ".verified").path),
-                  !fm.fileExists(atPath: to.appending(path: version).path) else { continue }
+            guard !fm.fileExists(atPath: to.appending(path: version).path) else { continue }
             try fm.createDirectory(at: to, withIntermediateDirectories: true)
             let partial = to.appending(path: ".\(version)-\(UUID().uuidString)", directoryHint: .isDirectory)
             try fm.copyItem(at: build, to: partial)
