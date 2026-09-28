@@ -109,11 +109,27 @@ final class AppModel: ObservableObject {
     func refreshStatus() {
         guard !isDemo else { windowStatuses = DemoData.windowStatuses; return }
         let manager = manager
+        let (localOnly, pending) = localOnlyMaps()
         Task {
             windowStatuses = await Task.detached {
-                WindowStatus.collect(manager: manager, diagnostics: (try? Diagnostics.inspect(paths: manager.paths)) ?? [])
+                WindowStatus.collect(manager: manager, diagnostics: (try? Diagnostics.inspect(paths: manager.paths)) ?? [],
+                                     localOnly: localOnly, pending: pending)
             }.value
         }
+    }
+
+    /// Local only's on/off state per window, and per window a "waiting for a restart" line while it's `.pending`.
+    private func localOnlyMaps() -> (isOn: [String: Bool], pending: [String: [String]]) {
+        let localOnly = manager.localOnly
+        var isOn: [String: Bool] = [:]
+        var pending: [String: [String]] = [:]
+        for row in manager.localOnlyStatus() {
+            isOn[row.window] = row.status == .on
+            if row.status == .pending {
+                pending[row.window] = [localOnly.isEnabled(window: row.window) ? "Local only turns on" : "Local only turns off"]
+            }
+        }
+        return (isOn, pending)
     }
 
     /// Restarts a window so it applies pending changes; refused while a Claude Code session runs in it.
@@ -131,8 +147,9 @@ final class AppModel: ObservableObject {
     func makeReport() async -> FeedbackReport {
         guard !isDemo else { return FeedbackReport(facts: DemoData.reportFacts) }
         let (paths, errors, sync, date) = (manager.paths, recentErrors, lastSyncReport, lastSync)
+        let localOnly = localOnlyMaps().isOn
         return await Task.detached {
-            FeedbackReport(facts: .collect(paths: paths, errors: errors, log: LogTail.read(), lastSync: sync, lastSyncDate: date))
+            FeedbackReport(facts: .collect(paths: paths, errors: errors, log: LogTail.read(), lastSync: sync, lastSyncDate: date, localOnly: localOnly))
         }.value
     }
 

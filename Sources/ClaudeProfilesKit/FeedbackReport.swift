@@ -227,7 +227,8 @@ public struct FeedbackReport: Sendable {
     /// `--open` opens the prefilled issue form (a long report is also copied and saved, in `downloads` unless
     /// `--save` says where). Returns what to print.
     public static func command(_ arguments: [String], paths: Paths, user: String = NSUserName(), errors: [String] = [],
-                               log: [String] = [], downloads: URL, copy: (String) -> Void, open: (URL) -> Void) throws -> String {
+                               log: [String] = [], localOnly: [String: Bool] = [:], downloads: URL,
+                               copy: (String) -> Void, open: (URL) -> Void) throws -> String {
         var savePath: String?
         var opens = false
         var rest = arguments.dropFirst()
@@ -240,7 +241,7 @@ public struct FeedbackReport: Sendable {
             default: throw CommandError.usage("report takes only --save PATH and --open, not “\(argument)”")
             }
         }
-        let report = FeedbackReport(facts: .collect(paths: paths, user: user, errors: errors, log: log))
+        let report = FeedbackReport(facts: .collect(paths: paths, user: user, errors: errors, log: log, localOnly: localOnly))
         let text = report.document(description: "")
         var lines = [text]
         var saved: URL?

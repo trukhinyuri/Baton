@@ -356,7 +356,8 @@ do {
         }
     case "report":
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? manager.paths.home
-        print(try FeedbackReport.command(args, paths: manager.paths, log: LogTail.read(), downloads: downloads, copy: { text in
+        let localOnly = Dictionary(uniqueKeysWithValues: manager.localOnlyStatus().map { ($0.window, $0.status == .on) })
+        print(try FeedbackReport.command(args, paths: manager.paths, log: LogTail.read(), localOnly: localOnly, downloads: downloads, copy: { text in
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         }, open: { NSWorkspace.shared.open($0) }))
