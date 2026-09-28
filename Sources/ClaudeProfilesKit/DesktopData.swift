@@ -43,17 +43,75 @@ public enum DesktopData {
         return id
     }
 
-    /// UUID of the organization Claude Desktop uses for `accountID`, taken from the folders it creates per
-    /// account and organization. The most recently used one wins if there are several.
-    public static func organizationID(in dataDir: URL, accountID: String) -> String? {
+    /// Every organization folder that exists for `accountID` in `dataDir`, across both the Code and Cowork
+    /// session folders.
+    private static func organizationFolders(in dataDir: URL, accountID: String) -> [URL] {
         let fm = FileManager.default
-        let orgs = ["claude-code-sessions", "local-agent-mode-sessions"].flatMap { folder in
+        return ["claude-code-sessions", "local-agent-mode-sessions"].flatMap { folder in
             let account = dataDir.appending(path: "\(folder)/\(accountID)", directoryHint: .isDirectory)
             return ((try? fm.contentsOfDirectory(at: account, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
                 .filter { $0.lastPathComponent.count == 36 && UUID(uuidString: $0.lastPathComponent) != nil }
         }
+    }
+
+    /// UUID of the organization Claude Desktop uses for `accountID`, taken from the folders it creates per
+    /// account and organization. The most recently used one wins if there are several.
+    ///
+    /// A guess: nothing on disk says which organization Claude currently shows for this account when
+    /// there is more than one. Prefer `scope(dataDir:items:)`, which uses Claude's own record of that
+    /// when it has one.
+    public static func organizationID(in dataDir: URL, accountID: String) -> String? {
+        let orgs = organizationFolders(in: dataDir, accountID: accountID)
         let modified = { (url: URL) in (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast }
         return orgs.max(by: { modified($0) < modified($1) })?.lastPathComponent
+    }
+
+    /// UUIDs of every organization folder that exists for `accountID` in `dataDir`, across both the Code
+    /// and Cowork session folders.
+    public static func organizationIDs(in dataDir: URL, accountID: String) -> Set<String> {
+        Set(organizationFolders(in: dataDir, accountID: accountID).map(\.lastPathComponent))
+    }
+
+    /// How `scope(dataDir:items:)` resolved the account's current organization.
+    public enum ScopeSource: Equatable, Sendable {
+        /// Claude's own `lastSidebarScopeKey`, so this is exact.
+        case claude
+        /// A guess: the account has exactly one organization folder on disk.
+        case onlyOrgFolder
+    }
+
+    /// The account/organization scope Claude currently files sidebar and session state under, or why none
+    /// could be resolved.
+    public enum Scope: Equatable, Sendable {
+        case resolved(String, source: ScopeSource)
+        /// The account has more than one organization folder and Claude hasn't recorded which is current
+        /// (`reason` is meant for a person, for example in `doctor`).
+        case ambiguous(reason: String)
+
+        /// The `account/organization` value, when one could be resolved.
+        public var value: String? {
+            guard case .resolved(let value, source: _) = self else { return nil }
+            return value
+        }
+    }
+
+    /// Resolves the `account/organization` scope Claude currently uses for the account signed in to
+    /// `dataDir`: Claude's own `lastSidebarScopeKey`, read from `items` (that data directory's Local
+    /// Storage for `https://claude.ai`), when it names this account; otherwise the account's only
+    /// organization folder on disk; otherwise `.ambiguous`, when there is more than one and Claude hasn't
+    /// recorded which is current. `nil` only when `dataDir` has no signed-in account, or none of its
+    /// organization folders exist yet.
+    public static func scope(dataDir: URL, items: [String: String]) -> Scope? {
+        guard let account = accountID(in: dataDir) else { return nil }
+        if let store = items[InterfaceSync.sidebarKey].flatMap(InterfaceSync.object),
+           let state = store["state"] as? [String: Any],
+           let key = state["lastSidebarScopeKey"] as? String, key.hasPrefix(account + "/") {
+            return .resolved(key, source: .claude)
+        }
+        let orgs = organizationIDs(in: dataDir, accountID: account)
+        if orgs.isEmpty { return nil }
+        if orgs.count == 1, let only = orgs.first { return .resolved("\(account)/\(only)", source: .onlyOrgFolder) }
+        return .ambiguous(reason: "several organizations: open the Code tab once")
     }
 
     public static func usage(in dataDir: URL) -> Usage? {

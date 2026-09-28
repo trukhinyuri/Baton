@@ -474,8 +474,8 @@ public final class ProfileManager: @unchecked Sendable {
             try await openWindow(destination, links: newSession.map { [$0] } ?? [])
             return plans
         }
-        let cards = cardFolder(in: dataDir(of: destination))
-        let known = cards.map { SessionCards.sessions(in: $0) } ?? []
+        let cards = cardFolders(in: dataDir(of: destination))
+        let known = SessionCards.sessions(in: cards)
         let started = Date()
         try await openWindow(destination, links: links)
         await confirmImported(&plans, known: known, cards: cards, since: started)
@@ -490,9 +490,9 @@ public final class ProfileManager: @unchecked Sendable {
 
     /// Claude writes `local_<session id>.json` when it imports a session; sessions the window knew already
     /// are left as `nil`.
-    private func confirmImported(_ plans: inout [ContinuePlan], known: Set<String>, cards: URL?, since: Date) async {
+    private func confirmImported(_ plans: inout [ContinuePlan], known: Set<String>, cards: [URL], since: Date) async {
         let awaited = plans.indices.filter { !known.contains(plans[$0].sessionID) }
-        guard let cards, !awaited.isEmpty else { return }
+        guard !cards.isEmpty, !awaited.isEmpty else { return }
         let deadline = Date().addingTimeInterval(importWait)
         var seen = Set<String>()
         repeat {
@@ -564,11 +564,14 @@ public final class ProfileManager: @unchecked Sendable {
         return running.contains { self.window(of: window, is: $0) }
     }
 
-    /// The folder Claude reads the signed-in account's session cards from at launch.
-    func cardFolder(in dataDir: URL) -> URL? {
-        guard let account = DesktopData.accountID(in: dataDir),
-              let org = DesktopData.organizationID(in: dataDir, accountID: account) else { return nil }
-        return dataDir.appending(path: "\(SessionSync.sessionsFolder)/\(account)/\(org)", directoryHint: .isDirectory)
+    /// Every folder Claude could read the signed-in account's session cards from at launch, one per
+    /// organization it has used. Continue confirmation watches all of them: which organization a newly
+    /// imported card lands under isn't something this app can reliably predict (`DesktopData.scope`).
+    func cardFolders(in dataDir: URL) -> [URL] {
+        guard let account = DesktopData.accountID(in: dataDir) else { return [] }
+        return DesktopData.organizationIDs(in: dataDir, accountID: account).sorted().map {
+            dataDir.appending(path: "\(SessionSync.sessionsFolder)/\(account)/\($0)", directoryHint: .isDirectory)
+        }
     }
 
     private func openWindow(_ destination: String, links: [URL]) async throws {
@@ -667,8 +670,11 @@ public final class ProfileManager: @unchecked Sendable {
     /// session, and reads them only at launch. Creating them right away lets sharing fill them before the next launch.
     func createSessionFolders() {
         for dataDir in dataDirs {
-            guard let account = DesktopData.accountID(in: dataDir),
-                  let org = DesktopData.organizationID(in: dataDir, accountID: account) else { continue }
+            guard let account = DesktopData.accountID(in: dataDir) else { continue }
+            let items = (try? LocalStorage(dataDir: dataDir).items(origin: InterfaceSync.origin)) ?? [:]
+            guard let scope = DesktopData.scope(dataDir: dataDir, items: items)?.value,
+                  scope.hasPrefix(account + "/") else { continue }
+            let org = String(scope.dropFirst(account.count + 1))
             for kind in [SessionSync.sessionsFolder] {
                 let folder = dataDir.appending(path: "\(kind)/\(account)/\(org)", directoryHint: .isDirectory)
                 if !fm.fileExists(atPath: folder.path) {

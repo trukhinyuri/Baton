@@ -284,8 +284,13 @@ struct ContinueCopies: Sendable {
     }
 }
 
-/// The sessions a window has cards for, read from one card folder.
+/// The sessions a window has cards for, read from its card folders (one per organization it has used).
 enum SessionCards {
+    /// The union of `sessions(in:modifiedSince:)` over every folder in `folders`.
+    static func sessions(in folders: [URL], modifiedSince: Date? = nil) -> Set<String> {
+        folders.reduce(into: Set<String>()) { $0.formUnion(sessions(in: $1, modifiedSince: modifiedSince)) }
+    }
+
     /// The `cliSessionId` of every `local_*.json` card in `folder`, lowercased; only cards modified since
     /// `modifiedSince` if given. Cards can be large, so the id is found without parsing the whole file.
     static func sessions(in folder: URL, modifiedSince: Date? = nil) -> Set<String> {

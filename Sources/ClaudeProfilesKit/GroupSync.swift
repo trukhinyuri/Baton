@@ -142,7 +142,7 @@ public struct GroupSync: Sendable {
             items = running ? (try? storage.items(origin: origin)) ?? (try? storage.items(origin: origin)) ?? [:]
                             : try storage.items(origin: origin)
         }
-        guard let scope = InterfaceSync.scope(in: items, account: account, dataDir: dataDir) else { return nil }
+        guard let scope = InterfaceSync.scope(in: items, dataDir: dataDir) else { return nil }
         let url = dataDir.appending(path: InterfaceSync.desktopConfig)
         let modified = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
         var window = Window(id: id, dataDir: dataDir, account: account, scope: scope, running: running, modified: modified ?? .distantPast)

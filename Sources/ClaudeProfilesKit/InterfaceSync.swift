@@ -115,8 +115,8 @@ public struct InterfaceSync: Sendable {
             }
         }
         if let sidebar = mergeSidebar(main: main[Self.sidebarKey], own: own[Self.sidebarKey], base: &base,
-                                      mainScope: Self.scope(in: main, account: mainAccount, dataDir: paths.mainDataDir),
-                                      scope: Self.scope(in: own, account: account, dataDir: dataDir), portableIDs: portableIDs) {
+                                      mainScope: Self.scope(in: main, dataDir: paths.mainDataDir),
+                                      scope: Self.scope(in: own, dataDir: dataDir), portableIDs: portableIDs) {
             set[Self.sidebarKey] = sidebar
         }
 
@@ -285,12 +285,8 @@ public struct InterfaceSync: Sendable {
     }
 
     /// `account/organization`, the key Claude files per-account sidebar state under.
-    static func scope(in items: [String: String], account: String, dataDir: URL) -> String? {
-        if let store = items[sidebarKey].flatMap(object), let state = store["state"] as? [String: Any],
-           let key = state["lastSidebarScopeKey"] as? String, key.hasPrefix(account + "/") {
-            return key
-        }
-        return DesktopData.organizationID(in: dataDir, accountID: account).map { "\(account)/\($0)" }
+    static func scope(in items: [String: String], dataDir: URL) -> String? {
+        DesktopData.scope(dataDir: dataDir, items: items)?.value
     }
 
     /// What a value means, without the bookkeeping Claude adds to `LSS-` entries (the writing tab and time).

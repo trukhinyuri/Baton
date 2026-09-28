@@ -426,6 +426,22 @@ struct ContinuePlanTests {
         #expect(SessionCards.sessions(in: b, modifiedSince: since.addingTimeInterval(-60)) == ["abcdef01-2222-3333-4444-555555555555", "z"])
     }
 
+    @Test func continueConfirmationFindsCardInNonNewestOrgFolder() throws {
+        let box = try Sandbox()
+        try box.signIn(box.work, account: Sandbox.accountB)
+        let older = "cccccccc-cccc-cccc-cccc-cccccccccccc", newer = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+        let olderFolder = try box.pair(box.work, account: Sandbox.accountB, org: older)
+        _ = try box.pair(box.work, account: Sandbox.accountB, org: newer)
+        // Claude imported the card into the account's other organization, not the one mtime happens to favor.
+        try box.write(#"{"cliSessionId":"\#(Sandbox.cli)"}"#, to: olderFolder.appending(path: "local_x.json"))
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: olderFolder.path)
+
+        let cards = ProfileManager(paths: box.paths).cardFolders(in: box.work)
+        let seen = SessionCards.sessions(in: cards)
+
+        #expect(seen.contains(Sandbox.cli.lowercased()), "Continue confirmation must watch every organization folder of the account")
+    }
+
     @Test func folderRuleKeepsWorkInItsAccounts() throws {
         let (box, manager, conversation, _) = try setUp(workEmail: "me@personal.example")
         let rules = FolderRules(paths: box.paths)

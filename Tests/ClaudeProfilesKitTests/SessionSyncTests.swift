@@ -443,4 +443,18 @@ struct OrganizationTests {
                              ofItemAtPath: box.work.appending(path: "claude-code-sessions/\(Sandbox.accountB)/\(older)").path)
         #expect(DesktopData.organizationID(in: box.work, accountID: Sandbox.accountB) == newer)
     }
+
+    @Test func twoOrgsWithoutScopeKeySkippedWithReason() throws {
+        let box = try Sandbox()
+        try box.signIn(box.work, account: Sandbox.accountB)
+        let older = "11111111-1111-1111-1111-111111111111", newer = "22222222-2222-2222-2222-222222222222"
+        try box.pair(box.work, account: Sandbox.accountB, org: older)
+        try box.pair(box.work, account: Sandbox.accountB, org: newer)
+
+        // No `lastSidebarScopeKey` recorded: Claude hasn't said which organization is current.
+        let result = DesktopData.scope(dataDir: box.work, items: [:])
+
+        #expect(result == .ambiguous(reason: "several organizations: open the Code tab once"),
+                "today it silently returns the newest folder instead of asking for the Code tab to be opened once")
+    }
 }
