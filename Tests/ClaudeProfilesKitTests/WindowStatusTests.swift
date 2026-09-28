@@ -1,13 +1,15 @@
 import Foundation
-import os
 import Testing
+import os
+
 @testable import ClaudeProfilesKit
 
 @Suite("Window status, errors and logs")
 struct WindowStatusTests {
     private func status(running: Bool, live: Int) -> WindowStatus {
-        WindowStatus(id: "work", label: "WORK", isMain: false, isRunning: running, account: "a@example.com",
-                     scope: "account aaaaaaaa · 1 organization", scopeSource: "config.json", liveSessions: live)
+        WindowStatus(
+            id: "work", label: "WORK", isMain: false, isRunning: running, account: "a@example.com",
+            scope: "account aaaaaaaa · 1 organization", scopeSource: "config.json", liveSessions: live)
     }
 
     @Test func restartDisabledWithLiveSession() {
@@ -35,8 +37,9 @@ struct WindowStatusTests {
         try box.pair(box.main, account: Sandbox.accountA)
         let manager = ProfileManager(paths: box.paths)
         let diagnostics = try Diagnostics.inspect(paths: box.paths)
-        let windows = WindowStatus.collect(manager: manager, diagnostics: diagnostics,
-                                           localOnly: ["work": true], pending: ["work": ["Local only turns on"]])
+        let windows = WindowStatus.collect(
+            manager: manager, diagnostics: diagnostics,
+            localOnly: ["work": true], pending: ["work": ["Local only turns on"]])
         #expect(windows.map(\.id) == ["main", "work"])
         #expect(windows[0].scope == "account aaaaaaaa · 1 organization")
         #expect(windows[0].scopeSource == "config.json (lastKnownAccountUuid)")
@@ -59,9 +62,10 @@ struct WindowStatusTests {
 
     @Test func reportIncludesRedactedLogTail() async throws {
         let lines = (0..<250).map { "sync \($0): wrote a card for jane@example.com in /Users/jane/src/app-\($0)" }
-        let facts = FeedbackReport.Facts(build: BuildInfo(version: "1.0.0", commit: "abc"), macOS: "15.1", architecture: "arm64",
-                                         claudeVersion: nil, windows: [], diagnostics: [], lastSync: nil, lastSyncDate: nil,
-                                         errors: [], log: lines, home: "/Users/jane", user: "jane", profiles: [])
+        let facts = FeedbackReport.Facts(
+            build: BuildInfo(version: "1.0.0", commit: "abc"), macOS: "15.1", architecture: "arm64",
+            claudeVersion: nil, windows: [], diagnostics: [], lastSync: nil, lastSyncDate: nil,
+            errors: [], log: lines, home: "/Users/jane", user: "jane", profiles: [])
         let markdown = FeedbackReport(facts: facts).markdown
         #expect(markdown.contains("### Log (last 200 entries)"))
         #expect(markdown.contains("sync 249: wrote a card for <email-1> in <folder>"))

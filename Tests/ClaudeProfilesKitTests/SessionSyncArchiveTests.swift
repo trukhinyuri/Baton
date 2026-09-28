@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Archived sessions in sharing")
@@ -17,8 +18,8 @@ struct SessionSyncArchiveTests {
         try box.write(#"{"v":1,"archived":["s1"]}"#, to: b.appending(path: "archived-sessions.idx"))
         _ = try box.sync()
 
-        try box.write(#"{"v":1,"archived":["s2"]}"#, to: a.appending(path: "archived-sessions.idx"))   // unarchived in A
-        try box.write(#"{"v":1,"archived":["s1","s2","s3"]}"#, to: b.appending(path: "archived-sessions.idx"))   // archived in B
+        try box.write(#"{"v":1,"archived":["s2"]}"#, to: a.appending(path: "archived-sessions.idx"))  // unarchived in A
+        try box.write(#"{"v":1,"archived":["s1","s2","s3"]}"#, to: b.appending(path: "archived-sessions.idx"))  // archived in B
         _ = try box.sync()
 
         #expect(try archived(a) == ["s2", "s3"], "an unarchive in one window is not undone by sync")

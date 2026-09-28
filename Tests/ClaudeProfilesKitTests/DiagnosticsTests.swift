@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Read-only session diagnostics")
@@ -99,7 +100,6 @@ struct DiagnosticsTests {
         #expect(report.accountBoundWorkers == 1)
         #expect(report.localCowork == 0 && report.unavailableCoworkHistory == 0)
     }
-
 
     @Test(arguments: [
         ("local_12345678-1111-2222-3333-444444444444", "directory", true),

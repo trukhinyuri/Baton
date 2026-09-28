@@ -54,10 +54,12 @@ public struct InterfaceSync: Sendable {
     public func run(into dataDir: URL, profileID: String, now: Date = Date()) throws -> Int {
         let source = LocalStorage(dataDir: paths.mainDataDir), target = LocalStorage(dataDir: dataDir)
         guard !target.isInUse, let mainAccount = DesktopData.accountID(in: paths.mainDataDir),
-              let account = DesktopData.accountID(in: dataDir) else { return 0 }
+            let account = DesktopData.accountID(in: dataDir)
+        else { return 0 }
         let backup = Backup(paths: paths, now: now)
-        let portableIDs = try Self.portableSessionIDs(in: [paths.mainDataDir, dataDir],
-                                                     nativeScopeFile: paths.stateDir.appending(path: "code-native-session-scopes.json"))
+        let portableIDs = try Self.portableSessionIDs(
+            in: [paths.mainDataDir, dataDir],
+            nativeScopeFile: paths.stateDir.appending(path: "code-native-session-scopes.json"))
         // Discard obsolete baselines for account/grant/project keys formerly copied by older releases.
         let validStateKeys = Self.keys.union(Self.prefsKeys.map { "prefs:" + $0 })
             .union(Self.pinKeys.map { "idb:" + $0 })
@@ -76,8 +78,11 @@ public struct InterfaceSync: Sendable {
             }
         }
         if source.exists, target.exists {
-            stage { try mergeLocalStorage(source: source, target: target, dataDir: dataDir,
-                                          mainAccount: mainAccount, account: account, portableIDs: portableIDs, base: &$0, backup: backup) }
+            stage {
+                try mergeLocalStorage(
+                    source: source, target: target, dataDir: dataDir,
+                    mainAccount: mainAccount, account: account, portableIDs: portableIDs, base: &$0, backup: backup)
+            }
         }
         stage { try mergePrefs(into: dataDir, mainAccount: mainAccount, account: account, portableIDs: portableIDs, base: &$0, backup: backup) }
         stage { try mergePins(into: dataDir, profileID: profileID, portableIDs: portableIDs, base: &$0, backup: backup) }
@@ -86,16 +91,21 @@ public struct InterfaceSync: Sendable {
         return changed
     }
 
-    private func mergeLocalStorage(source: LocalStorage, target: LocalStorage, dataDir: URL, mainAccount: String,
-                                   account: String, portableIDs: Set<String>, base: inout [String: String], backup: Backup) throws -> Int {
+    private func mergeLocalStorage(
+        source: LocalStorage, target: LocalStorage, dataDir: URL, mainAccount: String,
+        account: String, portableIDs: Set<String>, base: inout [String: String], backup: Backup
+    ) throws -> Int {
         // The main app is running, so a compaction can swap files while they are read; one retry covers that.
         let main = try (try? source.items(origin: Self.origin)) ?? source.items(origin: Self.origin)
         let own = try target.items(origin: Self.origin)
 
-        var wanted: [String: String] = [:]   // key -> value the main app implies, or `missing`
+        var wanted: [String: String] = [:]  // key -> value the main app implies, or `missing`
         for key in Self.keys {
             if key == "LSS-persisted.starred-local-code-sessions",
-               (!Self.isLocalSessionList(main[key], portableIDs: portableIDs) || !Self.isLocalSessionList(own[key], portableIDs: portableIDs)) { continue }
+                !Self.isLocalSessionList(main[key], portableIDs: portableIDs) || !Self.isLocalSessionList(own[key], portableIDs: portableIDs)
+            {
+                continue
+            }
             wanted[key] = main[key] ?? Self.missing
         }
         for (key, value) in main where Self.prefixes.contains(where: key.hasPrefix) { wanted[key] = value }
@@ -114,9 +124,11 @@ public struct InterfaceSync: Sendable {
                 continue
             }
         }
-        if let sidebar = mergeSidebar(main: main[Self.sidebarKey], own: own[Self.sidebarKey], base: &base,
-                                      mainScope: Self.scope(in: main, dataDir: paths.mainDataDir),
-                                      scope: Self.scope(in: own, dataDir: dataDir), portableIDs: portableIDs) {
+        if let sidebar = mergeSidebar(
+            main: main[Self.sidebarKey], own: own[Self.sidebarKey], base: &base,
+            mainScope: Self.scope(in: main, dataDir: paths.mainDataDir),
+            scope: Self.scope(in: own, dataDir: dataDir), portableIDs: portableIDs)
+        {
             set[Self.sidebarKey] = sidebar
         }
 
@@ -129,19 +141,25 @@ public struct InterfaceSync: Sendable {
 
     /// The portable settings in `claude_desktop_config.json` → `preferences.epitaxyPrefs`, where Claude looks first.
     /// A key the main app doesn't have is removed, so Claude falls back to Local Storage, as it does in the main app.
-    private func mergePrefs(into dataDir: URL, mainAccount: String, account: String,
-                            portableIDs: Set<String>, base: inout [String: String], backup: Backup) throws -> Int {
+    private func mergePrefs(
+        into dataDir: URL, mainAccount: String, account: String,
+        portableIDs: Set<String>, base: inout [String: String], backup: Backup
+    ) throws -> Int {
         let url = dataDir.appending(path: Self.desktopConfig)
         guard let mainConfig = SettingsSync.readJSON(paths.mainDataDir.appending(path: Self.desktopConfig)),
-              var config = SettingsSync.readJSON(url) else { return 0 }
+            var config = SettingsSync.readJSON(url)
+        else { return 0 }
         let mainPrefs = (mainConfig["preferences"] as? [String: Any])?["epitaxyPrefs"] as? [String: Any] ?? [:]
         var preferences = config["preferences"] as? [String: Any] ?? [:]
         let own = preferences["epitaxyPrefs"] as? [String: Any] ?? [:]
 
         var wanted: [(key: String, value: Any?)] = Self.prefsKeys.compactMap { key in
             if key == "starred-local-code-sessions",
-               (!Self.isLocalSessionList(mainPrefs[key].map(Self.canonical), portableIDs: portableIDs)
-                || !Self.isLocalSessionList(own[key].map(Self.canonical), portableIDs: portableIDs)) { return nil }
+                !Self.isLocalSessionList(mainPrefs[key].map(Self.canonical), portableIDs: portableIDs)
+                    || !Self.isLocalSessionList(own[key].map(Self.canonical), portableIDs: portableIDs)
+            {
+                return nil
+            }
             return (key, mainPrefs[key])
         }
         wanted += Self.prefsAccountPrefixes.map { ($0 + account, mainPrefs[$0 + mainAccount]) }
@@ -172,26 +190,30 @@ public struct InterfaceSync: Sendable {
         guard source.exists, target.exists, !target.isInUse else { return 0 }
         // The main app is running; one retry covers a compaction swapping files during the read.
         guard let main = try (try? source.read()) ?? source.read(), let own = try target.read(),
-              main.dataVersion == own.dataVersion else { return 0 }
+            main.dataVersion == own.dataVersion
+        else { return 0 }
 
         var put: [String: [UInt8]] = [:], previous: [String: Any] = [:]
         for key in Self.pinKeys {
             guard let mainRecord = main.records[key], !main.blobKeys.contains(key), !own.blobKeys.contains(key),
-                  let mainStore = mainRecord.string.flatMap(Self.object), let mainState = mainStore["state"] else { continue }
+                let mainStore = mainRecord.string.flatMap(Self.object), let mainState = mainStore["state"]
+            else { continue }
             var ownText = Self.missing
             if let ownRecord = own.records[key] {
                 guard let ownStore = ownRecord.string.flatMap(Self.object), let ownState = ownStore["state"],
-                      Self.canonical(ownStore["version"] ?? NSNull()) == Self.canonical(mainStore["version"] ?? NSNull())
+                    Self.canonical(ownStore["version"] ?? NSNull()) == Self.canonical(mainStore["version"] ?? NSNull())
                 else { continue }
                 ownText = Self.canonical(ownState)
             }
             // Older Claude versions could put remote session IDs in this store too. Only a
             // completely local list is portable; mixed/unknown records remain byte-for-byte intact.
             guard let mainPins = mainState as? [String: Any], Set(mainPins.keys) == ["starredIds"],
-                  Self.isLocalSessionList(mainPins["starredIds"].map(Self.canonical), portableIDs: portableIDs) else { continue }
+                Self.isLocalSessionList(mainPins["starredIds"].map(Self.canonical), portableIDs: portableIDs)
+            else { continue }
             if let ownRecord = own.records[key], let ownStore = ownRecord.string.flatMap(Self.object) {
                 guard let ownPins = ownStore["state"] as? [String: Any], Set(ownPins.keys) == ["starredIds"],
-                      Self.isLocalSessionList(ownPins["starredIds"].map(Self.canonical), portableIDs: portableIDs) else { continue }
+                    Self.isLocalSessionList(ownPins["starredIds"].map(Self.canonical), portableIDs: portableIDs)
+                else { continue }
             }
             let mainText = Self.canonical(mainState)
             guard Self.resolve(own: ownText, main: mainText, base: base["idb:" + key]) == .main else { continue }
@@ -208,8 +230,10 @@ public struct InterfaceSync: Sendable {
     }
 
     /// The merged sidebar store to write, or `nil` if the profile's is already right.
-    private func mergeSidebar(main: String?, own: String?, base: inout [String: String],
-                              mainScope: String?, scope: String?, portableIDs: Set<String>) -> String? {
+    private func mergeSidebar(
+        main: String?, own: String?, base: inout [String: String],
+        mainScope: String?, scope: String?, portableIDs: Set<String>
+    ) -> String? {
         guard let main, let mainStore = Self.object(main), let mainState = mainStore["state"] as? [String: Any] else { return nil }
         let ownStore = own.flatMap(Self.object) ?? [:]
         // Another store version means another layout; the app migrates its own data, so the two aren't mixed.
@@ -221,7 +245,9 @@ public struct InterfaceSync: Sendable {
         var wanted = mainState.filter { Self.portableSidebarFields.contains($0.key) }
         // Keep cloud Projects and other account-owned pins. A mixed list cannot be copied safely.
         if let pins = mainState["pinnedOrder"] as? [String], pins.allSatisfy({ $0.hasPrefix("code:") && portableIDs.contains(String($0.dropFirst(5))) }),
-           ownState["pinnedOrder"] == nil || (ownState["pinnedOrder"] as? [String])?.allSatisfy({ $0.hasPrefix("code:") && portableIDs.contains(String($0.dropFirst(5))) }) == true {
+            ownState["pinnedOrder"] == nil
+                || (ownState["pinnedOrder"] as? [String])?.allSatisfy({ $0.hasPrefix("code:") && portableIDs.contains(String($0.dropFirst(5))) }) == true
+        {
             wanted["pinnedOrder"] = pins
         }
         for (field, mainValue) in wanted {
@@ -256,16 +282,18 @@ public struct InterfaceSync: Sendable {
         // the merge before any interface value changes, rather than make remembered workers portable.
         let remembered = try SessionSync.NativeScopeState.load(from: nativeScopeFile)
         var ordinary = Set<String>()
-        var ownedOrUnknown = Set(remembered.scopes.keys.map { name in
-            name.hasSuffix(".json") ? String(name.dropLast(5)) : name
-        })
+        var ownedOrUnknown = Set(
+            remembered.scopes.keys.map { name in
+                name.hasSuffix(".json") ? String(name.dropLast(5)) : name
+            })
         for pair in try SessionSync.sessionPairs(dataDirs: dataDirs, folder: SessionSync.sessionsFolder) {
             for url in try FileManager.default.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil)
-                where url.lastPathComponent.hasPrefix("local_") && url.pathExtension == "json" {
+            where url.lastPathComponent.hasPrefix("local_") && url.pathExtension == "json" {
                 let id = url.deletingPathExtension().lastPathComponent
                 guard let data = try? Data(contentsOf: url),
-                      let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                      !SessionSync.isAccountBoundCard(card) else {
+                    let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                    !SessionSync.isAccountBoundCard(card)
+                else {
                     ownedOrUnknown.insert(id)
                     continue
                 }

@@ -17,8 +17,10 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     /// Missing in older `profiles.json` files, which read as off.
     public var carryPermissionMode: Bool?
 
-    public init(id: String, label: String, email: String?, color: String, createdAt: Date = Date(),
-                carryPermissionMode: Bool? = nil) {
+    public init(
+        id: String, label: String, email: String?, color: String, createdAt: Date = Date(),
+        carryPermissionMode: Bool? = nil
+    ) {
         self.id = id
         self.label = label
         self.email = email

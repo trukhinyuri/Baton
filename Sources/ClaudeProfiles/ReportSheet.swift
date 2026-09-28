@@ -22,9 +22,11 @@ struct ReportSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Report a problem").font(.title2.bold())
-            Text("Below is exactly what will be shared. Emails, account IDs, profile labels, folder names, session titles and your username are taken out. Nothing is sent until you submit the issue on GitHub yourself.")
-                .font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(
+                "Below is exactly what will be shared. Emails, account IDs, profile labels, folder names, session titles and your username are taken out. Nothing is sent until you submit the issue on GitHub yourself."
+            )
+            .font(.callout).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
             TextField("Summary", text: $form.title, prompt: Text("One line: what went wrong"))
                 .textFieldStyle(.roundedBorder)
@@ -56,7 +58,9 @@ struct ReportSheet: View {
 
             Divider()
             HStack(spacing: 8) {
-                Button("Copy") { copy(text); form.note = "Copied the report." }
+                Button("Copy") {
+                    copy(text); form.note = "Copied the report."
+                }
                 Button("Save…", action: save)
                 Spacer()
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -92,10 +96,12 @@ struct ReportSheet: View {
         guard let report = form.report else { return }
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? model.manager.paths.home
         do {
-            let shared = try report.share(title: form.title, description: form.description, saveIn: downloads, copy: copy,
-                                          open: { NSWorkspace.shared.open($0) })
+            let shared = try report.share(
+                title: form.title, description: form.description, saveIn: downloads, copy: copy,
+                open: { NSWorkspace.shared.open($0) })
             if let file = shared.file {
-                form.note = "The report is too long for the link, so the form has a summary. The full report is on the clipboard and saved as “\(file.lastPathComponent)” in Downloads: attach it to the issue."
+                form.note =
+                    "The report is too long for the link, so the form has a summary. The full report is on the clipboard and saved as “\(file.lastPathComponent)” in Downloads: attach it to the issue."
                 NSWorkspace.shared.activateFileViewerSelecting([file])
             } else {
                 form.note = "Opened the issue form in your browser. Review it there and submit it yourself."

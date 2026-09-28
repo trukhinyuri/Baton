@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 /// Holds a database's `LOCK` from a separate process, as a Claude window opening it would.
@@ -65,7 +66,9 @@ struct SessionSyncDurabilityTests {
         // A day later every version is still there; two days later only the first copy of the day is.
         for (days, expectVersions) in [(1.0, true), (2.0, false)] {
             backup = Backup(paths: box.paths, now: now.addingTimeInterval(days * 86_400))
-            backup.discard = { trashed.append($0.path); try FileManager.default.removeItem(at: $0) }
+            backup.discard = {
+                trashed.append($0.path); try FileManager.default.removeItem(at: $0)
+            }
             backup.prune()
             let left = (FileManager.default.enumerator(at: box.paths.backupsDir, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
                 .compactMap { try? String(contentsOf: $0, encoding: .utf8) }.filter { $0.hasPrefix("v") || $0.hasPrefix("w") }
@@ -81,12 +84,12 @@ struct SessionSyncDurabilityTests {
         let old = Date().addingTimeInterval(-91 * 86_400)
         try box.write("", to: a.appending(path: "deleted_old"), modified: old)
         try box.write("", to: b.appending(path: "deleted_old"), modified: old)
-        try box.write("", to: a.appending(path: "deleted_unseen"), modified: old)   // not yet in every window
+        try box.write("", to: a.appending(path: "deleted_unseen"), modified: old)  // not yet in every window
         try box.write("", to: a.appending(path: "deleted_recent"))
         try box.write("", to: b.appending(path: "deleted_recent"))
         try box.write("", to: a.appending(path: "deleted_kept"), modified: old)
         try box.write("", to: b.appending(path: "deleted_kept"), modified: old)
-        try box.write("card", to: b.appending(path: "local_kept.json"))   // a copy is still around somewhere
+        try box.write("card", to: b.appending(path: "local_kept.json"))  // a copy is still around somewhere
 
         let open = try box.sync(propagateDeletions: false)
         #expect(open.tombstonesExpired == 0, "only while no window is open")
@@ -110,8 +113,9 @@ struct SessionSyncDurabilityTests {
         let before = try FileManager.default.contentsOfDirectory(atPath: store.dir.path).sorted()
 
         #expect(throws: LocalStorageError.databaseInUse) { try store.append(put: [([0x5F], [0x01])], delete: []) }
-        #expect(try FileManager.default.contentsOfDirectory(atPath: store.dir.path).sorted() == before,
-                "a window that opened the database meanwhile gets no new log, and no temporary file is left")
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: store.dir.path).sorted() == before,
+            "a window that opened the database meanwhile gets no new log, and no temporary file is left")
     }
 }
 
@@ -128,8 +132,9 @@ struct LevelDBCompatTests {
 
         for name in [log] + before.filter({ $0.hasSuffix(".ldb") }) {
             let tool = Process(), output = Pipe()
-            tool.executableURL = URL(fileURLWithPath: ["/opt/homebrew/bin/leveldbutil", "/usr/local/bin/leveldbutil"]
-                .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/opt/homebrew/bin/leveldbutil")
+            tool.executableURL = URL(
+                fileURLWithPath: ["/opt/homebrew/bin/leveldbutil", "/usr/local/bin/leveldbutil"]
+                    .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/opt/homebrew/bin/leveldbutil")
             tool.arguments = ["dump", storage.dbDir.appending(path: name).path]
             tool.standardOutput = output
             try tool.run()

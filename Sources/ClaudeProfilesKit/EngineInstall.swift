@@ -48,8 +48,8 @@ enum EngineInstall {
         let resolvedSource = source.resolvingSymlinksInPath().path
         let resolvedDestination = destination.resolvingSymlinksInPath().path
         guard resolvedSource != resolvedDestination,
-              !resolvedSource.hasPrefix(resolvedDestination + "/"),
-              !resolvedDestination.hasPrefix(resolvedSource + "/")
+            !resolvedSource.hasPrefix(resolvedDestination + "/"),
+            !resolvedDestination.hasPrefix(resolvedSource + "/")
         else { throw InstallError.overlappingPaths }
 
         let identity = try bundleIdentity(at: source)
@@ -80,8 +80,7 @@ enum EngineInstall {
                 guard try bundleIdentity(at: destination) == identity else { throw InstallError.sourceChanged }
                 try validate(destination)
             } catch {
-                do { try exchange(staging, destination) }
-                catch let rollbackError {
+                do { try exchange(staging, destination) } catch let rollbackError {
                     // Staging now contains the previous working engine. Never delete it on rollback failure.
                     mayRemoveStaging = false
                     throw InstallError.rollbackFailed(backup: staging, reason: rollbackError.localizedDescription)
@@ -108,12 +107,12 @@ enum EngineInstall {
         }
         let plist = app.appending(path: "Contents/Info.plist")
         guard let data = try? Data(contentsOf: plist),
-              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let version = info["CFBundleVersion"] as? String, !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let identifier = info["CFBundleIdentifier"] as? String, !identifier.isEmpty,
-              let executable = info["CFBundleExecutable"] as? String,
-              !executable.isEmpty, executable != ".", executable != "..", !executable.contains("/"),
-              fm.isExecutableFile(atPath: app.appending(path: "Contents/MacOS/\(executable)").path)
+            let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+            let version = info["CFBundleVersion"] as? String, !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let identifier = info["CFBundleIdentifier"] as? String, !identifier.isEmpty,
+            let executable = info["CFBundleExecutable"] as? String,
+            !executable.isEmpty, executable != ".", executable != "..", !executable.contains("/"),
+            fm.isExecutableFile(atPath: app.appending(path: "Contents/MacOS/\(executable)").path)
         else { throw InstallError.invalidBundle(app, "missing version, identifier, or executable") }
         return BundleIdentity(version: version, identifier: identifier, executable: executable)
     }

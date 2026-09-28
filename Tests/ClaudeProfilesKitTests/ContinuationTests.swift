@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 extension Sandbox {
@@ -23,7 +24,8 @@ extension Sandbox {
 @Suite("One card per conversation")
 struct ImportedCardTests {
     static let original = #"{"sessionId":"local_orig","cliSessionId":"\#(Sandbox.cli)","title":"Fix build","cwd":"/repo"}"#
-    static let imported = #"{"sessionId":"local_\#(Sandbox.cli)","cliSessionId":"\#(Sandbox.cli)","title":"Fix build","cwd":"/repo","adoptedFromOtherSurface":true}"#
+    static let imported =
+        #"{"sessionId":"local_\#(Sandbox.cli)","cliSessionId":"\#(Sandbox.cli)","title":"Fix build","cwd":"/repo","adoptedFromOtherSurface":true}"#
     static var importedName: String { "local_\(Sandbox.cli).json" }
 
     @Test func windowThatOpenedAConversationKeepsOnlyItsOwnCard() throws {
@@ -126,8 +128,9 @@ struct ConversationIndexTests {
         let projects = taskFolder.appending(path: ".claude/projects/-sessions", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
         try box.write("{}", to: projects.appending(path: "\(cowork).jsonl"), modified: now.addingTimeInterval(-10))
-        try box.write(#"{"cliSessionId":"\#(cowork)","title":"Report","userSelectedFolders":["/docs"]}"#,
-                      to: coworkPair.appending(path: "local_task.json"))
+        try box.write(
+            #"{"cliSessionId":"\#(cowork)","title":"Report","userSelectedFolders":["/docs"]}"#,
+            to: coworkPair.appending(path: "local_task.json"))
         // An old release's copy of the card, without the task's history.
         let copy = box.main.appending(path: "local-agent-mode-sessions/\(Sandbox.accountA)/org-1", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
@@ -179,8 +182,9 @@ struct ConversationIndexTests {
             #"{"type":"last-prompt","lastPrompt":"hi"}"#,
             #"{"type":"cost-state","startTime":1790552995627}"#,
         ])
-        var conversation = Conversation(kind: .code, sessionID: Sandbox.cli, title: "t", folders: [],
-                                        lastActivity: .distantPast, transcript: transcript)
+        var conversation = Conversation(
+            kind: .code, sessionID: Sandbox.cli, title: "t", folders: [],
+            lastActivity: .distantPast, transcript: transcript)
         #expect(abs(try #require(ConversationIndex.lastActivity(of: transcript)).timeIntervalSince(old)) < 1)
         #expect(!conversation.isActive(), "written just now, but its last message is an hour old")
 
@@ -226,8 +230,15 @@ struct TranscriptTextTests {
         let box = try Sandbox()
         let transcript = try box.transcript(lines: [
             Self.line(["type": "user", "message": ["role": "user", "content": "Summarize the report"]]),
-            Self.line(["type": "assistant", "message": ["content": [["type": "thinking", "thinking": "secret"],
-                                                                   ["type": "tool_use", "name": "Read"]]]]),
+            Self.line([
+                "type": "assistant",
+                "message": [
+                    "content": [
+                        ["type": "thinking", "thinking": "secret"],
+                        ["type": "tool_use", "name": "Read"],
+                    ]
+                ],
+            ]),
             Self.line(["type": "user", "message": ["content": [["type": "tool_result", "content": "file text"]]]]),
             Self.line(["type": "assistant", "message": ["content": [["type": "tool_use", "name": "Bash"]]]]),
             Self.line(["type": "assistant", "message": ["content": [["type": "tool_use", "name": "Bash"]]]]),
@@ -242,20 +253,23 @@ struct TranscriptTextTests {
 
         let messages = try TranscriptText.messages(in: transcript)
 
-        #expect(messages == [
-            .init(role: .you, text: "Summarize the report"),
-            .init(role: .claude, text: "_Used Read, Bash ×2_\n\nHere it is."),
-            .init(role: .summary, text: "Earlier: we read the report."),
-            .init(role: .you, text: "[image]"),
-            .init(role: .you, text: "And this?"),
-        ])
+        #expect(
+            messages == [
+                .init(role: .you, text: "Summarize the report"),
+                .init(role: .claude, text: "_Used Read, Bash ×2_\n\nHere it is."),
+                .init(role: .summary, text: "Earlier: we read the report."),
+                .init(role: .you, text: "[image]"),
+                .init(role: .you, text: "And this?"),
+            ])
         let markdown = TranscriptText.markdown(messages)
         #expect(markdown.hasPrefix("**You:**\n\nSummarize the report\n"))
         #expect(!markdown.contains("secret") && !markdown.contains("file text") && !markdown.contains("agent work"))
     }
 
     @Test func longHistoryKeepsTheStartAndTheLatestMessages() {
-        let messages = (1...100).map { TranscriptText.Message(role: $0.isMultiple(of: 2) ? .claude : .you, text: "message \($0) " + String(repeating: "x", count: 100)) }
+        let messages = (1...100).map {
+            TranscriptText.Message(role: $0.isMultiple(of: 2) ? .claude : .you, text: "message \($0) " + String(repeating: "x", count: 100))
+        }
         let markdown = TranscriptText.markdown(messages, limit: 2_000)
         #expect(markdown.count < 2_300)
         #expect(markdown.contains("message 1 "))
@@ -275,14 +289,19 @@ struct CoworkHandoffTests {
             try Data(count: size).write(to: url)
         }
         let transcript = try box.transcript(lines: [TranscriptTextTests.line(["type": "user", "message": ["content": "Draft the plan"]])])
-        return Conversation(kind: .cowork, sessionID: Sandbox.cli, title: "Q4 plan: draft/final", folders: ["/Users/me/Plans"],
-                            lastActivity: Date(), transcript: transcript, ownerID: "work", taskFolder: taskFolder)
+        return Conversation(
+            kind: .cowork, sessionID: Sandbox.cli, title: "Q4 plan: draft/final", folders: ["/Users/me/Plans"],
+            lastActivity: Date(), transcript: transcript, ownerID: "work", taskFolder: taskFolder)
     }
 
     @Test func attachesThePrivateHistoryAndTheTasksFiles() throws {
         let box = try Sandbox()
-        let conversation = try task(in: box, files: ["uploads/brief.pdf": 10, "outputs/plan.docx": 20, "outputs/.hidden": 1,
-                                                     "outputs/history.md": 5])
+        let conversation = try task(
+            in: box,
+            files: [
+                "uploads/brief.pdf": 10, "outputs/plan.docx": 20, "outputs/.hidden": 1,
+                "outputs/history.md": 5,
+            ])
 
         let handoff = try CoworkHandoff.prepare(conversation, sourceLabel: "WORK", paths: box.paths)
 
@@ -348,14 +367,17 @@ struct WontFollowTests {
         try box.signIn(box.work, account: Sandbox.accountB)
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let card = a.appending(path: "local_1.json")
-        try box.write(#"""
-        {"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","priorCliSessionIds":["99999999-2222-3333-4444-555555555555"],
-         "remoteMcpServersConfig":{"Linear":{"url":"https://example.invalid/mcp"},"Drive":{"url":"https://example.invalid/d"}},
-         "enabledMcpTools":{"local:files:read_file":true,"Linear:create_issue":true,"Slack:post":false},
-         "bridgeSessionIds":["bridge-1"]}
-        """#, to: card)
-        try box.transcript(lines: [#"{"type":"history-suppression","cause":"fork_inherit","sessionId":"\#(Sandbox.cli)"}"#,
-                                   #"{"type":"user","sessionId":"\#(Sandbox.cli)","message":{"role":"user","content":"hi"}}"#])
+        try box.write(
+            #"""
+            {"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","priorCliSessionIds":["99999999-2222-3333-4444-555555555555"],
+             "remoteMcpServersConfig":{"Linear":{"url":"https://example.invalid/mcp"},"Drive":{"url":"https://example.invalid/d"}},
+             "enabledMcpTools":{"local:files:read_file":true,"Linear:create_issue":true,"Slack:post":false},
+             "bridgeSessionIds":["bridge-1"]}
+            """#, to: card)
+        try box.transcript(lines: [
+            #"{"type":"history-suppression","cause":"fork_inherit","sessionId":"\#(Sandbox.cli)"}"#,
+            #"{"type":"user","sessionId":"\#(Sandbox.cli)","message":{"role":"user","content":"hi"}}"#,
+        ])
         try box.write(#"{"preferences":{"ccdScheduledTasksEnabled":true}}"#, to: box.main.appending(path: "claude_desktop_config.json"))
         let cowork = box.main.appending(path: "local-agent-mode-sessions/\(Sandbox.accountA)/org-1", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: cowork, withIntermediateDirectories: true)
@@ -377,14 +399,16 @@ struct WontFollowTests {
         // A Remote Control or Project worker belongs to its account.
         try box.signIn(box.work, account: Sandbox.accountB)
         try box.write(#"{"sessionId":"local_2","cliSessionId":"22222222-2222-3333-4444-555555555555","rcChild":true}"#, to: a.appending(path: "local_2.json"))
-        #expect(Continuation.wontFollow(card: a.appending(path: "local_2.json"), target: box.work, paths: box.paths).map(\.kind)
+        #expect(
+            Continuation.wontFollow(card: a.appending(path: "local_2.json"), target: box.work, paths: box.paths).map(\.kind)
                 .contains(.accountBoundWorker))
 
         // An ordinary local session leaves nothing behind.
         try box.write(#"{}"#, to: box.main.appending(path: "claude_desktop_config.json"))
         try FileManager.default.removeItem(at: cowork.appending(path: "scheduled-tasks.json"))
-        try box.write(#"{"sessionId":"local_3","cliSessionId":"33333333-2222-3333-4444-555555555555","cwd":"/repo","enabledMcpTools":{"local:files:read_file":true}}"#,
-                      to: a.appending(path: "local_3.json"))
+        try box.write(
+            #"{"sessionId":"local_3","cliSessionId":"33333333-2222-3333-4444-555555555555","cwd":"/repo","enabledMcpTools":{"local:files:read_file":true}}"#,
+            to: a.appending(path: "local_3.json"))
         #expect(Continuation.wontFollow(card: a.appending(path: "local_3.json"), target: box.work, paths: box.paths).isEmpty)
     }
 }

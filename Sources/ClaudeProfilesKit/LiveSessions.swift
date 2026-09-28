@@ -18,10 +18,11 @@ public enum LiveSessions {
         var found = Set<String>()
         for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasSuffix(".json") {
             guard let pid = pid_t(name.dropLast(".json".count)), pid > 0, isRunning(pid),
-                  let data = try? Data(contentsOf: folder.appending(path: name)),
-                  let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  (record["pid"] as? Int).map({ $0 == Int(pid) }) ?? true,
-                  let id = record["sessionId"] as? String, !id.isEmpty else { continue }
+                let data = try? Data(contentsOf: folder.appending(path: name)),
+                let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                (record["pid"] as? Int).map({ $0 == Int(pid) }) ?? true,
+                let id = record["sessionId"] as? String, !id.isEmpty
+            else { continue }
             found.insert(id.lowercased())
         }
         return found

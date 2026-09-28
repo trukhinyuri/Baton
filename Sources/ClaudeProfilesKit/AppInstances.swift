@@ -16,7 +16,7 @@ public enum AppInstances {
             let names = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).sorted()
             return names.filter { $0.hasSuffix(".app") }.map { folder.appending(path: $0) }.filter { app in
                 guard let data = try? Data(contentsOf: app.appending(path: "Contents/Info.plist")),
-                      let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                    let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
                 else { return false }
                 return info["CFBundleIdentifier"] as? String == bundleID
             }

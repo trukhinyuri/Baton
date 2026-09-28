@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Account email")
@@ -14,8 +15,9 @@ struct AccountEmailTests {
         let dataDir = FileManager.default.temporaryDirectory.appending(path: "email-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.copyItem(at: fixture, to: dataDir)
         let table = dataDir.appending(path: "IndexedDB/https_claude.ai_0.indexeddb.leveldb/000005.ldb")
-        #expect(DesktopData.email(inBlob: try Data(contentsOf: table), accountID: Self.account) == nil,
-                "the fixture hides the profile from a byte scan")
+        #expect(
+            DesktopData.email(inBlob: try Data(contentsOf: table), accountID: Self.account) == nil,
+            "the fixture hides the profile from a byte scan")
 
         #expect(DesktopData.email(in: dataDir, accountID: Self.account) == "me@snappy.example")
         #expect(DesktopData.email(in: dataDir, accountID: "cccccccc-dddd-4eee-8fff-000000000002") == nil)

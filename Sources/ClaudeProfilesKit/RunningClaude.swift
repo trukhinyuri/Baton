@@ -58,8 +58,8 @@ enum ProcessArguments {
         guard bytes.count >= MemoryLayout<Int32>.size else { return nil }
         let argc = Int(bytes.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) })
         var i = MemoryLayout<Int32>.size
-        while i < bytes.count, bytes[i] != 0 { i += 1 }   // executable path
-        while i < bytes.count, bytes[i] == 0 { i += 1 }   // padding
+        while i < bytes.count, bytes[i] != 0 { i += 1 }  // executable path
+        while i < bytes.count, bytes[i] == 0 { i += 1 }  // padding
         var arguments: [String] = []
         while arguments.count < argc, i < bytes.count {
             let start = i

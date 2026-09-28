@@ -1,6 +1,6 @@
-import Foundation
 import CryptoKit
 import Darwin
+import Foundation
 
 /// Shares an explicit set of portable desktop settings before a profile starts. Account state, Projects,
 /// Remote Control, Cowork grants and unknown future preferences stay with the profile. Portable settings
@@ -48,8 +48,9 @@ public struct SettingsSync: Sendable {
 
         changed += try mergeExtensions(into: dataDir, base: &base, backup: backup)
         for name in Self.copied {
-            changed += try mergeAsset(source.appending(path: name), into: dataDir.appending(path: name),
-                                      key: "asset:" + name, base: &base, backup: backup)
+            changed += try mergeAsset(
+                source.appending(path: name), into: dataDir.appending(path: name),
+                key: "asset:" + name, base: &base, backup: backup)
         }
 
         changed += try mergeSSH(into: dataDir, base: &base, backup: backup)
@@ -62,14 +63,16 @@ public struct SettingsSync: Sendable {
             var result = current, attempt = base
             if let sourceServers = main["mcpServers"] {
                 guard let servers = sourceServers as? [String: Any],
-                      current["mcpServers"] == nil || current["mcpServers"] is [String: Any] else {
+                    current["mcpServers"] == nil || current["mcpServers"] is [String: Any]
+                else {
                     throw LocalStorageError.corrupt("mcpServers must contain a JSON object; the existing configuration was kept")
                 }
                 let ownServers = current["mcpServers"] as? [String: Any] ?? [:]
                 var merged = ownServers
                 for key in servers.keys.sorted() {
-                    Self.sharePreservingChanges(key, main: servers, own: ownServers, into: &merged,
-                                                base: &attempt, prefix: "mcp:")
+                    Self.sharePreservingChanges(
+                        key, main: servers, own: ownServers, into: &merged,
+                        base: &attempt, prefix: "mcp:")
                 }
                 result["mcpServers"] = merged
                 // The old whole-dictionary baseline cannot establish ownership of individual servers.
@@ -108,10 +111,11 @@ public struct SettingsSync: Sendable {
         let sourceRoot = paths.mainDataDir.appending(path: "Claude Extensions")
         let targetRoot = dataDir.appending(path: "Claude Extensions")
         guard try Self.itemType(sourceIndex) == .typeRegular,
-              try Self.itemType(sourceRoot) == .typeDirectory,
-              try Self.itemType(targetIndex) == nil || Self.itemType(targetIndex) == .typeRegular,
-              try Self.itemType(targetRoot) == nil || Self.itemType(targetRoot) == .typeDirectory,
-              let source = try Self.readExistingJSON(sourceIndex), let sourceRecords = Self.extensionRecords(source) else { return 0 }
+            try Self.itemType(sourceRoot) == .typeDirectory,
+            try Self.itemType(targetIndex) == nil || Self.itemType(targetIndex) == .typeRegular,
+            try Self.itemType(targetRoot) == nil || Self.itemType(targetRoot) == .typeDirectory,
+            let source = try Self.readExistingJSON(sourceIndex), let sourceRecords = Self.extensionRecords(source)
+        else { return 0 }
         let own = try Self.readExistingJSON(targetIndex) ?? ["extensions": [:]]
         guard let ownRecords = Self.extensionRecords(own) else { return 0 }
         var merged = ownRecords, attempt = base, packages: [String: String] = [:]
@@ -147,8 +151,11 @@ public struct SettingsSync: Sendable {
         let stagedRoot = stage.appending(path: "packages"), stagedIndex = stage.appending(path: "index.json")
         var keepRecovery = false
         defer { if !keepRecovery { try? fm.removeItem(at: stage) } }
-        if oldRootHash != nil { try fm.copyItem(at: targetRoot, to: stagedRoot) }
-        else { try fm.createDirectory(at: stagedRoot, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
+        if oldRootHash != nil {
+            try fm.copyItem(at: targetRoot, to: stagedRoot)
+        } else {
+            try fm.createDirectory(at: stagedRoot, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        }
         for (id, hash) in packages {
             let stagedPackage = stagedRoot.appending(path: id)
             if try Self.itemType(stagedPackage) != nil { try fm.removeItem(at: stagedPackage) }
@@ -162,16 +169,17 @@ public struct SettingsSync: Sendable {
             try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: stagedIndex.path)
         }
         guard (try Self.itemType(targetRoot) == nil ? nil : try Self.assetFingerprint(targetRoot)) == oldRootHash,
-              (try Self.itemType(targetIndex) == nil ? nil : try Self.assetFingerprint(targetIndex)) == oldIndexHash else {
+            (try Self.itemType(targetIndex) == nil ? nil : try Self.assetFingerprint(targetIndex)) == oldIndexHash
+        else {
             throw LocalStorageError.corrupt("Extension setup changed during copying; existing setup was kept")
         }
         if oldRootHash != nil { _ = try backup.save(targetRoot) }
         if oldIndexHash != nil { _ = try backup.save(targetIndex) }
         try Self.installStaged(stagedRoot, into: targetRoot, replacing: oldRootHash != nil)
-        do { try Self.installStaged(stagedIndex, into: targetIndex, replacing: oldIndexHash != nil) }
-        catch {
+        do { try Self.installStaged(stagedIndex, into: targetIndex, replacing: oldIndexHash != nil) } catch {
             // If the second rename fails, restore the original packages before reporting the error.
-            let restored = oldRootHash != nil
+            let restored =
+                oldRootHash != nil
                 ? renamex_np(stagedRoot.path, targetRoot.path, UInt32(RENAME_SWAP))
                 : renamex_np(targetRoot.path, stagedRoot.path, UInt32(RENAME_EXCL))
             if restored != 0 {
@@ -189,11 +197,12 @@ public struct SettingsSync: Sendable {
         guard Set(object.keys) == ["extensions"], let records = object["extensions"] as? [String: Any] else { return nil }
         for (id, value) in records {
             guard !id.isEmpty, id != ".", id != "..", !id.contains("/"),
-                  let record = value as? [String: Any],
-                  Set(record.keys) == ["id", "version", "hash", "installedAt", "manifest", "signatureInfo", "source"],
-                  record["id"] as? String == id, record["version"] is String, record["hash"] is String,
-                  record["installedAt"] is String, record["manifest"] is [String: Any],
-                  record["signatureInfo"] is [String: Any], record["source"] is String else { return nil }
+                let record = value as? [String: Any],
+                Set(record.keys) == ["id", "version", "hash", "installedAt", "manifest", "signatureInfo", "source"],
+                record["id"] as? String == id, record["version"] is String, record["hash"] is String,
+                record["installedAt"] is String, record["manifest"] is [String: Any],
+                record["signatureInfo"] is [String: Any], record["source"] is String
+            else { return nil }
         }
         return records
     }
@@ -210,8 +219,9 @@ public struct SettingsSync: Sendable {
         let filename = "ssh_configs.json"
         let source = paths.mainDataDir.appending(path: filename), target = dataDir.appending(path: filename)
         guard try Self.itemType(source) == .typeRegular,
-              try Self.itemType(target) == nil || Self.itemType(target) == .typeRegular,
-              let main = try Self.readExistingJSON(source), let mainConfigs = Self.sshConfigurations(main) else { return 0 }
+            try Self.itemType(target) == nil || Self.itemType(target) == .typeRegular,
+            let main = try Self.readExistingJSON(source), let mainConfigs = Self.sshConfigurations(main)
+        else { return 0 }
         let own = try Self.readExistingJSON(target) ?? ["configs": []]
         guard let ownConfigs = Self.sshConfigurations(own) else { return 0 }
         let mainByID = Dictionary(uniqueKeysWithValues: mainConfigs.map { ($0["id"] as! String, $0 as Any) })
@@ -233,18 +243,23 @@ public struct SettingsSync: Sendable {
 
     private static func sshConfigurations(_ object: [String: Any]) -> [[String: Any]]? {
         guard Set(object.keys).isSubset(of: ["configs", "trustedHosts"]),
-              let configs = object["configs"] as? [[String: Any]],
-              configs.allSatisfy({ Set($0.keys) == ["id", "name", "sshHost"]
-                  && $0["id"] is String && ($0["id"] as? String)?.isEmpty == false
-                  && $0["name"] is String && $0["sshHost"] is String }),
-              Set(configs.compactMap { $0["id"] as? String }).count == configs.count else { return nil }
+            let configs = object["configs"] as? [[String: Any]],
+            configs.allSatisfy({
+                Set($0.keys) == ["id", "name", "sshHost"]
+                    && $0["id"] is String && ($0["id"] as? String)?.isEmpty == false
+                    && $0["name"] is String && $0["sshHost"] is String
+            }),
+            Set(configs.compactMap { $0["id"] as? String }).count == configs.count
+        else { return nil }
         return configs
     }
 
     /// Extension packages are indivisible; the directory containing them is not. Merge its immediate
     /// children so a profile-only extension survives when MAIN installs or updates another one.
-    private func mergeAsset(_ source: URL, into target: URL, key: String,
-                            base: inout [String: String], backup: Backup) throws -> Int {
+    private func mergeAsset(
+        _ source: URL, into target: URL, key: String,
+        base: inout [String: String], backup: Backup
+    ) throws -> Int {
         guard let sourceType = try Self.itemType(source) else { return 0 }
         guard sourceType == .typeRegular || sourceType == .typeDirectory else { return 0 }
         let targetType = try Self.itemType(target)
@@ -256,16 +271,19 @@ public struct SettingsSync: Sendable {
             }
             var changed = 0
             for child in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                changed += try mergeAssetItem(child, into: target.appending(path: child.lastPathComponent),
-                                             key: key + "/" + child.lastPathComponent, base: &base, backup: backup)
+                changed += try mergeAssetItem(
+                    child, into: target.appending(path: child.lastPathComponent),
+                    key: key + "/" + child.lastPathComponent, base: &base, backup: backup)
             }
             return changed
         }
         return try mergeAssetItem(source, into: target, key: key, base: &base, backup: backup)
     }
 
-    private func mergeAssetItem(_ source: URL, into target: URL, key: String,
-                                base: inout [String: String], backup: Backup) throws -> Int {
+    private func mergeAssetItem(
+        _ source: URL, into target: URL, key: String,
+        base: inout [String: String], backup: Backup
+    ) throws -> Int {
         guard let sourceType = try Self.itemType(source), sourceType == .typeRegular || sourceType == .typeDirectory else { return 0 }
         let targetType = try Self.itemType(target)
         guard targetType == nil || targetType == sourceType else { return 0 }
@@ -282,7 +300,8 @@ public struct SettingsSync: Sendable {
         defer { try? fm.removeItem(at: stage) }
         try fm.copyItem(at: source, to: stage)
         guard try Self.assetFingerprint(stage) == sourceHash,
-              (try Self.itemType(target) == nil ? nil : try Self.assetFingerprint(target)) == ownHash else {
+            (try Self.itemType(target) == nil ? nil : try Self.assetFingerprint(target)) == ownHash
+        else {
             throw LocalStorageError.corrupt("Shared setup changed during copying; the profile's existing item was kept")
         }
         if ownHash != nil { _ = try backup.save(target) }
@@ -295,8 +314,9 @@ public struct SettingsSync: Sendable {
     }
 
     private static func itemType(_ url: URL) throws -> FileAttributeType? {
-        do { return try FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType }
-        catch let error as NSError where error.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code) { return nil }
+        do { return try FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code)
+        { return nil }
     }
 
     /// Hash content, names, kinds and modes without traversing links inside an extension package.
@@ -309,7 +329,9 @@ public struct SettingsSync: Sendable {
             add(name); add(kind?.rawValue ?? "unknown"); add(String(describing: attributes[.posixPermissions] ?? 0))
             switch kind {
             case .typeDirectory:
-                for child in try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                for child in try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil).sorted(by: {
+                    $0.lastPathComponent < $1.lastPathComponent
+                }) {
                     try visit(child, name: name + "/" + child.lastPathComponent)
                 }
             case .typeRegular:
@@ -360,8 +382,10 @@ public struct SettingsSync: Sendable {
 
     /// Resolves portable values without retaining their contents (MCP configuration may include secrets).
     /// Missing source settings do not delete profile-only settings.
-    private static func share(_ key: String, main: [String: Any], own: [String: Any],
-                              into result: inout [String: Any], base: inout [String: String], prefix: String) {
+    private static func share(
+        _ key: String, main: [String: Any], own: [String: Any],
+        into result: inout [String: Any], base: inout [String: String], prefix: String
+    ) {
         guard let value = main[key] else { return }
         let stateKey = prefix + key
         let mainHash = fingerprint(value), ownHash = own[key].map(fingerprint) ?? InterfaceSync.missing
@@ -376,9 +400,11 @@ public struct SettingsSync: Sendable {
 
     /// Shares independently named settings without replacing pre-existing profile choices. The first
     /// source fingerprint also remembers an initial conflict so a later profile-side deletion stays local.
-    private static func sharePreservingChanges(_ key: String, main: [String: Any], own: [String: Any],
-                                               into result: inout [String: Any], base: inout [String: String],
-                                               prefix: String) {
+    private static func sharePreservingChanges(
+        _ key: String, main: [String: Any], own: [String: Any],
+        into result: inout [String: Any], base: inout [String: String],
+        prefix: String
+    ) {
         guard let value = main[key] else { return }
         let stateKey = prefix + key, mainHash = fingerprint(value)
         let ownHash = own[key].map(fingerprint)
@@ -397,7 +423,8 @@ public struct SettingsSync: Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
         let data = try Data(contentsOf: url)
         guard let result = try JSONSerialization.jsonObject(with: data) as? [String: String],
-              result.values.allSatisfy({ $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil }) else {
+            result.values.allSatisfy({ $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil })
+        else {
             throw LocalStorageError.corrupt("Shared settings history is unreadable; setup files were left unchanged")
         }
         return result
@@ -424,7 +451,8 @@ public struct SettingsSync: Sendable {
     private func copyAppearance(into dataDir: URL, base: inout [String: String]) throws -> Bool {
         let to = dataDir.appending(path: "config.json")
         guard let main = Self.readJSON(paths.mainDataDir.appending(path: "config.json")),
-              var config = Self.readJSON(to) else { return false }
+            var config = Self.readJSON(to)
+        else { return false }
         let own = config
         var attempt = base
         for key in Self.appearanceKeys {

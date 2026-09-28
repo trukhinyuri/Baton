@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Atomic engine installation")
@@ -35,14 +36,17 @@ struct EngineInstallTests {
         let source = try app(in: box.root, name: "source.app", version: "2")
         let destination = try app(in: box.root, name: "engine.app", version: "1")
         var observedBackup = false
-        try EngineInstall.install(from: source, to: destination, validate: { url in
-            if url.path != destination.path { #expect(try version(destination) == "1") }
-            else {
-                #expect(try version(destination) == "2")
-                let backups = try staging(in: box.root)
-                observedBackup = try backups.count == 1 && version(backups[0]) == "1"
-            }
-        })
+        try EngineInstall.install(
+            from: source, to: destination,
+            validate: { url in
+                if url.path != destination.path {
+                    #expect(try version(destination) == "1")
+                } else {
+                    #expect(try version(destination) == "2")
+                    let backups = try staging(in: box.root)
+                    observedBackup = try backups.count == 1 && version(backups[0]) == "1"
+                }
+            })
         #expect(observedBackup)
         #expect(try version(destination) == "2")
         #expect(try version(source) == "2")
@@ -57,11 +61,13 @@ struct EngineInstallTests {
         let unrelated = box.root.appending(path: ".other-install-unfinished.app")
         try fm.createDirectory(at: unrelated, withIntermediateDirectories: false)
         #expect(throws: Fault.copy) {
-            try EngineInstall.install(from: source, to: destination, copy: { _, partial in
-                try fm.createDirectory(at: partial, withIntermediateDirectories: false)
-                try Data("partial".utf8).write(to: partial.appending(path: "partial"))
-                throw Fault.copy
-            }, validate: { _ in })
+            try EngineInstall.install(
+                from: source, to: destination,
+                copy: { _, partial in
+                    try fm.createDirectory(at: partial, withIntermediateDirectories: false)
+                    try Data("partial".utf8).write(to: partial.appending(path: "partial"))
+                    throw Fault.copy
+                }, validate: { _ in })
         }
         #expect(try version(destination) == "1")
         #expect(try staging(in: box.root).map(\.lastPathComponent) == [unrelated.lastPathComponent])
@@ -73,9 +79,11 @@ struct EngineInstallTests {
         let source = try app(in: box.root, name: "source.app", version: "2")
         let destination = try app(in: box.root, name: "engine.app", version: "1")
         #expect(throws: (any Error).self) {
-            try EngineInstall.install(from: source, to: destination, copy: { _, stage in
-                _ = try app(in: stage.deletingLastPathComponent(), name: stage.lastPathComponent, version: "3")
-            }, validate: { _ in })
+            try EngineInstall.install(
+                from: source, to: destination,
+                copy: { _, stage in
+                    _ = try app(in: stage.deletingLastPathComponent(), name: stage.lastPathComponent, version: "3")
+                }, validate: { _ in })
         }
         #expect(try version(destination) == "1")
         #expect(try staging(in: box.root).isEmpty)
@@ -92,9 +100,11 @@ struct EngineInstallTests {
         let source = try app(in: box.root, name: "source.app", version: "2")
         let destination = try app(in: box.root, name: "engine.app", version: "1")
         #expect(throws: Fault.signature) {
-            try EngineInstall.install(from: source, to: destination, validate: { url in
-                if url.path != source.path { throw Fault.signature }
-            })
+            try EngineInstall.install(
+                from: source, to: destination,
+                validate: { url in
+                    if url.path != source.path { throw Fault.signature }
+                })
         }
         #expect(try version(destination) == "1")
         #expect(try staging(in: box.root).isEmpty)
@@ -119,9 +129,11 @@ struct EngineInstallTests {
         let destination = try app(in: box.root, name: "engine.app", version: "1")
         let original = try Data(contentsOf: destination.appending(path: "Contents/MacOS/Claude"))
         #expect(throws: Fault.signature) {
-            try EngineInstall.install(from: source, to: destination, validate: { url in
-                if url.path == destination.path { throw Fault.signature }
-            })
+            try EngineInstall.install(
+                from: source, to: destination,
+                validate: { url in
+                    if url.path == destination.path { throw Fault.signature }
+                })
         }
         #expect(try version(destination) == "1")
         #expect(try Data(contentsOf: destination.appending(path: "Contents/MacOS/Claude")) == original)
@@ -135,13 +147,16 @@ struct EngineInstallTests {
         let destination = try app(in: box.root, name: "engine.app", version: "1")
         var exchanges = 0
         do {
-            try EngineInstall.install(from: source, to: destination, validate: { url in
-                if url.path == destination.path { throw Fault.signature }
-            }, exchange: { first, second in
-                exchanges += 1
-                if exchanges == 2 { throw Fault.rollback }
-                try EngineInstall.exchangeBundles(first, second)
-            })
+            try EngineInstall.install(
+                from: source, to: destination,
+                validate: { url in
+                    if url.path == destination.path { throw Fault.signature }
+                },
+                exchange: { first, second in
+                    exchanges += 1
+                    if exchanges == 2 { throw Fault.rollback }
+                    try EngineInstall.exchangeBundles(first, second)
+                })
             Issue.record("Expected rollback failure")
         } catch EngineInstall.InstallError.rollbackFailed(let backup, _) {
             #expect(try version(backup) == "1")
@@ -156,9 +171,11 @@ struct EngineInstallTests {
         let source = try app(in: box.root, name: "source.app", version: "2")
         let destination = box.root.appending(path: "engine.app")
         #expect(throws: Fault.signature) {
-            try EngineInstall.install(from: source, to: destination, validate: { url in
-                if url.path == destination.path { throw Fault.signature }
-            })
+            try EngineInstall.install(
+                from: source, to: destination,
+                validate: { url in
+                    if url.path == destination.path { throw Fault.signature }
+                })
         }
         #expect(!fm.fileExists(atPath: destination.path))
         try EngineInstall.install(from: source, to: destination, validate: { _ in })

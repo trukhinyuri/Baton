@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 /// A session Claude Desktop copied itself: `new` starts with `old`'s records, and a card names `old` as prior.
@@ -25,16 +26,19 @@ private struct DesktopFork {
         box = try Sandbox()
         let history = (1...6).map { Self.record("u\($0)", session: Self.old) }
         try put(history.joined(separator: "\n") + "\n", at: projects.appending(path: "\(Self.old).jsonl"))
-        let copied = sharedHistory ? (1...6).map { Self.record("u\($0)", session: Self.new) }
-                                   : (1...6).map { Self.record("fresh\($0)", session: Self.new) }
+        let copied =
+            sharedHistory
+            ? (1...6).map { Self.record("u\($0)", session: Self.new) }
+            : (1...6).map { Self.record("fresh\($0)", session: Self.new) }
         let fork = #"{"type":"history-suppression","sessionId":"\#(Self.new)","cause":"fork_inherit","ts":1}"#
         try put(([fork] + copied).joined(separator: "\n") + "\n", at: projects.appending(path: "\(Self.new).jsonl"))
 
         let agent = [Self.record("a1", session: Self.old, text: "look at \(Self.old)")].joined() + "\n"
         try put(agent, at: oldFolder.appending(path: "subagents/agent-a1.jsonl"))
         try put(#"{"agentType":"general-purpose"}"#, at: oldFolder.appending(path: "subagents/agent-a1.meta.json"))
-        try put(#"{"type":"result","key":"v2:abc","text":"/tmp/x/\#(Self.old)/scratchpad/facts.md"}"# + "\n",
-                at: oldFolder.appending(path: "subagents/workflows/wf_1/journal.jsonl"))
+        try put(
+            #"{"type":"result","key":"v2:abc","text":"/tmp/x/\#(Self.old)/scratchpad/facts.md"}"# + "\n",
+            at: oldFolder.appending(path: "subagents/workflows/wf_1/journal.jsonl"))
         try put(#"{"scriptPath":"/p/\#(Self.old)/workflows/scripts/s.js"}"#, at: oldFolder.appending(path: "workflows/wf_1.json"))
         try put("export const meta = {}", at: oldFolder.appending(path: "workflows/scripts/s.js"))
         try put("long tool output", at: oldFolder.appending(path: "tool-results/toolu_1.txt"))
@@ -50,12 +54,14 @@ private struct DesktopFork {
         try put("let y = 2", at: oldTemp.appending(path: "scratchpad/repo-copy/Sources/y.swift"))
         for i in 0...NativeForkCarry.maxNotesPerFolder { try put("// \(i)", at: oldTemp.appending(path: "scratchpad/build-b/src/f\(i).swift")) }
         try put("done\n", at: oldTemp.appending(path: "tasks/b1.output"))
-        try FileManager.default.createSymbolicLink(at: oldTemp.appending(path: "tasks/a1.output"),
-                                                   withDestinationURL: oldFolder.appending(path: "subagents/agent-a1.jsonl"))
+        try FileManager.default.createSymbolicLink(
+            at: oldTemp.appending(path: "tasks/a1.output"),
+            withDestinationURL: oldFolder.appending(path: "subagents/agent-a1.jsonl"))
 
         let cards = try box.pair(box.main, account: Sandbox.accountA)
-        try put(#"{"cliSessionId":"\#(Self.new)","priorCliSessionIds":["\#(Self.old)"],"cwd":"/Users/me/work"}"#,
-                at: cards.appending(path: "local_card.json"))
+        try put(
+            #"{"cliSessionId":"\#(Self.new)","priorCliSessionIds":["\#(Self.old)"],"cwd":"/Users/me/work"}"#,
+            at: cards.appending(path: "local_card.json"))
     }
 
     func put(_ text: String, at url: URL) throws {
@@ -92,15 +98,17 @@ struct NativeForkCarryTests {
 
         let agent = try #require(fork.box.read(fork.newFolder.appending(path: "subagents/agent-a1.jsonl")))
         #expect(agent.contains(#""sessionId":"\#(DesktopFork.new)""#))
-        #expect(agent.contains("look at \(DesktopFork.old)"))   // what the agent was told stays as it was
-        for same in ["subagents/agent-a1.meta.json", "subagents/workflows/wf_1/journal.jsonl", "workflows/wf_1.json",
-                     "workflows/scripts/s.js", "tool-results/toolu_1.txt"] {
+        #expect(agent.contains("look at \(DesktopFork.old)"))  // what the agent was told stays as it was
+        for same in [
+            "subagents/agent-a1.meta.json", "subagents/workflows/wf_1/journal.jsonl", "workflows/wf_1.json",
+            "workflows/scripts/s.js", "tool-results/toolu_1.txt",
+        ] {
             #expect(fork.box.read(fork.newFolder.appending(path: same)) == fork.box.read(fork.oldFolder.appending(path: same)), "\(same)")
         }
         #expect(fork.box.read(fork.carriedScratch.appending(path: "GUIDE.md")) == "# plan\n")
         #expect(fork.box.read(fork.carriedScratch.appending(path: "notes/facts.md")) == "notes\n")
         #expect(fork.box.read(fork.carriedScratch.appending(path: "tasks/b1.output")) == "done\n")
-        #expect(!fork.box.exists(fork.carriedScratch.appending(path: "tasks/a1.output")))   // a link to a sub-agent carried above
+        #expect(!fork.box.exists(fork.carriedScratch.appending(path: "tasks/a1.output")))  // a link to a sub-agent carried above
         #expect(!fork.box.exists(fork.carriedScratch.appending(path: "image.bin")))
         #expect(!fork.box.exists(fork.carriedScratch.appending(path: ".build")))
         #expect(!fork.box.exists(fork.carriedScratch.appending(path: "wt")))

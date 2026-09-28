@@ -28,8 +28,10 @@ public struct LocalOnly: Sendable {
     }
 
     /// "Remote Control for new sessions" and "Stay reachable".
-    static let keys = [Key(name: "ccRemoteControlDefaultEnabled", required: true),
-                       Key(name: "remoteControlStayReachable", required: false)]
+    static let keys = [
+        Key(name: "ccRemoteControlDefaultEnabled", required: true),
+        Key(name: "remoteControlStayReachable", required: false),
+    ]
     public static let ownedKeys: Set<String> = Set(keys.map(\.name))
     /// Preferences Local only must never write: local scheduled tasks and their wake helper, and the switches
     /// an administrator sets through managed preferences.
@@ -136,11 +138,14 @@ public struct LocalOnly: Sendable {
         guard own.enabled ?? state.enabled else { return own.isEmpty ? .off : .pending }
         guard let applicable = applicableKeys() else { return .notSupported }
         guard let data = try? Data(contentsOf: config(window)), let patch = try? JSONPatch(data),
-              let prefs = try? patch.preferences() else { return .pending }
+            let prefs = try? patch.preferences()
+        else { return .pending }
         for key in applicable {
             if let member = prefs.members.first(where: { $0.key == key.name }) {
                 if patch.text(member) != Self.value { return .pending }
-            } else if key.required { return .pending }
+            } else if key.required {
+                return .pending
+            }
         }
         return .on
     }
@@ -168,7 +173,9 @@ public struct LocalOnly: Sendable {
                     try patch.insertFirst(key: key.name, value: Self.value, inPreferences: true)
                 }
                 if own.prior[key.name] == nil && !own.inserted.contains(key.name) { own.inserted.append(key.name) }
-            } else { continue }
+            } else {
+                continue
+            }
             expectedPrefs[key.name] = false
         }
         guard patch.bytes != original.map(Array.init) else { return }
@@ -177,7 +184,8 @@ public struct LocalOnly: Sendable {
         try write(patch, over: original, to: url, window: window, recording: own, state: &state) { written in
             for key in applicable where expectedPrefs[key.name] != nil {
                 guard let member = try written.preferences()?.members.first(where: { $0.key == key.name }),
-                      written.text(member) == Self.value else { return false }
+                    written.text(member) == Self.value
+                else { return false }
             }
             return NSDictionary(dictionary: try written.dictionary()).isEqual(to: expected)
         }
@@ -198,18 +206,21 @@ public struct LocalOnly: Sendable {
         for (name, prior) in own.prior.sorted(by: { $0.key < $1.key }) {
             // A value turned back on inside Claude while Local only was on is the user's own choice.
             guard let member = try patch.preferences()?.members.first(where: { $0.key == name }),
-                  patch.text(member) == Self.value else { continue }
+                patch.text(member) == Self.value
+            else { continue }
             patch.replace(member, with: prior)
             expectedPrefs[name] = try JSONSerialization.jsonObject(with: Data(prior.utf8), options: .fragmentsAllowed)
         }
         for name in own.inserted {
             guard let prefs = try patch.preferences(), let index = prefs.members.firstIndex(where: { $0.key == name }),
-                  patch.text(prefs.members[index]) == Self.value else { continue }
+                patch.text(prefs.members[index]) == Self.value
+            else { continue }
             patch.remove(index, in: prefs)
             expectedPrefs.removeValue(forKey: name)
         }
         if own.createdPreferences, let top = try? patch.top(), let index = top.members.firstIndex(where: { $0.key == "preferences" }),
-           let prefs = try patch.preferences(), prefs.members.isEmpty {
+            let prefs = try patch.preferences(), prefs.members.isEmpty
+        {
             patch.remove(index, in: top)
             expected.removeValue(forKey: "preferences")
         } else if expected["preferences"] != nil {
@@ -226,8 +237,10 @@ public struct LocalOnly: Sendable {
     }
 
     /// Backup, then the record, then the file; read back, and put the original bytes back if it didn't come out as planned.
-    private func write(_ patch: JSONPatch, over original: Data?, to url: URL, window: String, recording own: WindowState,
-                       state: inout State, check: (JSONPatch) throws -> Bool) throws {
+    private func write(
+        _ patch: JSONPatch, over original: Data?, to url: URL, window: String, recording own: WindowState,
+        state: inout State, check: (JSONPatch) throws -> Bool
+    ) throws {
         if original != nil { _ = try Backup(paths: paths, now: Date()).save(url, everyTime: true) }
         // Record the values being replaced before replacing them: a crash after this still knows what to put back.
         let previous = state.windows[window]
@@ -299,7 +312,8 @@ public struct LocalOnly: Sendable {
 
     private func readState() -> State {
         guard let data = try? Data(contentsOf: paths.localOnlyFile),
-              let state = try? JSONDecoder.localOnly.decode(State.self, from: data) else { return State() }
+            let state = try? JSONDecoder.localOnly.decode(State.self, from: data)
+        else { return State() }
         return state
     }
 
@@ -320,8 +334,8 @@ public struct LocalOnly: Sendable {
     }
 }
 
-private extension JSONEncoder {
-    static var localOnly: JSONEncoder {
+extension JSONEncoder {
+    fileprivate static var localOnly: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -329,8 +343,8 @@ private extension JSONEncoder {
     }
 }
 
-private extension JSONDecoder {
-    static var localOnly: JSONDecoder {
+extension JSONDecoder {
+    fileprivate static var localOnly: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
@@ -346,7 +360,8 @@ private final class SupportCache: @unchecked Sendable {
     func knownKeys(in claudeApp: URL) -> Set<String>? {
         let asar = claudeApp.appending(path: "Contents/Resources/app.asar")
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: asar.path),
-              let size = attributes[.size] as? Int, let modified = attributes[.modificationDate] as? Date else { return nil }
+            let size = attributes[.size] as? Int, let modified = attributes[.modificationDate] as? Date
+        else { return nil }
         let id = "\(asar.path)|\(size)|\(modified.timeIntervalSince1970)"
         if let known = lock.withLock({ cache[id] }) { return known }
         guard let data = try? Data(contentsOf: asar, options: .mappedIfSafe) else { return nil }

@@ -20,9 +20,11 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
     /// Claude Code sessions running inside this window right now.
     public var liveSessions: Int
 
-    public init(id: String, label: String, isMain: Bool, isRunning: Bool, account: String?, scope: String?,
-                scopeSource: String, skipReasons: [String] = [], localOnly: Bool? = nil, pendingChanges: [String] = [],
-                liveSessions: Int = 0) {
+    public init(
+        id: String, label: String, isMain: Bool, isRunning: Bool, account: String?, scope: String?,
+        scopeSource: String, skipReasons: [String] = [], localOnly: Bool? = nil, pendingChanges: [String] = [],
+        liveSessions: Int = 0
+    ) {
         self.id = id; self.label = label; self.isMain = isMain; self.isRunning = isRunning; self.account = account
         self.scope = scope; self.scopeSource = scopeSource; self.skipReasons = skipReasons; self.localOnly = localOnly
         self.pendingChanges = pendingChanges; self.liveSessions = liveSessions
@@ -46,22 +48,26 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
     // MARK: Collecting
 
     /// One entry per window, from the same local reads as the main list and the sessions check.
-    public static func collect(manager: ProfileManager, diagnostics: [Diagnostics.Entry], localOnly: [String: Bool] = [:],
-                               pending: [String: [String]] = [:]) -> [WindowStatus] {
+    public static func collect(
+        manager: ProfileManager, diagnostics: [Diagnostics.Entry], localOnly: [String: Bool] = [:],
+        pending: [String: [String]] = [:]
+    ) -> [WindowStatus] {
         let paths = manager.paths
         let running = manager.runningClaudes()
         let claudes = claudeProcesses()
         return manager.statuses().map { status in
             let dataDir = status.isMain ? paths.mainDataDir : paths.dataDir(for: status.id)
             let bundle = status.isMain ? paths.claudeApp : paths.engine(for: status.id)
-            let pids = Set(running.filter { $0.uses(dataDir: dataDir, mainDataDir: paths.mainDataDir, bundle: bundle) }
-                .compactMap { $0.app?.processIdentifier })
+            let pids = Set(
+                running.filter { $0.uses(dataDir: dataDir, mainDataDir: paths.mainDataDir, bundle: bundle) }
+                    .compactMap { $0.app?.processIdentifier })
             var scope: String?
             if let account = status.accountID {
-                let orgs = Set(["claude-code-sessions", "local-agent-mode-sessions"].flatMap { folder in
-                    ((try? FileManager.default.contentsOfDirectory(atPath: dataDir.appending(path: "\(folder)/\(account)").path)) ?? [])
-                        .filter { !$0.hasPrefix(".") }
-                })
+                let orgs = Set(
+                    ["claude-code-sessions", "local-agent-mode-sessions"].flatMap { folder in
+                        ((try? FileManager.default.contentsOfDirectory(atPath: dataDir.appending(path: "\(folder)/\(account)").path)) ?? [])
+                            .filter { !$0.hasPrefix(".") }
+                    })
                 scope = "account \(account.prefix(8)) · \(orgs.count) organization\(orgs.count == 1 ? "" : "s")"
             }
             var skip = diagnostics.first { $0.id == status.id }?.issues ?? []
@@ -72,11 +78,12 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
             if !status.isMain, status.isRunning, manager.engineIsOutdated(status.id) {
                 changes.append("Claude Desktop was updated; this window runs the previous version until it restarts.")
             }
-            return WindowStatus(id: status.id, label: status.label, isMain: status.isMain, isRunning: status.isRunning,
-                                account: status.email ?? (status.isSignedIn ? "signed in" : nil), scope: scope,
-                                scopeSource: status.isSignedIn ? "config.json (lastKnownAccountUuid)" : "not signed in yet",
-                                skipReasons: skip, localOnly: localOnly[status.id], pendingChanges: changes,
-                                liveSessions: liveSessionCount(windowPIDs: pids, claudePIDs: claudes, parent: parentPID))
+            return WindowStatus(
+                id: status.id, label: status.label, isMain: status.isMain, isRunning: status.isRunning,
+                account: status.email ?? (status.isSignedIn ? "signed in" : nil), scope: scope,
+                scopeSource: status.isSignedIn ? "config.json (lastKnownAccountUuid)" : "not signed in yet",
+                skipReasons: skip, localOnly: localOnly[status.id], pendingChanges: changes,
+                liveSessions: liveSessionCount(windowPIDs: pids, claudePIDs: claudes, parent: parentPID))
         }
     }
 
@@ -165,7 +172,7 @@ extension ProfileManager {
         let dataDir = id == "main" ? paths.mainDataDir : paths.dataDir(for: id)
         let bundle = id == "main" ? paths.claudeApp : paths.engine(for: id)
         let apps = runningClaudes().filter { $0.uses(dataDir: dataDir, mainDataDir: paths.mainDataDir, bundle: bundle) }.compactMap(\.app)
-        apps.forEach { $0.terminate() }
+        for app in apps { app.terminate() }
         for _ in 0..<100 where apps.contains(where: { !$0.isTerminated }) { try await Task.sleep(for: .milliseconds(200)) }
         guard apps.allSatisfy(\.isTerminated) else { throw WindowStatus.RestartError.didNotQuit(label: label) }
         Log.logger("restart").notice("Restarted window \(id, privacy: .private)")

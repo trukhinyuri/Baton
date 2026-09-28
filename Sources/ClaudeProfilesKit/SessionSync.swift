@@ -88,18 +88,18 @@ public struct SessionSync: Sendable {
         report.pairs = pairs.count
 
         var cards: [String: Card] = [:]
-        var holders: [String: [URL]] = [:]                          // card name → folders that have a copy
-        var transcriptsByFolder: [String: [String: String]] = [:]   // folder path → card name → transcript
-        var importedByFolder: [String: Set<String>] = [:]           // folder path → cards a window imported
+        var holders: [String: [URL]] = [:]  // card name → folders that have a copy
+        var transcriptsByFolder: [String: [String: String]] = [:]  // folder path → card name → transcript
+        var importedByFolder: [String: Set<String>] = [:]  // folder path → cards a window imported
         var tombstones = Set<String>()
         var tombstonesByScope: [String: Set<String>] = [:]
-        var tombstoneCopies: [String: (count: Int, newest: Date)] = [:]   // marker → folders that have it
+        var tombstoneCopies: [String: (count: Int, newest: Date)] = [:]  // marker → folders that have it
         let scopeFile = paths.stateDir.appending(path: "code-native-session-scopes.json")
         let remembered = try NativeScopeState.load(from: scopeFile)
         var cardScopes = remembered.scopes.mapValues(Set.init)
         var accountBound = Set(remembered.scopes.keys)
         var observed = Set<String>()
-        var archiveLists: [String: Set<String>] = [:]   // folder path → archived IDs, for folders that have an index
+        var archiveLists: [String: Set<String>] = [:]  // folder path → archived IDs, for folders that have an index
         var archiveVersion: Any = 1
 
         for pair in pairs {
@@ -151,11 +151,12 @@ public struct SessionSync: Sendable {
             return cardScopes[name]?.count == 1 && cardScopes[name]?.contains(scope) == true
         }
         func markers(in scope: String) -> Set<String> {
-            Set(tombstones.filter { marker in
-                let name = Self.cardName(for: String(marker.dropFirst("deleted_".count)))
-                return !accountBound.contains(name)
-                    || (permitted(name, in: scope) && tombstonesByScope[scope]?.contains(marker) == true)
-            })
+            Set(
+                tombstones.filter { marker in
+                    let name = Self.cardName(for: String(marker.dropFirst("deleted_".count)))
+                    return !accountBound.contains(name)
+                        || (permitted(name, in: scope) && tombstonesByScope[scope]?.contains(marker) == true)
+                })
         }
         // Each window's email is read once, and only when a rule covers a card.
         var emails: [String: String?] = [:]
@@ -288,10 +289,11 @@ public struct SessionSync: Sendable {
             var archived = archiveLists[pair.path] ?? []
             for (path, ids) in archiveLists {
                 let sourceScope = Self.scope(of: URL(fileURLWithPath: path))
-                archived.formUnion(ids.filter { id in
-                    let name = Self.cardName(for: id)
-                    return !accountBound.contains(name) || (sourceScope == scope && permitted(name, in: scope))
-                })
+                archived.formUnion(
+                    ids.filter { id in
+                        let name = Self.cardName(for: id)
+                        return !accountBound.contains(name) || (sourceScope == scope && permitted(name, in: scope))
+                    })
             }
             archived.subtract(unarchived)
             let url = pair.appending(path: Self.archiveIndex)
@@ -339,7 +341,8 @@ public struct SessionSync: Sendable {
         /// Missing or unreadable means no baseline: lists are then only combined, as before there was one.
         static func load(from url: URL) -> ArchiveBaselines {
             guard let data = try? Data(contentsOf: url), let state = try? JSONDecoder().decode(ArchiveBaselines.self, from: data),
-                  state.version == 1 else { return ArchiveBaselines() }
+                state.version == 1
+            else { return ArchiveBaselines() }
             return state
         }
 
@@ -378,11 +381,13 @@ public struct SessionSync: Sendable {
     /// Data directories of profiles that chose to keep `permissionMode` in cards shared from other accounts.
     func permissionModeCarriers() -> Set<String> {
         guard let data = try? Data(contentsOf: paths.registryFile),
-              let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
-        return Set(entries.compactMap { entry in
-            guard entry["carryPermissionMode"] as? Bool == true, let id = entry["id"] as? String else { return nil }
-            return paths.dataDir(for: id).standardizedFileURL.path
-        })
+            let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
+        else { return [] }
+        return Set(
+            entries.compactMap { entry in
+                guard entry["carryPermissionMode"] as? Bool == true, let id = entry["id"] as? String else { return nil }
+                return paths.dataDir(for: id).standardizedFileURL.path
+            })
     }
 
     /// Card fields that belong to the account a session was used under: Remote Control bridges and messages,
@@ -480,11 +485,12 @@ public struct SessionSync: Sendable {
         guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return CardFacts() }
         let folders = ["cwd", "originCwd"].compactMap { card[$0] as? String }
             .filter { !$0.isEmpty && !$0.contains(scratchFolder) }
-        return CardFacts(accountBound: isAccountBoundCard(card),
-                         transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
-                         imported: card["adoptedFromOtherSurface"] as? Bool == true,
-                         folders: Array(Set(folders)).sorted(),
-                         priors: Set((card["priorCliSessionIds"] as? [String] ?? []).map { $0.lowercased() }))
+        return CardFacts(
+            accountBound: isAccountBoundCard(card),
+            transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
+            imported: card["adoptedFromOtherSurface"] as? Bool == true,
+            folders: Array(Set(folders)).sorted(),
+            priors: Set((card["priorCliSessionIds"] as? [String] ?? []).map { $0.lowercased() }))
     }
 
     /// `local_<uuid>.json` names the transcript it was imported from; any other name gives `nil`.
@@ -535,13 +541,15 @@ public struct SessionSync: Sendable {
     func localized(_ card: Data, for dataDir: URL, linking: Bool = true) -> Data {
         let strings = Self.topLevelStrings(in: card)
         guard let originRange = strings["originCwd"], let origin = String(data: card[originRange], encoding: .utf8),
-              let workspace = scratchWorkspace(origin) else { return card }
+            let workspace = scratchWorkspace(origin)
+        else { return card }
         let here = dataDir.path + Self.scratchFolder + workspace
         var changes = [(originRange, origin)]
         if let cwdRange = strings["cwd"], let cwd = String(data: card[cwdRange], encoding: .utf8),
-           scratchWorkspace(cwd) == workspace, workspace.split(separator: "/").count == 3,
-           let owner = owner(of: cwd, workspace: workspace),
-           owner.path == dataDir.path || linkScratchFolder(at: here, to: owner.path + Self.scratchFolder + workspace, creating: linking) {
+            scratchWorkspace(cwd) == workspace, workspace.split(separator: "/").count == 3,
+            let owner = owner(of: cwd, workspace: workspace),
+            owner.path == dataDir.path || linkScratchFolder(at: here, to: owner.path + Self.scratchFolder + workspace, creating: linking)
+        {
             changes.append((cwdRange, cwd))
         }
         var result = card
@@ -596,9 +604,10 @@ public struct SessionSync: Sendable {
                     for name in (try? fm.contentsOfDirectory(atPath: orgPath)) ?? [] {
                         let link = orgPath + "/" + name
                         guard (try? fm.attributesOfItem(atPath: link)[.type] as? FileAttributeType) == .typeSymbolicLink,
-                              let folder = try? fm.destinationOfSymbolicLink(atPath: link), folder.hasPrefix("/"),
-                              folder.hasSuffix(Self.scratchFolder + account + "/" + org + "/" + name),
-                              !fm.fileExists(atPath: folder) else { continue }
+                            let folder = try? fm.destinationOfSymbolicLink(atPath: link), folder.hasPrefix("/"),
+                            folder.hasSuffix(Self.scratchFolder + account + "/" + org + "/" + name),
+                            !fm.fileExists(atPath: folder)
+                        else { continue }
                         if (try? fm.removeItem(atPath: link)) != nil { removed += 1 }
                     }
                 }
@@ -680,7 +689,8 @@ struct Backup {
         var target = dayDir.appending(path: relative)
         if FileManager.default.fileExists(atPath: target.path) {
             guard everyTime else { return try saveVersion(of: url, relative: relative, dayCopy: target) }
-            target = target.deletingLastPathComponent().appending(path: "\(Int(now.timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(8))-\(target.lastPathComponent)")
+            target = target.deletingLastPathComponent().appending(
+                path: "\(Int(now.timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(8))-\(target.lastPathComponent)")
         }
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: url, to: target)
@@ -722,7 +732,8 @@ struct Backup {
     func saveValues(_ values: [String: Any], as relative: String) throws {
         var target = dayDir.appending(path: relative)
         if FileManager.default.fileExists(atPath: target.path) {
-            target = target.deletingLastPathComponent().appending(path: "\(Int(now.timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(8))-\(target.lastPathComponent)")
+            target = target.deletingLastPathComponent().appending(
+                path: "\(Int(now.timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(8))-\(target.lastPathComponent)")
         }
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys]).write(to: target, options: .atomic)

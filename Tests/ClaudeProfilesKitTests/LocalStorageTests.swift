@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 private let claudeOrigin = "https://claude.ai"
@@ -68,8 +69,9 @@ struct LocalStorageTests {
         #expect(items["toDelete"] == nil, "deleted key must not appear")
         #expect(items["counter"] == "2", "only the newest write of an overwritten key must appear")
         #expect(items["otherOrigin"] == nil, "a different origin's key must not appear under this origin's prefix")
-        #expect(try storage.items(origin: "https://example.com")["otherOrigin"] == "shouldNotAppear",
-                "reading with the matching origin still finds it")
+        #expect(
+            try storage.items(origin: "https://example.com")["otherOrigin"] == "shouldNotAppear",
+            "reading with the matching origin still finds it")
     }
 
     @Test func missingDataDirDoesNotExistAndIsNotInUse() {

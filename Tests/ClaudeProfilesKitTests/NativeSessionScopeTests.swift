@@ -1,12 +1,15 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Native Project and Remote Control scope")
 struct NativeSessionScopeTests {
     // These are the fields of a local worker spawned by a new Claude Project, including its server bridge.
-    static let worker = #"{"sessionId":"local_worker","title":"Project worker","cwd":"/shared/repo","originCwd":"/shared/repo","bridgeSessionIds":["session_bridge"],"remoteControlSpawn":{"ccrSessionId":"session_ccr","folder":"/shared/repo","projectThreadChild":true,"rcChild":true}}"#
-    static let ordinary = #"{"sessionId":"local_ordinary","title":"Normal local session","cwd":"/shared/repo","bridgeSessionIds":["session_existing_bridge"],"remoteControlAutoEligible":true}"#
+    static let worker =
+        #"{"sessionId":"local_worker","title":"Project worker","cwd":"/shared/repo","originCwd":"/shared/repo","bridgeSessionIds":["session_bridge"],"remoteControlSpawn":{"ccrSessionId":"session_ccr","folder":"/shared/repo","projectThreadChild":true,"rcChild":true}}"#
+    static let ordinary =
+        #"{"sessionId":"local_ordinary","title":"Normal local session","cwd":"/shared/repo","bridgeSessionIds":["session_existing_bridge"],"remoteControlAutoEligible":true}"#
 
     @Test func projectWorkerOnlyFollowsTheSameAccountAndOrganization() throws {
         let box = try Sandbox()
@@ -16,18 +19,22 @@ struct NativeSessionScopeTests {
         let otherOrg = try box.pair(box.work, account: Sandbox.accountA, org: "org-b")
         try box.write(Self.worker, to: a.appending(path: "local_worker.json"))
         try box.write(Self.ordinary, to: a.appending(path: "local_ordinary.json"))
-        try box.write(#"{"v":1,"archived":["local_worker","local_ordinary"]}"#,
-                      to: a.appending(path: "archived-sessions.idx"))
+        try box.write(
+            #"{"v":1,"archived":["local_worker","local_ordinary"]}"#,
+            to: a.appending(path: "archived-sessions.idx"))
 
         let report = try box.sync(propagateDeletions: true)
 
         #expect(report.accountBoundCards == 1)
         #expect(report.ambiguousAccountBoundCards == 0)
         #expect(box.read(same.appending(path: "local_worker.json")) == Self.worker)
-        #expect(box.read(otherOrg.appending(path: "local_ordinary.json")) == Self.ordinary,
-                "bridgeSessionIds by itself does not prevent an ordinary local session being continued")
-        #expect(box.read(otherAccount.appending(path: "local_ordinary.json")) == #"{"sessionId":"local_ordinary","title":"Normal local session","cwd":"/shared/repo"}"#,
-                "another account gets the session without the Remote Control fields of this one")
+        #expect(
+            box.read(otherOrg.appending(path: "local_ordinary.json")) == Self.ordinary,
+            "bridgeSessionIds by itself does not prevent an ordinary local session being continued")
+        #expect(
+            box.read(otherAccount.appending(path: "local_ordinary.json"))
+                == #"{"sessionId":"local_ordinary","title":"Normal local session","cwd":"/shared/repo"}"#,
+            "another account gets the session without the Remote Control fields of this one")
         for pair in [otherAccount, otherOrg] {
             #expect(!box.exists(pair.appending(path: "local_worker.json")))
             let index = try #require(SettingsSync.readJSON(pair.appending(path: "archived-sessions.idx")))
@@ -49,8 +56,9 @@ struct NativeSessionScopeTests {
         _ = try box.sync()
 
         #expect(box.read(a.appending(path: "local_worker.json")) == worker)
-        #expect(box.read(same.appending(path: "local_worker.json")) == worker,
-                "cwd, originCwd, remoteControlSpawn.folder and CCR identifiers remain coupled")
+        #expect(
+            box.read(same.appending(path: "local_worker.json")) == worker,
+            "cwd, originCwd, remoteControlSpawn.folder and CCR identifiers remain coupled")
         #expect(!box.exists(URL(fileURLWithPath: box.work.path + suffix)), "native workers do not get relocated scratch aliases")
         #expect(try box.sync().changes == 0, "an existing native copy must not be localized on a later run either")
     }
@@ -113,8 +121,9 @@ struct NativeSessionScopeTests {
         #expect(box.exists(same.appending(path: "deleted_worker")))
         #expect(!box.exists(foreign.appending(path: "deleted_worker")))
         #expect(try box.sync(propagateDeletions: true).changes == 0)
-        #expect(!box.exists(foreign.appending(path: "deleted_worker")),
-                "scope survives after all native worker cards are gone")
+        #expect(
+            !box.exists(foreign.appending(path: "deleted_worker")),
+            "scope survives after all native worker cards are gone")
     }
 
     @Test func markerInAnyCopyProtectsAgainstANewerUnmarkedCopy() throws {

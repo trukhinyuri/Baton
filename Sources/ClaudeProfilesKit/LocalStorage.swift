@@ -32,7 +32,8 @@ public struct LocalStorage: Sendable {
         for (key, value) in live where key.starts(with: prefix) {
             let encodedKey = Array(key.dropFirst(prefix.count))
             guard let decodedKey = ChromiumKey.decodeString(encodedKey),
-                  let decodedValue = ChromiumKey.decodeString(value) else { continue }
+                let decodedValue = ChromiumKey.decodeString(value)
+            else { continue }
             result[decodedKey] = decodedValue
         }
         return result
@@ -42,8 +43,9 @@ public struct LocalStorage: Sendable {
     /// an existing file. Throws if the database is missing or another process has it open.
     public func update(origin: String, set: [String: String], remove: Set<String>) throws {
         let prefix = ChromiumKey.originPrefix(origin)
-        try store.append(put: set.map { (prefix + ChromiumKey.encodeString($0.key), ChromiumKey.encodeString($0.value)) },
-                         delete: remove.map { prefix + ChromiumKey.encodeString($0) })
+        try store.append(
+            put: set.map { (prefix + ChromiumKey.encodeString($0.key), ChromiumKey.encodeString($0.value)) },
+            delete: remove.map { prefix + ChromiumKey.encodeString($0) })
     }
 }
 
@@ -64,7 +66,7 @@ struct LevelDBStore: Sendable {
         guard fd >= 0 else { return false }
         defer { close(fd) }
 
-        var fl = flock_t()
+        var fl = FlockT()
         fl.l_start = 0
         fl.l_len = 0
         fl.l_pid = 0
@@ -412,8 +414,8 @@ enum LogFormat {
             while pos + headerSize <= blockEnd {
                 let length = Int(data[pos + 4]) | (Int(data[pos + 5]) << 8)
                 let type = data[pos + 6]
-                if type == 0 && length == 0 { break }   // zero padding at the tail of a block
-                guard pos + headerSize + length <= blockEnd else { return records }   // truncated: stop here
+                if type == 0 && length == 0 { break }  // zero padding at the tail of a block
+                guard pos + headerSize + length <= blockEnd else { return records }  // truncated: stop here
                 let payload = Array(data[(pos + headerSize)..<(pos + headerSize + length)])
                 switch type {
                 case RecordType.full:
@@ -428,7 +430,7 @@ enum LogFormat {
                     if let whole = pending { records.append(whole) }
                     pending = nil
                 default:
-                    break   // unknown record type: ignore, matches LevelDB's own reader
+                    break  // unknown record type: ignore, matches LevelDB's own reader
                 }
                 pos += headerSize + length
             }
@@ -549,18 +551,18 @@ enum VersionEditCodec {
             case Tag.lastSequence:
                 state.lastSequence = try reader.varint64()
             case Tag.compactPointer:
-                _ = try reader.varint32()   // level
-                _ = try reader.lengthPrefixed()   // key
+                _ = try reader.varint32()  // level
+                _ = try reader.lengthPrefixed()  // key
             case Tag.deletedFile:
-                _ = try reader.varint32()   // level
+                _ = try reader.varint32()  // level
                 let number = try reader.varint64()
                 state.liveFileNumbers.remove(number)
             case Tag.newFile:
-                _ = try reader.varint32()   // level
+                _ = try reader.varint32()  // level
                 let number = try reader.varint64()
-                _ = try reader.varint64()   // file size
-                _ = try reader.lengthPrefixed()   // smallest key
-                _ = try reader.lengthPrefixed()   // largest key
+                _ = try reader.varint64()  // file size
+                _ = try reader.lengthPrefixed()  // smallest key
+                _ = try reader.lengthPrefixed()  // largest key
                 state.liveFileNumbers.insert(number)
             case Tag.prevLogNumber:
                 state.prevLogNumber = try reader.varint64()
@@ -587,7 +589,7 @@ enum SSTableReader {
         let footer = Array(data.suffix(footerLength))
 
         var footerReader = ByteReader(footer)
-        _ = try footerReader.blockHandle()   // metaindex handle: unused, we don't read filters
+        _ = try footerReader.blockHandle()  // metaindex handle: unused, we don't read filters
         let indexHandle = try footerReader.blockHandle()
 
         let magicBytes = Array(footer.suffix(8))
@@ -630,8 +632,9 @@ enum SSTableReader {
     /// search; a full linear scan doesn't need them beyond finding where entry data ends.
     private static func decodeBlockEntries(_ block: [UInt8]) throws -> [(key: [UInt8], value: [UInt8])] {
         guard block.count >= 4 else { return [] }
-        let numRestarts = Int(UInt32(block[block.count - 4]) | (UInt32(block[block.count - 3]) << 8)
-            | (UInt32(block[block.count - 2]) << 16) | (UInt32(block[block.count - 1]) << 24))
+        let numRestarts = Int(
+            UInt32(block[block.count - 4]) | (UInt32(block[block.count - 3]) << 8)
+                | (UInt32(block[block.count - 2]) << 16) | (UInt32(block[block.count - 1]) << 24))
         let restartsStart = block.count - 4 - numRestarts * 4
         guard restartsStart >= 0 else { throw LocalStorageError.corrupt("bad restart count") }
 
@@ -771,4 +774,4 @@ struct LevelDBDatabase {
 }
 
 /// `flock` the struct (from `<fcntl.h>`), distinguished by name from the `flock()` function it's used with.
-private typealias flock_t = flock
+private typealias FlockT = flock

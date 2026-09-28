@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 /// Fails a test when anything that identifies the user or their work is left in text meant for a public issue.
@@ -49,9 +50,10 @@ struct LeakFixture {
         let home = root.appending(path: "Users/\(user)", directoryHint: .isDirectory)
         paths = Paths(home: home, claudeApp: root.appending(path: "Applications/Claude.app"))
         let fm = FileManager.default
-        try ProfileRegistry(paths: paths).save(zip(Self.ids, zip(Self.labels, Self.emails)).map {
-            Profile(id: $0.0, label: $0.1.0, email: $0.1.1, color: "#1971C2")
-        })
+        try ProfileRegistry(paths: paths).save(
+            zip(Self.ids, zip(Self.labels, Self.emails)).map {
+                Profile(id: $0.0, label: $0.1.0, email: $0.1.1, color: "#1971C2")
+            })
         for (dir, account) in [(paths.mainDataDir, Self.accountMain), (paths.dataDir(for: "zephyr"), Self.accountWork)] {
             let cards = dir.appending(path: "claude-code-sessions/\(account)/\(Self.org)", directoryHint: .isDirectory)
             try fm.createDirectory(at: cards, withIntermediateDirectories: true)
@@ -64,14 +66,18 @@ struct LeakFixture {
 
     /// Errors as the UI showed them, and log lines as the app wrote them.
     var errors: [String] {
-        ["Can’t read \(home)/src/\(Self.folder)/.claude: permission denied",
-         "Claude ZEPHYR is signed in as \(Self.emails[0]), expected \(Self.emails[1])",
-         "Opening /Volumes/Backup/Users/\(user)/\(Self.folder) failed with token \(Self.token)"]
+        [
+            "Can’t read \(home)/src/\(Self.folder)/.claude: permission denied",
+            "Claude ZEPHYR is signed in as \(Self.emails[0]), expected \(Self.emails[1])",
+            "Opening /Volumes/Backup/Users/\(user)/\(Self.folder) failed with token \(Self.token)",
+        ]
     }
     var log: [String] {
-        ["sync: account \(Self.accountWork) org \(Self.org) in \(paths.dataDir(for: "zephyr").path)",
-         "continue: “\(Self.title)” to ЛАБА from \(home)/src/\(Self.folder)",
-         "open: Claude laba for \(Self.emails[1])"]
+        [
+            "sync: account \(Self.accountWork) org \(Self.org) in \(paths.dataDir(for: "zephyr").path)",
+            "continue: “\(Self.title)” to ЛАБА from \(home)/src/\(Self.folder)",
+            "open: Claude laba for \(Self.emails[1])",
+        ]
     }
     var secrets: [String] {
         Self.emails + [Self.accountMain, Self.accountWork, Self.org, Self.title, Self.folder, Self.token, home, user]
@@ -87,7 +93,8 @@ struct RedactorTests {
 
     @Test func emailsGetStableOrdinalsInFirstSeenOrder() {
         var r = redactor()
-        #expect(r.redact("Signed in as robin@family.example, expected yuri@example.org; again robin@family.example.")
+        #expect(
+            r.redact("Signed in as robin@family.example, expected yuri@example.org; again robin@family.example.")
                 == "Signed in as <email-1>, expected <email-2>; again <email-1>.")
         #expect(r.redact("ROBIN@FAMILY.EXAMPLE") == "<email-1>")
     }
@@ -116,7 +123,8 @@ struct RedactorTests {
 
     @Test func nonASCIIHomeCollapsesToTilde() {
         var cyrillic = redactor(home: "/Users/Юрий", user: "Юрий")
-        #expect(cyrillic.redact("Can’t read /Users/Юрий/Library/Application Support/Claude/config.json")
+        #expect(
+            cyrillic.redact("Can’t read /Users/Юрий/Library/Application Support/Claude/config.json")
                 == "Can’t read ~/Library/Application Support/Claude/config.json")
         // Decomposed input (as some file APIs return it) still matches.
         var cjk = redactor(home: "/Users/名前", user: "名前")
@@ -155,9 +163,11 @@ struct RedactorTests {
 
     @Test func tokenShapedStringsAreStripped() {
         var r = redactor()
-        let tokens = ["sk-ant-api03-Xk29fLq8Zm3Rp7Tn4Vb6Wc1Yd5He0Jg2Kx8Ls4Mq", "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
-                      "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz", "0123456789abcdef0123456789abcdef01234567",
-                      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"]
+        let tokens = [
+            "sk-ant-api03-Xk29fLq8Zm3Rp7Tn4Vb6Wc1Yd5He0Jg2Kx8Ls4Mq", "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+            "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz", "0123456789abcdef0123456789abcdef01234567",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+        ]
         for token in tokens {
             let out = r.redact("Authorization: Bearer \(token) end")
             #expect(out == "Authorization: Bearer <token> end", "\(token) → \(out)")

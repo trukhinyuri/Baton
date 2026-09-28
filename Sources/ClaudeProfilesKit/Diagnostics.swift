@@ -24,8 +24,10 @@ public enum Diagnostics {
         var cardScopes: [String: Set<String>] = [:]
         var records: [String: [(key: String, kind: String, hasCoworkHistory: Bool, folderProfile: String?)]] = [:]
         var scopeProblems: [String] = []
-        for (kind, filename) in [(SessionSync.sessionsFolder, "code-native-session-scopes.json"),
-                                 (CoworkSync.sessionsFolder, "cowork-native-session-scopes.json")] {
+        for (kind, filename) in [
+            (SessionSync.sessionsFolder, "code-native-session-scopes.json"),
+            (CoworkSync.sessionsFolder, "cowork-native-session-scopes.json"),
+        ] {
             do {
                 let state = try SessionSync.NativeScopeState.load(from: paths.stateDir.appending(path: filename))
                 for (name, scopes) in state.scopes { nativeScopes[kind + "/" + name] = Set(scopes) }
@@ -60,10 +62,11 @@ public enum Diagnostics {
                                 hasCoworkHistory = Self.hasCoworkHistoryFolder(for: file)
                                 if let cwd = object["cwd"] as? String, cwd.hasPrefix("/") {
                                     let path = URL(fileURLWithPath: cwd).standardizedFileURL.path
-                                    folderProfile = entries.first { candidate in
-                                        let root = candidate.2.standardizedFileURL.path
-                                        return candidate.0 != id && (path == root || path.hasPrefix(root + "/"))
-                                    }?.1
+                                    folderProfile =
+                                        entries.first { candidate in
+                                            let root = candidate.2.standardizedFileURL.path
+                                            return candidate.0 != id && (path == root || path.hasPrefix(root + "/"))
+                                        }?.1
                                 }
                             }
                             records[id, default: []].append((key, kind, hasCoworkHistory, folderProfile))
@@ -71,9 +74,11 @@ public enum Diagnostics {
                                 entry.accountBoundWorkers += 1
                                 nativeScopes[key, default: []].insert(account + "/" + org.lastPathComponent)
                                 nativeByProfile[id, default: []].insert(key)
+                            } else if kind == SessionSync.sessionsFolder {
+                                entry.localCode += 1
+                            } else {
+                                entry.localCowork += 1
                             }
-                            else if kind == SessionSync.sessionsFolder { entry.localCode += 1 }
-                            else { entry.localCowork += 1 }
                             let remote = object["sshRemoteProcessId"] != nil || object["sshRemoteTranscriptPath"] != nil
                             if !remote, let cwd = object["cwd"] as? String, cwd.hasPrefix("/"), !fm.fileExists(atPath: cwd) { missing.insert(cwd) }
                         }
@@ -81,7 +86,9 @@ public enum Diagnostics {
                 } catch { entry.issues.append("Could not completely read \(kind): \(error.localizedDescription)") }
             }
             entry.missingFolders = missing.sorted()
-            if !missing.isEmpty { entry.issues.append("\(missing.count) working folders are missing. Use Choose folder in Claude before continuing those sessions.") }
+            if !missing.isEmpty {
+                entry.issues.append("\(missing.count) working folders are missing. Use Choose folder in Claude before continuing those sessions.")
+            }
             return entry
         }
         // A native marker in any copy applies to the whole ID, including older copies without that marker.
@@ -93,8 +100,9 @@ public enum Diagnostics {
                 if nativeScopes[record.key] != nil {
                     reports[i].accountBoundWorkers += 1
                     nativeByProfile[reports[i].id, default: []].insert(record.key)
-                } else if record.kind == SessionSync.sessionsFolder { reports[i].localCode += 1 }
-                else {
+                } else if record.kind == SessionSync.sessionsFolder {
+                    reports[i].localCode += 1
+                } else {
                     reports[i].localCowork += 1
                     if !record.hasCoworkHistory {
                         reports[i].unavailableCoworkHistory += 1
@@ -103,7 +111,8 @@ public enum Diagnostics {
                 }
             }
             if reports[i].unavailableCoworkHistory > 0 {
-                var issue = "\(reports[i].unavailableCoworkHistory) Cowork cards have no local history folder in a known layout. A visible card does not prove the conversation can resume here. Continue in the original profile, or transfer reviewed context to a new conversation."
+                var issue =
+                    "\(reports[i].unavailableCoworkHistory) Cowork cards have no local history folder in a known layout. A visible card does not prove the conversation can resume here. Continue in the original profile, or transfer reviewed context to a new conversation."
                 if !coworkFolderProfiles.isEmpty {
                     issue += " Working-folder paths refer to profiles: " + coworkFolderProfiles.sorted().joined(separator: ", ") + "."
                 }
@@ -111,7 +120,9 @@ public enum Diagnostics {
             }
             reports[i].ambiguousWorkers = (nativeByProfile[reports[i].id] ?? []).filter { (nativeScopes[$0]?.count ?? 0) > 1 }.count
             if reports[i].ambiguousWorkers > 0 {
-                reports[i].issues.append("\(reports[i].ambiguousWorkers) account-linked workers have copies in different accounts. These copies are not synchronized. Continue them from the original Project, or transfer reviewed context to a new conversation.")
+                reports[i].issues.append(
+                    "\(reports[i].ambiguousWorkers) account-linked workers have copies in different accounts. These copies are not synchronized. Continue them from the original Project, or transfer reviewed context to a new conversation."
+                )
             }
         }
         return reports
@@ -123,8 +134,10 @@ public enum Diagnostics {
         let full = card.deletingPathExtension()
         var candidates = [full]
         let id = full.lastPathComponent
-        if id.range(of: #"^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"#,
-                    options: .regularExpression) != nil {
+        if id.range(
+            of: #"^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"#,
+            options: .regularExpression) != nil
+        {
             candidates.append(card.deletingLastPathComponent().appending(path: String(id.dropFirst(6).prefix(8))))
         }
         return candidates.contains { directory in

@@ -33,8 +33,9 @@ public enum IconRenderer {
                 shadow.shadowOffset = NSSize(width: 0, height: -s * 0.012)
                 shadow.set()
                 let path = NSBezierPath(roundedRect: frame, xRadius: s * 0.05, yRadius: s * 0.05)
-                NSGradient(starting: NSColor(hex: card.color).blended(withFraction: 0.18, of: .white)!,
-                           ending: NSColor(hex: card.color))!.draw(in: path, angle: -90)
+                NSGradient(
+                    starting: NSColor(hex: card.color).blended(withFraction: 0.18, of: .white)!,
+                    ending: NSColor(hex: card.color))!.draw(in: path, angle: -90)
                 NSGraphicsContext.restoreGraphicsState()
                 NSColor.white.withAlphaComponent(0.85).setFill()
                 for i in 0..<3 {
@@ -61,9 +62,10 @@ public enum IconRenderer {
 
     /// Renders into an sRGB bitmap; safe to call off the main thread.
     static func render(_ draw: (NSRect) -> Void) -> NSImage {
-        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8,
-                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                   colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         draw(NSRect(x: 0, y: 0, width: size, height: size))
@@ -75,8 +77,10 @@ public enum IconRenderer {
 
     /// Encodes an image as `.icns` (PNG payloads, 16 pt to 512 pt @2x).
     public static func icnsData(for image: NSImage) -> Data {
-        let entries: [(String, Int)] = [("icp4", 16), ("ic11", 32), ("icp5", 32), ("ic12", 64), ("ic07", 128),
-                                        ("ic13", 256), ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024)]
+        let entries: [(String, Int)] = [
+            ("icp4", 16), ("ic11", 32), ("icp5", 32), ("ic12", 64), ("ic07", 128),
+            ("ic13", 256), ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024),
+        ]
         var body = Data()
         for (type, pixels) in entries {
             guard let png = pngData(image, pixels: pixels) else { continue }
@@ -91,9 +95,12 @@ public enum IconRenderer {
     }
 
     public static func pngData(_ image: NSImage, pixels: Int) -> Data? {
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
-                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        guard
+            let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         NSGraphicsContext.current?.imageInterpolation = .high
@@ -112,7 +119,8 @@ extension NSColor {
     public convenience init(hex: String) {
         let digits = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
         let value = UInt32(digits, radix: 16) ?? 0x808080
-        self.init(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
-                  blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+        self.init(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255, alpha: 1)
     }
 }

@@ -21,8 +21,11 @@ public struct Redactor: Sendable {
         let home = home.precomposedStringWithCanonicalMapping.trimmingSuffix("/")
         // Temporary and some system folders show up both with and without /private.
         var variants = [home]
-        if home.hasPrefix("/private/") { variants.append(String(home.dropFirst("/private".count))) }
-        else if home.hasPrefix("/var/") || home.hasPrefix("/tmp/") { variants.append("/private" + home) }
+        if home.hasPrefix("/private/") {
+            variants.append(String(home.dropFirst("/private".count)))
+        } else if home.hasPrefix("/var/") || home.hasPrefix("/tmp/") {
+            variants.append("/private" + home)
+        }
         self.home = variants.filter { $0.count > 1 }.sorted { $0.count > $1.count }
         self.user = user.precomposedStringWithCanonicalMapping
         self.profiles = profiles.map { $0.map(\.precomposedStringWithCanonicalMapping).filter { !$0.isEmpty } }
@@ -81,8 +84,10 @@ public struct Redactor: Sendable {
     static let path = #"(?<=^|[\s"“”'‘’(\[])~?/[^\s"“”'‘’()\[\],;:]*"#
     /// Locations that name no one's work. Anything else, such as `~/src/…` or `/Volumes/…`, becomes `<folder>`.
     /// `~/.claude` and temporary folders are not among them: Claude Code names its folders there after the project's path.
-    static let safePaths = ["~/Library", "~/Applications", "/Applications", "/Library", "/System", "/usr", "/bin", "/sbin",
-                            "/opt/homebrew", "/dev"]
+    static let safePaths = [
+        "~/Library", "~/Applications", "/Applications", "/Library", "/System", "/usr", "/bin", "/sbin",
+        "/opt/homebrew", "/dev",
+    ]
     /// iCloud Drive and cloud storage folders hold the user's own files even though they live in ~/Library.
     static let syncedFolder = #"~/Library/(?:Mobile Documents|CloudStorage)(?:/[^\s"“”'‘’()\[\],;]*)?"#
 
@@ -103,8 +108,8 @@ public struct Redactor: Sendable {
     }
 }
 
-private extension String {
-    func trimmingSuffix(_ suffix: String) -> String {
+extension String {
+    fileprivate func trimmingSuffix(_ suffix: String) -> String {
         count > suffix.count && hasSuffix(suffix) ? String(dropLast(suffix.count)) : self
     }
 }

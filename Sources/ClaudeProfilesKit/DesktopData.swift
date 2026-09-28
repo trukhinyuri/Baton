@@ -37,8 +37,8 @@ public enum DesktopData {
     /// UUID of the account last signed in to this data directory, if any.
     public static func accountID(in dataDir: URL) -> String? {
         guard let data = try? Data(contentsOf: dataDir.appending(path: "config.json")),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = object["lastKnownAccountUuid"] as? String, id.count == 36
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let id = object["lastKnownAccountUuid"] as? String, id.count == 36
         else { return nil }
         return id
     }
@@ -104,8 +104,9 @@ public enum DesktopData {
     public static func scope(dataDir: URL, items: [String: String]) -> Scope? {
         guard let account = accountID(in: dataDir) else { return nil }
         if let store = items[InterfaceSync.sidebarKey].flatMap(InterfaceSync.object),
-           let state = store["state"] as? [String: Any],
-           let key = state["lastSidebarScopeKey"] as? String, key.hasPrefix(account + "/") {
+            let state = store["state"] as? [String: Any],
+            let key = state["lastSidebarScopeKey"] as? String, key.hasPrefix(account + "/")
+        {
             return .resolved(key, source: .claude)
         }
         let orgs = organizationIDs(in: dataDir, accountID: account)
@@ -124,8 +125,8 @@ public enum DesktopData {
             let samples: [Sample]
         }
         guard let data = try? Data(contentsOf: dataDir.appending(path: "plan-usage-history.json")),
-              let history = try? JSONDecoder().decode(History.self, from: data),
-              let last = history.samples.max(by: { $0.t < $1.t })
+            let history = try? JSONDecoder().decode(History.self, from: data),
+            let last = history.samples.max(by: { $0.t < $1.t })
         else { return nil }
         return Usage(fiveHour: last.u?.fh, week: last.u?.sd, sampledAt: Date(timeIntervalSince1970: last.t / 1000))
     }
@@ -145,11 +146,13 @@ public enum DesktopData {
                 if let found = email(inBlob: Data(value), accountID: accountID) { return found }
             }
         }
-        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]) else { return nil }
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey])
+        else { return nil }
         var files: [(Date, URL)] = []
         for case let url as URL in walker {
             guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]),
-                  values.isRegularFile == true, (values.fileSize ?? 0) < 64 << 20 else { continue }
+                values.isRegularFile == true, (values.fileSize ?? 0) < 64 << 20
+            else { continue }
             files.append((values.contentModificationDate ?? .distantPast, url))
         }
         for (_, url) in files.sorted(by: { $0.0 > $1.0 }) {

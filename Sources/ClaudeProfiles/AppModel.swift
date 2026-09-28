@@ -91,7 +91,8 @@ final class AppModel: ObservableObject {
     private static func handOverToRunningCopy() {
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: AppInstances.bundleID)
         guard let other = AppInstances.otherInstance(running: running.map(\.processIdentifier), me: ProcessInfo.processInfo.processIdentifier),
-              let app = running.first(where: { $0.processIdentifier == other }) else { return }
+            let app = running.first(where: { $0.processIdentifier == other })
+        else { return }
         app.activate()
         exit(0)
     }
@@ -112,8 +113,9 @@ final class AppModel: ObservableObject {
         let (localOnly, pending) = localOnlyMaps()
         Task {
             windowStatuses = await Task.detached {
-                WindowStatus.collect(manager: manager, diagnostics: (try? Diagnostics.inspect(paths: manager.paths)) ?? [],
-                                     localOnly: localOnly, pending: pending)
+                WindowStatus.collect(
+                    manager: manager, diagnostics: (try? Diagnostics.inspect(paths: manager.paths)) ?? [],
+                    localOnly: localOnly, pending: pending)
             }.value
         }
     }
@@ -234,7 +236,7 @@ final class AppModel: ObservableObject {
             } else if awaitingSignIn.remove(id) != nil, status.isRunning, status.isSignedIn {
                 let manager = manager
                 run("Loading your sessions into Claude \(status.label)…") {
-                    try await Task.sleep(for: .seconds(3))   // let Claude finish saving the new sign-in
+                    try await Task.sleep(for: .seconds(3))  // let Claude finish saving the new sign-in
                     try await manager.finishFirstSignIn(id)
                 }
             }
@@ -328,52 +330,65 @@ enum DemoData {
     static var conversations: [Conversation] {
         let now = Date(), none = URL(fileURLWithPath: "/nonexistent.jsonl")
         return [
-            Conversation(kind: .code, sessionID: "1", title: "Migrate billing API to v2", folders: ["/Users/alex/src/billing"],
-                         lastActivity: now.addingTimeInterval(-240), transcript: none),
-            Conversation(kind: .cowork, sessionID: "2", title: "Quarterly report draft", folders: ["/Users/alex/Documents/Reports"],
-                         lastActivity: now.addingTimeInterval(-1_800), transcript: none, ownerID: "main"),
-            Conversation(kind: .code, sessionID: "4", title: "Explain the retry logic", folders: [],
-                         lastActivity: now.addingTimeInterval(-26_000), transcript: none),
-            Conversation(kind: .cowork, sessionID: "5", title: "Compare three vendors", folders: [],
-                         lastActivity: now.addingTimeInterval(-90_000), transcript: none, ownerID: "work"),
+            Conversation(
+                kind: .code, sessionID: "1", title: "Migrate billing API to v2", folders: ["/Users/alex/src/billing"],
+                lastActivity: now.addingTimeInterval(-240), transcript: none),
+            Conversation(
+                kind: .cowork, sessionID: "2", title: "Quarterly report draft", folders: ["/Users/alex/Documents/Reports"],
+                lastActivity: now.addingTimeInterval(-1_800), transcript: none, ownerID: "main"),
+            Conversation(
+                kind: .code, sessionID: "4", title: "Explain the retry logic", folders: [],
+                lastActivity: now.addingTimeInterval(-26_000), transcript: none),
+            Conversation(
+                kind: .cowork, sessionID: "5", title: "Compare three vendors", folders: [],
+                lastActivity: now.addingTimeInterval(-90_000), transcript: none, ownerID: "work"),
         ]
     }
 
     static var windowStatuses: [WindowStatus] {
         statuses.map { status in
-            WindowStatus(id: status.id, label: status.label, isMain: status.isMain, isRunning: status.isRunning, account: status.email,
-                         scope: status.isSignedIn ? "account 5c1e8a42 · 1 organization" : nil,
-                         scopeSource: status.isSignedIn ? "config.json (lastKnownAccountUuid)" : "not signed in yet",
-                         skipReasons: status.isSignedIn ? [] : ["Not signed in: sign in inside this window to share its sessions."],
-                         pendingChanges: status.id == "work" ? ["Claude Desktop was updated; this window runs the previous version until it restarts."] : [],
-                         liveSessions: status.id == "main" ? 1 : 0)
+            WindowStatus(
+                id: status.id, label: status.label, isMain: status.isMain, isRunning: status.isRunning, account: status.email,
+                scope: status.isSignedIn ? "account 5c1e8a42 · 1 organization" : nil,
+                scopeSource: status.isSignedIn ? "config.json (lastKnownAccountUuid)" : "not signed in yet",
+                skipReasons: status.isSignedIn ? [] : ["Not signed in: sign in inside this window to share its sessions."],
+                pendingChanges: status.id == "work" ? ["Claude Desktop was updated; this window runs the previous version until it restarts."] : [],
+                liveSessions: status.id == "main" ? 1 : 0)
         }
     }
 
     static var reportFacts: FeedbackReport.Facts {
-        FeedbackReport.Facts(build: .current, macOS: ProcessInfo.processInfo.operatingSystemVersionString, architecture: "arm64",
-                             claudeVersion: "0.14.1",
-                             windows: statuses.map { .init(id: $0.id, label: $0.label, isMain: $0.isMain, isRunning: $0.isRunning,
-                                                           isSignedIn: $0.isSignedIn, claudeCodeVersion: "2.1.281") },
-                             diagnostics: [], lastSync: nil, lastSyncDate: nil,
-                             errors: ["Can’t read /Users/alex/src/billing/.claude: permission denied"],
-                             log: ["sync: 4 session folders for alex@acme.dev"], home: "/Users/alex", user: "alex",
-                             profiles: statuses.compactMap(\.profile).map { [$0.label, $0.id] })
+        FeedbackReport.Facts(
+            build: .current, macOS: ProcessInfo.processInfo.operatingSystemVersionString, architecture: "arm64",
+            claudeVersion: "0.14.1",
+            windows: statuses.map {
+                .init(
+                    id: $0.id, label: $0.label, isMain: $0.isMain, isRunning: $0.isRunning,
+                    isSignedIn: $0.isSignedIn, claudeCodeVersion: "2.1.281")
+            },
+            diagnostics: [], lastSync: nil, lastSyncDate: nil,
+            errors: ["Can’t read /Users/alex/src/billing/.claude: permission denied"],
+            log: ["sync: 4 session folders for alex@acme.dev"], home: "/Users/alex", user: "alex",
+            profiles: statuses.compactMap(\.profile).map { [$0.label, $0.id] })
     }
 
     static var statuses: [ProfileStatus] {
         let now = Date()
         return [
-            ProfileStatus(profile: nil, accountID: "demo-main", email: "alex@example.com",
-                          usage: Usage(fiveHour: 64, week: 92, sampledAt: now.addingTimeInterval(-600)), isRunning: true),
-            ProfileStatus(profile: Profile(id: "work", label: "WORK", email: "alex@acme.dev", color: "#1971C2"),
-                          accountID: "demo-work", email: "alex@acme.dev",
-                          usage: Usage(fiveHour: 12, week: 31, sampledAt: now.addingTimeInterval(-300)), isRunning: true),
-            ProfileStatus(profile: Profile(id: "lab", label: "LAB", email: "alex.lab@example.org", color: "#2F9E44"),
-                          accountID: "demo-lab", email: "alex.lab@example.org",
-                          usage: Usage(fiveHour: 0, week: 58, sampledAt: now.addingTimeInterval(-7200)), isRunning: false),
-            ProfileStatus(profile: Profile(id: "team", label: "TEAM", email: "alex@team.example", color: "#7048E8"),
-                          accountID: nil, email: nil, usage: nil, isRunning: true),
+            ProfileStatus(
+                profile: nil, accountID: "demo-main", email: "alex@example.com",
+                usage: Usage(fiveHour: 64, week: 92, sampledAt: now.addingTimeInterval(-600)), isRunning: true),
+            ProfileStatus(
+                profile: Profile(id: "work", label: "WORK", email: "alex@acme.dev", color: "#1971C2"),
+                accountID: "demo-work", email: "alex@acme.dev",
+                usage: Usage(fiveHour: 12, week: 31, sampledAt: now.addingTimeInterval(-300)), isRunning: true),
+            ProfileStatus(
+                profile: Profile(id: "lab", label: "LAB", email: "alex.lab@example.org", color: "#2F9E44"),
+                accountID: "demo-lab", email: "alex.lab@example.org",
+                usage: Usage(fiveHour: 0, week: 58, sampledAt: now.addingTimeInterval(-7200)), isRunning: false),
+            ProfileStatus(
+                profile: Profile(id: "team", label: "TEAM", email: "alex@team.example", color: "#7048E8"),
+                accountID: nil, email: nil, usage: nil, isRunning: true),
         ]
     }
 }

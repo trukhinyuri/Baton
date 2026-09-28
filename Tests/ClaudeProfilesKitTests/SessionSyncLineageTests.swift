@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Forked sessions in sharing")
@@ -22,8 +23,9 @@ struct SessionSyncLineageTests {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let b = try box.pair(box.work, account: Sandbox.accountA)
-        try box.write(Self.card(Self.fork, prior: [Self.old], title: "forked"), to: a.appending(path: "local_1.json"),
-                      modified: Date().addingTimeInterval(-600))
+        try box.write(
+            Self.card(Self.fork, prior: [Self.old], title: "forked"), to: a.appending(path: "local_1.json"),
+            modified: Date().addingTimeInterval(-600))
         try box.write(Self.card(Self.old, title: "renamed in the stale window"), to: b.appending(path: "local_1.json"))
 
         _ = try box.sync()

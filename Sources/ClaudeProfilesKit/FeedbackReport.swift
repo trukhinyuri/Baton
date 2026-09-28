@@ -15,8 +15,10 @@ public struct FeedbackReport: Sendable {
         /// Whether cloud features are switched off in this window; `nil` when this build can't tell.
         public var localOnly: Bool?
 
-        public init(id: String, label: String, isMain: Bool, isRunning: Bool, isSignedIn: Bool,
-                    claudeCodeVersion: String? = nil, localOnly: Bool? = nil) {
+        public init(
+            id: String, label: String, isMain: Bool, isRunning: Bool, isSignedIn: Bool,
+            claudeCodeVersion: String? = nil, localOnly: Bool? = nil
+        ) {
             self.id = id; self.label = label; self.isMain = isMain; self.isRunning = isRunning
             self.isSignedIn = isSignedIn; self.claudeCodeVersion = claudeCodeVersion; self.localOnly = localOnly
         }
@@ -41,37 +43,43 @@ public struct FeedbackReport: Sendable {
         public var user: String
         public var profiles: [[String]]
 
-        public init(build: BuildInfo, macOS: String, architecture: String, claudeVersion: String?, windows: [Window],
-                    diagnostics: [Diagnostics.Entry], lastSync: SyncReport?, lastSyncDate: Date?, errors: [String],
-                    log: [String], home: String, user: String, profiles: [[String]]) {
+        public init(
+            build: BuildInfo, macOS: String, architecture: String, claudeVersion: String?, windows: [Window],
+            diagnostics: [Diagnostics.Entry], lastSync: SyncReport?, lastSyncDate: Date?, errors: [String],
+            log: [String], home: String, user: String, profiles: [[String]]
+        ) {
             self.build = build; self.macOS = macOS; self.architecture = architecture; self.claudeVersion = claudeVersion
             self.windows = windows; self.diagnostics = diagnostics; self.lastSync = lastSync; self.lastSyncDate = lastSyncDate
             self.errors = errors; self.log = log; self.home = home; self.user = user; self.profiles = profiles
         }
 
         /// Reads only what the app already shows: window states, the sessions check and version numbers.
-        public static func collect(paths: Paths, user: String = NSUserName(), errors: [String] = [], log: [String] = [],
-                                   lastSync: SyncReport? = nil, lastSyncDate: Date? = nil,
-                                   localOnly: [String: Bool] = [:]) -> Facts {
+        public static func collect(
+            paths: Paths, user: String = NSUserName(), errors: [String] = [], log: [String] = [],
+            lastSync: SyncReport? = nil, lastSyncDate: Date? = nil,
+            localOnly: [String: Bool] = [:]
+        ) -> Facts {
             let manager = ProfileManager(paths: paths)
             let profiles = manager.profiles
             var errors = errors
             if let problem = manager.registryError { errors.insert(problem, at: 0) }
             let windows = manager.statuses().map { status in
-                Window(id: status.id, label: status.label, isMain: status.isMain, isRunning: status.isRunning,
-                       isSignedIn: status.isSignedIn,
-                       claudeCodeVersion: FeedbackReport.claudeCodeVersion(in: status.isMain ? paths.mainDataDir : paths.dataDir(for: status.id)),
-                       localOnly: localOnly[status.id])
+                Window(
+                    id: status.id, label: status.label, isMain: status.isMain, isRunning: status.isRunning,
+                    isSignedIn: status.isSignedIn,
+                    claudeCodeVersion: FeedbackReport.claudeCodeVersion(in: status.isMain ? paths.mainDataDir : paths.dataDir(for: status.id)),
+                    localOnly: localOnly[status.id])
             }
             var diagnostics: [Diagnostics.Entry] = []
             do { diagnostics = try Diagnostics.inspect(paths: paths) } catch {
                 errors.append("The sessions check could not run: \(error.localizedDescription)")
             }
-            return Facts(build: .current, macOS: ProcessInfo.processInfo.operatingSystemVersionString,
-                         architecture: FeedbackReport.architecture, claudeVersion: FeedbackReport.shortVersion(of: paths.claudeApp),
-                         windows: windows, diagnostics: diagnostics, lastSync: lastSync, lastSyncDate: lastSyncDate,
-                         errors: errors, log: log, home: paths.home.path, user: user,
-                         profiles: profiles.map { [$0.label, $0.id] })
+            return Facts(
+                build: .current, macOS: ProcessInfo.processInfo.operatingSystemVersionString,
+                architecture: FeedbackReport.architecture, claudeVersion: FeedbackReport.shortVersion(of: paths.claudeApp),
+                windows: windows, diagnostics: diagnostics, lastSync: lastSync, lastSyncDate: lastSyncDate,
+                errors: errors, log: log, home: paths.home.path, user: user,
+                profiles: profiles.map { [$0.label, $0.id] })
         }
     }
 
@@ -96,29 +104,33 @@ public struct FeedbackReport: Sendable {
         lines.append("### Windows")
         for window in facts.windows {
             let local = window.localOnly.map { $0 ? "Local only on" : "Local only off" } ?? "Local only unknown"
-            lines.append("- \(names[window.id] ?? "?"): \(window.isRunning ? "open" : "closed"), "
-                         + "\(window.isSignedIn ? "signed in" : "not signed in"), "
-                         + "Claude Code \(window.claudeCodeVersion ?? "not downloaded"), \(local)")
+            lines.append(
+                "- \(names[window.id] ?? "?"): \(window.isRunning ? "open" : "closed"), "
+                    + "\(window.isSignedIn ? "signed in" : "not signed in"), "
+                    + "Claude Code \(window.claudeCodeVersion ?? "not downloaded"), \(local)")
         }
         lines.append("")
         lines.append("### Sessions check")
         if facts.diagnostics.isEmpty { lines.append("- not run") }
         for entry in facts.diagnostics {
             let name = entry.id == "main" ? "MAIN" : names[entry.id] ?? r(entry.label)
-            lines.append("- \(name): \(entry.localCode) local Code, \(entry.localCowork) Cowork, "
-                         + "\(entry.unavailableCoworkHistory) without history, \(entry.accountBoundWorkers) account-linked, "
-                         + "\(entry.ambiguousWorkers) ambiguous, \(entry.missingFolders.count) missing folders")
+            lines.append(
+                "- \(name): \(entry.localCode) local Code, \(entry.localCowork) Cowork, "
+                    + "\(entry.unavailableCoworkHistory) without history, \(entry.accountBoundWorkers) account-linked, "
+                    + "\(entry.ambiguousWorkers) ambiguous, \(entry.missingFolders.count) missing folders")
             for issue in entry.issues { lines.append("  - \(r(issue))") }
         }
         lines.append("")
         lines.append("### Last sync")
         if let sync = facts.lastSync {
             let when = facts.lastSyncDate.map { " (\(relativeAge(since: $0)))" } ?? ""
-            lines.append("- \(sync.sessions.pairs) session folders, \(sync.sessions.cardsWritten) cards copied, "
-                         + "\(sync.sessions.cardsRemoved) removed, \(sync.sessions.tombstonesWritten) deletions shared\(when)")
-            lines.append("- \(sync.cowork.pairs) Cowork folders checked, "
-                         + "\(sync.sessions.accountBoundCards + sync.cowork.accountBoundCards) account-linked, "
-                         + "\(sync.sessions.ambiguousAccountBoundCards + sync.cowork.ambiguousAccountBoundCards) ambiguous")
+            lines.append(
+                "- \(sync.sessions.pairs) session folders, \(sync.sessions.cardsWritten) cards copied, "
+                    + "\(sync.sessions.cardsRemoved) removed, \(sync.sessions.tombstonesWritten) deletions shared\(when)")
+            lines.append(
+                "- \(sync.cowork.pairs) Cowork folders checked, "
+                    + "\(sync.sessions.accountBoundCards + sync.cowork.accountBoundCards) account-linked, "
+                    + "\(sync.sessions.ambiguousAccountBoundCards + sync.cowork.ambiguousAccountBoundCards) ambiguous")
         } else {
             lines.append("- not recorded in this run")
         }
@@ -132,7 +144,8 @@ public struct FeedbackReport: Sendable {
         lines.append(contentsOf: facts.log.suffix(Self.logLimit).map { r($0).replacingOccurrences(of: "```", with: "'''") })
         lines.append("```")
         markdown = lines.joined(separator: "\n") + "\n"
-        summary = (head + ["", "### Recent errors"] + (errors.isEmpty ? ["- none"] : errors.suffix(3).map { "- " + $0 }))
+        summary =
+            (head + ["", "### Recent errors"] + (errors.isEmpty ? ["- none"] : errors.suffix(3).map { "- " + $0 }))
             .joined(separator: "\n") + "\n"
     }
 
@@ -165,9 +178,11 @@ public struct FeedbackReport: Sendable {
     public func issueLink(title: String, description: String, attachment: String? = nil) -> IssueLink {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         func link(diagnostics: String, whatHappened: String) -> URL {
-            let query = [("template", "bug_report.yml"), ("title", title.isEmpty ? "Problem report" : title),
-                         ("diagnostics", diagnostics), ("what-happened", whatHappened)]
-                .map { "\($0)=\(Self.encode($1))" }.joined(separator: "&")
+            let query = [
+                ("template", "bug_report.yml"), ("title", title.isEmpty ? "Problem report" : title),
+                ("diagnostics", diagnostics), ("what-happened", whatHappened),
+            ]
+            .map { "\($0)=\(Self.encode($1))" }.joined(separator: "&")
             return URL(string: "https://github.com/\(Self.repository)/issues/new?\(query)")!
         }
         func encodedLength(_ diagnostics: String, _ whatHappened: String) -> Int {
@@ -178,7 +193,8 @@ public struct FeedbackReport: Sendable {
         if encodedLength(markdown, whatHappened) <= Self.urlBodyLimit {
             return IssueLink(url: link(diagnostics: markdown, whatHappened: whatHappened), isComplete: true)
         }
-        let note = summary + "\n\nThe full report is too long for this form. It is on the clipboard and saved as "
+        let note =
+            summary + "\n\nThe full report is too long for this form. It is on the clipboard and saved as "
             + "\(attachment.map { "“\($0)”" } ?? "a file"): attach that file here or paste it below.\n"
         var short = whatHappened
         while encodedLength(note, short) > Self.urlBodyLimit && !short.isEmpty {
@@ -191,8 +207,10 @@ public struct FeedbackReport: Sendable {
 
     /// Opens the issue form. A report too long for the link is also copied and saved in `folder`, for the user
     /// to attach. Nothing is uploaded: `open` hands the link to the browser.
-    public func share(title: String, description: String, saveIn folder: URL, copy: (String) -> Void,
-                      open: (URL) -> Void) throws -> (link: IssueLink, file: URL?) {
+    public func share(
+        title: String, description: String, saveIn folder: URL, copy: (String) -> Void,
+        open: (URL) -> Void
+    ) throws -> (link: IssueLink, file: URL?) {
         var link = issueLink(title: title, description: description)
         var file: URL?
         if !link.isComplete {
@@ -208,8 +226,11 @@ public struct FeedbackReport: Sendable {
 
     /// Writes `text` as a new dated file in `folder`, never replacing one.
     public static func save(_ text: String, in folder: URL, now: Date = Date()) throws -> URL {
-        let stamp = now.formatted(Date.VerbatimFormatStyle(format: "\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased))\(minute: .twoDigits)\(second: .twoDigits)",
-                                                           timeZone: .current, calendar: Calendar(identifier: .gregorian)))
+        let stamp = now.formatted(
+            Date.VerbatimFormatStyle(
+                format:
+                    "\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased))\(minute: .twoDigits)\(second: .twoDigits)",
+                timeZone: .current, calendar: Calendar(identifier: .gregorian)))
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var url = folder.appending(path: "Claude Profiles report \(stamp).md")
         var n = 2
@@ -222,22 +243,29 @@ public struct FeedbackReport: Sendable {
 
     /// Percent-encodes everything but unreserved characters, so `+`, `&` and `#` survive in a query value.
     static func encode(_ text: String) -> String {
-        text.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")) ?? ""
+        text.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"))
+            ?? ""
     }
 
     // MARK: CLI
 
     public enum CommandError: LocalizedError {
         case usage(String)
-        public var errorDescription: String? { switch self { case .usage(let text): text } }
+        public var errorDescription: String? {
+            switch self {
+            case .usage(let text): text
+            }
+        }
     }
 
     /// `claude-profiles report [--save PATH] [--open]`: prints the report, saves it with `--save`, and with
     /// `--open` opens the prefilled issue form (a long report is also copied and saved, in `downloads` unless
     /// `--save` says where). Returns what to print.
-    public static func command(_ arguments: [String], paths: Paths, user: String = NSUserName(), errors: [String] = [],
-                               log: [String] = [], localOnly: [String: Bool] = [:], downloads: URL,
-                               copy: (String) -> Void, open: (URL) -> Void) throws -> String {
+    public static func command(
+        _ arguments: [String], paths: Paths, user: String = NSUserName(), errors: [String] = [],
+        log: [String] = [], localOnly: [String: Bool] = [:], downloads: URL,
+        copy: (String) -> Void, open: (URL) -> Void
+    ) throws -> String {
         var savePath: String?
         var opens = false
         var rest = arguments.dropFirst()
@@ -283,15 +311,15 @@ public struct FeedbackReport: Sendable {
 
     static var architecture: String {
         #if arch(arm64)
-        "arm64"
+            "arm64"
         #else
-        "x86_64"
+            "x86_64"
         #endif
     }
 
     static func shortVersion(of app: URL) -> String? {
         guard let data = try? Data(contentsOf: app.appending(path: "Contents/Info.plist")),
-              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+            let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         else { return nil }
         return info["CFBundleShortVersionString"] as? String
     }

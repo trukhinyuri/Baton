@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 private func stamp(_ date: Date) -> String {
@@ -35,8 +36,9 @@ struct TranscriptForkTests {
         let env = box.paths.claudeDir.appending(path: "session-env/\(old)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: env, withIntermediateDirectories: true)
         let before = try Data(contentsOf: transcript)
-        let conversation = Conversation(kind: .code, sessionID: old, title: "t", folders: ["/repo"],
-                                        lastActivity: Date(), transcript: transcript)
+        let conversation = Conversation(
+            kind: .code, sessionID: old, title: "t", folders: ["/repo"],
+            lastActivity: Date(), transcript: transcript)
 
         let new = try TranscriptFork.fork(conversation)
 
@@ -71,8 +73,9 @@ struct TranscriptForkTests {
         let transcript = try box.transcript(lines: [record(Sandbox.cli, at: Date())])
         let taken = "99999999-2222-3333-4444-555555555555"
         try box.transcript(taken, lines: ["keep"])
-        let conversation = Conversation(kind: .code, sessionID: Sandbox.cli, title: "t", folders: [],
-                                        lastActivity: Date(), transcript: transcript)
+        let conversation = Conversation(
+            kind: .code, sessionID: Sandbox.cli, title: "t", folders: [],
+            lastActivity: Date(), transcript: transcript)
 
         #expect(throws: (any Error).self) { try TranscriptFork.fork(conversation, newID: taken) }
         #expect(box.read(transcript.deletingLastPathComponent().appending(path: "\(taken).jsonl")) == "keep")
@@ -83,8 +86,9 @@ struct TranscriptForkTests {
         let old = Sandbox.cli
         let line = #"{"type":"user","sessionId":"\#(old)","message":{"role":"user","content":"copy \#(old) into the ticket"}}"#
         let transcript = try box.transcript(lines: [line])
-        let conversation = Conversation(kind: .code, sessionID: old, title: "t", folders: ["/repo"],
-                                        lastActivity: Date(), transcript: transcript)
+        let conversation = Conversation(
+            kind: .code, sessionID: old, title: "t", folders: ["/repo"],
+            lastActivity: Date(), transcript: transcript)
 
         let new = try TranscriptFork.fork(conversation)
 
@@ -103,8 +107,9 @@ struct TranscriptForkTests {
         // The transcript can't be read, so the copy fails after its checkpoints were linked.
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: transcript.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: transcript.path) }
-        let conversation = Conversation(kind: .code, sessionID: Sandbox.cli, title: "t", folders: [],
-                                        lastActivity: Date(), transcript: transcript)
+        let conversation = Conversation(
+            kind: .code, sessionID: Sandbox.cli, title: "t", folders: [],
+            lastActivity: Date(), transcript: transcript)
         let new = "99999999-2222-3333-4444-555555555555"
 
         #expect(throws: (any Error).self) { try TranscriptFork.fork(conversation, newID: new) }
@@ -117,8 +122,9 @@ struct TranscriptForkTests {
 struct ContinueModeTests {
     func conversation(_ kind: Conversation.Kind, lastMessage: Date, in box: Sandbox) throws -> Conversation {
         let transcript = try box.transcript(lines: [record(Sandbox.cli, at: lastMessage)])
-        return Conversation(kind: kind, sessionID: Sandbox.cli, title: "t", folders: ["/repo"], lastActivity: lastMessage,
-                            transcript: transcript, ownerID: kind == .cowork ? "main" : nil)
+        return Conversation(
+            kind: kind, sessionID: Sandbox.cli, title: "t", folders: ["/repo"], lastActivity: lastMessage,
+            transcript: transcript, ownerID: kind == .cowork ? "main" : nil)
     }
 
     @Test func automaticCopiesRecentlyActiveSessions() throws {
@@ -273,7 +279,8 @@ struct ModelCarryTests {
             #"{"type":"assistant","sessionId":"\#(Sandbox.cli)","isSidechain":true,"message":{"model":"claude-haiku-4-5","content":[]}}"#,
             #"{"type":"assistant","sessionId":"\#(Sandbox.cli)","isMeta":true,"message":{"model":"claude-fable-5","content":[]}}"#,
         ])
-        #expect(ConversationIndex.lastModel(of: transcript) == "claude-opus-5-5", "a sub-agent's or Claude Code's own model isn't what the person was talking to")
+        #expect(
+            ConversationIndex.lastModel(of: transcript) == "claude-opus-5-5", "a sub-agent's or Claude Code's own model isn't what the person was talking to")
     }
 }
 
@@ -291,7 +298,8 @@ struct ContinuePlanTests {
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let b = try box.pair(box.work, account: Sandbox.accountB, org: "cccccccc-cccc-cccc-cccc-cccccccccccc")
         try box.transcript(lines: [record(Sandbox.cli, at: Date().addingTimeInterval(-3600), model: "claude-opus-5-5")])
-        let card = #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","originCwd":"/repo","title":"Duties","model":"claude-opus-5-5[1m]","effort":"xhigh","permissionMode":"bypassPermissions"}"#
+        let card =
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","originCwd":"/repo","title":"Duties","model":"claude-opus-5-5[1m]","effort":"xhigh","permissionMode":"bypassPermissions"}"#
         try box.write(card, to: a.appending(path: "local_1.json"))
         if workHasRunLongContext {
             try box.write(#"{"cliSessionId":"z","rcChild":true,"model":"claude-opus-5-5[1m]"}"#, to: b.appending(path: "local_rc.json"))
@@ -307,15 +315,17 @@ struct ContinuePlanTests {
 
         var plan = try #require(try manager.plan([conversation], in: "work", mode: .fork).first)
         #expect(plan.forks && plan.opened == nil)
-        #expect(plan.model == ModelNote(model: "claude-opus-5-5[1m]", kind: .chooseBeforeSending),
-                "Claude takes the model from the history, which doesn't say long context")
+        #expect(
+            plan.model == ModelNote(model: "claude-opus-5-5[1m]", kind: .chooseBeforeSending),
+            "Claude takes the model from the history, which doesn't say long context")
 
         try manager.prepare(&plan)
 
         #expect(plan.sessionID != Sandbox.cli)
         #expect(box.exists(box.paths.claudeProjectsDir.appending(path: "-repo/\(plan.sessionID).jsonl")))
-        #expect(try FileManager.default.contentsOfDirectory(atPath: b.path) == ["local_rc.json"],
-                "no card is made by hand: Claude imports the session with its own trust and permission checks")
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: b.path) == ["local_rc.json"],
+            "no card is made by hand: Claude imports the session with its own trust and permission checks")
     }
 
     @Test func copyTitleNamesSourceWindow() throws {
@@ -377,8 +387,9 @@ struct ContinuePlanTests {
     @Test func importedSessionsAreConfirmedByTheirCards() throws {
         let (box, _, _, b) = try setUp()
         let since = Date()
-        try box.write(#"{"sessionId":"local_x","cliSessionId":"ABCDEF01-2222-3333-4444-555555555555","title":"t"}"#,
-                      to: b.appending(path: "local_ABCDEF01-2222-3333-4444-555555555555.json"))
+        try box.write(
+            #"{"sessionId":"local_x","cliSessionId":"ABCDEF01-2222-3333-4444-555555555555","title":"t"}"#,
+            to: b.appending(path: "local_ABCDEF01-2222-3333-4444-555555555555.json"))
         try box.write(#"{"cliSessionId":"old"}"#, to: b.appending(path: "local_old.json"), modified: since.addingTimeInterval(-600))
         #expect(SessionCards.sessions(in: b) == ["abcdef01-2222-3333-4444-555555555555", "z", "old"])
         #expect(SessionCards.sessions(in: b, modifiedSince: since.addingTimeInterval(-60)) == ["abcdef01-2222-3333-4444-555555555555", "z"])
@@ -437,9 +448,11 @@ struct ContinuePlanTests {
 @Suite("Folder rules")
 struct FolderRuleTests {
     @Test func closestRuleWinsAndBatchesNeedAnAccountInCommon() {
-        let rules = [FolderRule(folder: "/work", accounts: ["a@x.com", "b@x.com"]),
-                     FolderRule(folder: "/work/client", accounts: ["b@x.com"]),
-                     FolderRule(folder: "/other", accounts: ["c@x.com"])]
+        let rules = [
+            FolderRule(folder: "/work", accounts: ["a@x.com", "b@x.com"]),
+            FolderRule(folder: "/work/client", accounts: ["b@x.com"]),
+            FolderRule(folder: "/other", accounts: ["c@x.com"]),
+        ]
         #expect(FolderRules.rule(for: "/work/client/app", in: rules)?.folder == "/work/client")
         #expect(FolderRules.rule(for: "/workshop", in: rules) == nil, "a folder with the same prefix isn't inside it")
         #expect(FolderRules.allowedAccounts(for: ["/work/app"], in: rules)?.accounts == ["a@x.com", "b@x.com"])
@@ -466,10 +479,11 @@ struct DestinationRankingTests {
     let now = Date()
 
     func status(_ id: String, week: Int?, fiveHour: Int? = 0, age: TimeInterval = 600, signedIn: Bool = true) -> ProfileStatus {
-        ProfileStatus(profile: id == "main" ? nil : Profile(id: id, label: id.uppercased(), email: nil, color: "#123456"),
-                      accountID: signedIn ? "acct-\(id)" : nil, email: signedIn ? "\(id)@x.com" : nil,
-                      usage: week.map { Usage(fiveHour: fiveHour, week: $0, sampledAt: now.addingTimeInterval(-age)) },
-                      isRunning: false)
+        ProfileStatus(
+            profile: id == "main" ? nil : Profile(id: id, label: id.uppercased(), email: nil, color: "#123456"),
+            accountID: signedIn ? "acct-\(id)" : nil, email: signedIn ? "\(id)@x.com" : nil,
+            usage: week.map { Usage(fiveHour: fiveHour, week: $0, sampledAt: now.addingTimeInterval(-age)) },
+            isRunning: false)
     }
 
     @Test func lowestWeeklyUsageFirstHoweverOldItsSampleThenNone() {
@@ -483,8 +497,9 @@ struct DestinationRankingTests {
             status("new", week: 5, signedIn: false),
         ]
 
-        #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["stale", "light", "busy", "unknown"],
-                "a reserve kept closed is sampled rarely, and its old sample is still its latest usage")
+        #expect(
+            DestinationRanking.ranked(statuses, now: now).map(\.id) == ["stale", "light", "busy", "unknown"],
+            "a reserve kept closed is sampled rarely, and its old sample is still its latest usage")
         #expect(DestinationRanking.best(statuses, excluding: "stale", now: now) == "light")
         #expect(DestinationRanking.ranked([status("old", week: 20, age: 5 * 3600), status("new", week: 20)], now: now).map(\.id) == ["new", "old"])
         #expect(DestinationRanking.isAtLimit(statuses[0], now: now) && DestinationRanking.isAtLimit(statuses[5], now: now))
@@ -495,8 +510,9 @@ struct DestinationRankingTests {
         #expect(DestinationRanking.ranked(statuses, accounts: ["team@x.com"], now: now).map(\.id) == ["team"])
         #expect(DestinationRanking.best(statuses, accounts: [], now: now) == nil)
         #expect(DestinationRanking.best(statuses, now: now) == "other")
-        #expect(!DestinationRanking.isAllowed(status("new", week: nil, signedIn: false), accounts: ["new@x.com"]),
-                "an account whose email isn't known is never taken for an allowed one")
+        #expect(
+            !DestinationRanking.isAllowed(status("new", week: nil, signedIn: false), accounts: ["new@x.com"]),
+            "an account whose email isn't known is never taken for an allowed one")
     }
 
     @Test func mostHeadroomNeedsTwoFreshSamplesAndNeverPicksAStaleOne() {

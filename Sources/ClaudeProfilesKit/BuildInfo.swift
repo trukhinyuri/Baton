@@ -18,9 +18,11 @@ public struct BuildInfo: Equatable, Sendable {
             if dir.pathExtension == "app" {
                 let plist = dir.appending(path: "Contents/Info.plist")
                 if let data = try? Data(contentsOf: plist),
-                   let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
-                    return BuildInfo(version: info["CFBundleShortVersionString"] as? String ?? "dev",
-                                     commit: info["ClaudeProfilesCommit"] as? String ?? "dev")
+                    let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                {
+                    return BuildInfo(
+                        version: info["CFBundleShortVersionString"] as? String ?? "dev",
+                        commit: info["ClaudeProfilesCommit"] as? String ?? "dev")
                 }
                 break
             }

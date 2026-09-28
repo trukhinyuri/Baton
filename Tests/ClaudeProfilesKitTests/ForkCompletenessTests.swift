@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 /// A Code session with everything Claude Code keeps beside its transcript, continued as a copy through
@@ -19,11 +20,13 @@ private struct ForkedSession {
         try box.signIn(box.main, account: Sandbox.accountA)
         try box.signIn(box.work, account: Sandbox.accountB)
         let a = try box.pair(box.main, account: Sandbox.accountA)
-        try box.transcript(lines: lines ?? [
-            #"{"type":"user","sessionId":"\#(Sandbox.cli)","timestamp":"2026-09-28T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
-        ])
-        try box.write(#"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","originCwd":"/repo","title":"T"}"#,
-                      to: a.appending(path: "local_1.json"))
+        try box.transcript(
+            lines: lines ?? [
+                #"{"type":"user","sessionId":"\#(Sandbox.cli)","timestamp":"2026-09-28T10:00:00.000Z","message":{"role":"user","content":"first"}}"#
+            ])
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","originCwd":"/repo","title":"T"}"#,
+            to: a.appending(path: "local_1.json"))
         manager = ProfileManager(paths: box.paths)
         conversation = try #require(manager.conversations().first { $0.sessionID == Sandbox.cli })
     }
@@ -52,7 +55,10 @@ struct ForkCompletenessTests {
         let first = try session.continueAsCopy()
         // The user keeps working in the source window after the first continue.
         let handle = try FileHandle(forWritingTo: session.source); try handle.seekToEnd()
-        try handle.write(contentsOf: Data("\n{\"type\":\"user\",\"sessionId\":\"\(Sandbox.cli)\",\"timestamp\":\"2026-09-28T11:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"LATEST-WORK\"}}\n".utf8))
+        try handle.write(
+            contentsOf: Data(
+                "\n{\"type\":\"user\",\"sessionId\":\"\(Sandbox.cli)\",\"timestamp\":\"2026-09-28T11:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"LATEST-WORK\"}}\n"
+                    .utf8))
         try handle.close()
 
         let second = try session.continueAsCopy()
@@ -111,8 +117,9 @@ struct ForkCompletenessTests {
         for i in 0...NativeForkCarry.maxNotesPerFolder { try session.put("// \(i)", at: temp.appending(path: "scratchpad/build-b/src/f\(i).swift")) }
         try session.put("done\n", at: temp.appending(path: "tasks/b1.output"))
         try session.put("agent\n", at: session.oldFolder.appending(path: "subagents/agent-a1.jsonl"))
-        try FileManager.default.createSymbolicLink(at: temp.appending(path: "tasks/a1.output"),
-                                                   withDestinationURL: session.oldFolder.appending(path: "subagents/agent-a1.jsonl"))
+        try FileManager.default.createSymbolicLink(
+            at: temp.appending(path: "tasks/a1.output"),
+            withDestinationURL: session.oldFolder.appending(path: "subagents/agent-a1.jsonl"))
 
         let plan = try session.continueAsCopy()
 
@@ -126,8 +133,11 @@ struct ForkCompletenessTests {
         }
         let carried = try #require(plan.carried)
         #expect(carried.scratchCopied.count == 3)
-        #expect(Set(carried.leftBehind) == ["scratchpad/image.bin", "scratchpad/huge.md", "scratchpad/repo-copy/ (1 files)",
-                                             "scratchpad/build-b/ (\(NativeForkCarry.maxNotesPerFolder + 1) files)"])
+        #expect(
+            Set(carried.leftBehind) == [
+                "scratchpad/image.bin", "scratchpad/huge.md", "scratchpad/repo-copy/ (1 files)",
+                "scratchpad/build-b/ (\(NativeForkCarry.maxNotesPerFolder + 1) files)",
+            ])
         #expect(session.box.read(temp.appending(path: "scratchpad/GUIDE.md")) == "# plan\n", "the old scratchpad is only read")
     }
 
@@ -169,8 +179,9 @@ struct ForkCompletenessTests {
         let copyTemp = session.box.paths.claudeTempDir.appending(path: "-repo/\(plan.sessionID)", directoryHint: .isDirectory)
         #expect(session.box.exists(copyTemp))
 
-        TranscriptFork.removeCopy(plan.sessionID, in: session.folder, claudeDir: session.box.paths.claudeDir,
-                                  tempDir: session.box.paths.claudeTempDir)
+        TranscriptFork.removeCopy(
+            plan.sessionID, in: session.folder, claudeDir: session.box.paths.claudeDir,
+            tempDir: session.box.paths.claudeTempDir)
 
         #expect(!session.box.exists(copyTemp))
         #expect(session.box.exists(session.oldTemp.appending(path: "scratchpad/GUIDE.md")))

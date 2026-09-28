@@ -1,16 +1,18 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Sharing a problem report")
 struct ReportSharingTests {
     private func facts(logLines: Int, home: String = "/Users/robin.k") -> FeedbackReport.Facts {
-        FeedbackReport.Facts(build: BuildInfo(version: "1.0.0", commit: "abc1234"), macOS: "Version 15.1 (Build 24B83)",
-                             architecture: "arm64", claudeVersion: "0.14.1",
-                             windows: [.init(id: "main", label: "MAIN", isMain: true, isRunning: true, isSignedIn: true)],
-                             diagnostics: [], lastSync: nil, lastSyncDate: nil, errors: ["Can’t open \(home)/src/app"],
-                             log: (0..<logLines).map { "sync: pass \($0) wrote 3 cards and left 12 alone in 41 ms" },
-                             home: home, user: "robin.k", profiles: [])
+        FeedbackReport.Facts(
+            build: BuildInfo(version: "1.0.0", commit: "abc1234"), macOS: "Version 15.1 (Build 24B83)",
+            architecture: "arm64", claudeVersion: "0.14.1",
+            windows: [.init(id: "main", label: "MAIN", isMain: true, isRunning: true, isSignedIn: true)],
+            diagnostics: [], lastSync: nil, lastSyncDate: nil, errors: ["Can’t open \(home)/src/app"],
+            log: (0..<logLines).map { "sync: pass \($0) wrote 3 cards and left 12 alone in 41 ms" },
+            home: home, user: "robin.k", profiles: [])
     }
 
     /// The decoded value of `name` in the URL's query.
@@ -48,8 +50,9 @@ struct ReportSharingTests {
         var copied: [String] = [], opened: [URL] = []
 
         let long = FeedbackReport(facts: facts(logLines: 200))
-        let shared = try long.share(title: "", description: "Sessions vanish", saveIn: folder,
-                                    copy: { copied.append($0) }, open: { opened.append($0) })
+        let shared = try long.share(
+            title: "", description: "Sessions vanish", saveIn: folder,
+            copy: { copied.append($0) }, open: { opened.append($0) })
         let file = try #require(shared.file)
         #expect(file.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL)
         #expect(file.pathExtension == "md")
@@ -80,9 +83,10 @@ struct ReportSharingTests {
         defer { try? FileManager.default.removeItem(at: box.root) }
         let saved = box.root.appending(path: "out/report.md")
         var copied: [String] = [], opened: [URL] = []
-        let output = try FeedbackReport.command(["report", "--save", saved.path, "--open"], paths: box.paths, user: box.user,
-                                                errors: box.errors, log: box.log, downloads: box.root,
-                                                copy: { copied.append($0) }, open: { opened.append($0) })
+        let output = try FeedbackReport.command(
+            ["report", "--save", saved.path, "--open"], paths: box.paths, user: box.user,
+            errors: box.errors, log: box.log, downloads: box.root,
+            copy: { copied.append($0) }, open: { opened.append($0) })
         let file = try String(contentsOf: saved, encoding: .utf8)
         #expect(output.contains(file.trimmingCharacters(in: .newlines)))
         #expect(output.contains("Nothing was sent"))
@@ -93,8 +97,9 @@ struct ReportSharingTests {
             #expect(leaks.isEmpty, "Leaked: \(leaks)\n\n\(text)")
         }
 
-        let printed = try FeedbackReport.command(["report"], paths: box.paths, user: box.user, errors: [], log: [],
-                                                 downloads: box.root, copy: { _ in Issue.record("copied") }, open: { _ in Issue.record("opened") })
+        let printed = try FeedbackReport.command(
+            ["report"], paths: box.paths, user: box.user, errors: [], log: [],
+            downloads: box.root, copy: { _ in Issue.record("copied") }, open: { _ in Issue.record("opened") })
         #expect(printed.hasPrefix(BuildInfo.current.description))
         #expect(throws: FeedbackReport.CommandError.self) {
             try FeedbackReport.command(["report", "--save"], paths: box.paths, downloads: box.root, copy: { _ in }, open: { _ in })

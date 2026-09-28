@@ -35,9 +35,11 @@ public struct Conversation: Identifiable, Equatable, Sendable {
 
     public var id: String { sessionID }
 
-    public init(kind: Kind, sessionID: String, title: String, folders: [String], lastActivity: Date,
-                transcript: URL, ownerID: String? = nil, taskFolder: URL? = nil,
-                card: URL? = nil, model: String? = nil, effort: String? = nil) {
+    public init(
+        kind: Kind, sessionID: String, title: String, folders: [String], lastActivity: Date,
+        transcript: URL, ownerID: String? = nil, taskFolder: URL? = nil,
+        card: URL? = nil, model: String? = nil, effort: String? = nil
+    ) {
         self.kind = kind; self.sessionID = sessionID; self.title = title; self.folders = folders
         self.lastActivity = lastActivity; self.transcript = transcript; self.ownerID = ownerID; self.taskFolder = taskFolder
         self.card = card; self.model = model; self.effort = effort
@@ -84,8 +86,9 @@ public enum ConversationIndex {
                     guard !SessionSync.isAccountBoundCard(card) else { continue }
                     readCards.insert(name)
                     guard card["isArchived"] as? Bool != true,
-                          let session = (card["cliSessionId"] as? String)?.lowercased(), let transcript = transcripts[session],
-                          found[session] == nil else { continue }
+                        let session = (card["cliSessionId"] as? String)?.lowercased(), let transcript = transcripts[session],
+                        found[session] == nil
+                    else { continue }
                     let folder = (card["originCwd"] as? String) ?? (card["cwd"] as? String)
                     found[session] = Conversation(
                         kind: .code, sessionID: session, title: title(of: card),
@@ -98,7 +101,8 @@ public enum ConversationIndex {
             for pair in (try? SessionSync.sessionPairs(dataDirs: [dataDir], folder: CoworkSync.sessionsFolder)) ?? [] {
                 for name in (try? fm.contentsOfDirectory(atPath: pair.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
                     guard let card = readCard(pair.appending(path: name)), card["isArchived"] as? Bool != true,
-                          let session = (card["cliSessionId"] as? String)?.lowercased(), found[session] == nil else { continue }
+                        let session = (card["cliSessionId"] as? String)?.lowercased(), found[session] == nil
+                    else { continue }
                     // Old releases copied some cards between profiles; only the task with its history on disk counts.
                     let taskFolder = pair.appending(path: String(name.dropLast(".json".count)), directoryHint: .isDirectory)
                     guard let transcript = transcriptFiles(in: taskFolder.appending(path: ".claude/projects"))[session] else { continue }
@@ -125,8 +129,10 @@ public enum ConversationIndex {
 
     /// What “Continue All” moves from `folder` to `destination`: the `limit` most recent of `recent(in:…)`, and how
     /// many more were left out.
-    public static func continueAllBatch(in folder: String, since: Date, from conversations: [Conversation], to destination: String,
-                                        limit: Int = continueAllLimit) -> (batch: [Conversation], leftOut: Int) {
+    public static func continueAllBatch(
+        in folder: String, since: Date, from conversations: [Conversation], to destination: String,
+        limit: Int = continueAllLimit
+    ) -> (batch: [Conversation], leftOut: Int) {
         let matching = recent(in: folder, since: since, from: conversations).sorted { $0.lastActivity > $1.lastActivity }
         let batch = Array(matching.prefix(max(limit, 0)))
         return (batch, matching.count - batch.count)
@@ -147,7 +153,8 @@ public enum ConversationIndex {
         defer { try? handle.close() }
         let tail: UInt64 = 256 << 10
         guard let size = try? handle.seekToEnd(), (try? handle.seek(toOffset: size > tail ? size - tail : 0)) != nil,
-              let data = try? handle.readToEnd() else { return nil }
+            let data = try? handle.readToEnd()
+        else { return nil }
         let modelKey = Data(#""model":""#.utf8)
         let sidechainKey = Data(#""isSidechain":true"#.utf8), metaKey = Data(#""isMeta":true"#.utf8)
         let newline = UInt8(ascii: "\n")
@@ -161,7 +168,8 @@ public enum ConversationIndex {
                 while let found = line.range(of: modelKey, in: from..<line.endIndex) {
                     from = found.upperBound
                     guard let end = line[from...].firstIndex(of: UInt8(ascii: "\"")), end - from < 80,
-                          let text = String(data: line[from..<end], encoding: .utf8), text.hasPrefix("claude-") else { continue }
+                        let text = String(data: line[from..<end], encoding: .utf8), text.hasPrefix("claude-")
+                    else { continue }
                     last = text
                 }
             }
@@ -207,8 +215,9 @@ public enum ConversationIndex {
         while let found = data.range(of: key, in: from..<data.endIndex) {
             from = found.upperBound
             guard let end = data[from...].firstIndex(of: UInt8(ascii: "\"")), end - from < 40,
-                  let text = String(data: data[from..<end], encoding: .utf8),
-                  let date = formatter.date(from: text) else { continue }
+                let text = String(data: data[from..<end], encoding: .utf8),
+                let date = formatter.date(from: text)
+            else { continue }
             if newest.map({ date > $0 }) ?? true { newest = date }
         }
         return newest ?? SyncFolders.modificationDate(transcript)

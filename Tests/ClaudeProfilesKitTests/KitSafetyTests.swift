@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Kit safety")
@@ -74,8 +75,9 @@ struct KitSafetyTests {
 
         try sync.run(into: box.work)
 
-        #expect(try fm.contentsOfDirectory(atPath: own.path).sorted() == ["2.1.1", "2.1.10", "2.3.0-partial"],
-                "the current build and the one before it; a download in progress is left alone")
+        #expect(
+            try fm.contentsOfDirectory(atPath: own.path).sorted() == ["2.1.1", "2.1.10", "2.3.0-partial"],
+            "the current build and the one before it; a download in progress is left alone")
         #expect(try fm.contentsOfDirectory(atPath: discarded.path) == ["2.0.9"], "older builds go to the Trash")
         #expect(try fm.contentsOfDirectory(atPath: builds.path).count == 4, "the main app's builds are only read")
     }

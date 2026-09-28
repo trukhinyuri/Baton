@@ -33,12 +33,16 @@ public enum TranscriptText {
         }
         for line in data.split(separator: UInt8(ascii: "\n")) {
             guard let record = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
-                  record["isSidechain"] as? Bool != true, record["isMeta"] as? Bool != true,
-                  let type = record["type"] as? String, type == "user" || type == "assistant",
-                  let message = record["message"] as? [String: Any] else { continue }
+                record["isSidechain"] as? Bool != true, record["isMeta"] as? Bool != true,
+                let type = record["type"] as? String, type == "user" || type == "assistant",
+                let message = record["message"] as? [String: Any]
+            else { continue }
             let blocks: [[String: Any]]
-            if let text = message["content"] as? String { blocks = [["type": "text", "text": text]] }
-            else { blocks = message["content"] as? [[String: Any]] ?? [] }
+            if let text = message["content"] as? String {
+                blocks = [["type": "text", "text": text]]
+            } else {
+                blocks = message["content"] as? [[String: Any]] ?? []
+            }
             for block in blocks {
                 switch (type, block["type"] as? String) {
                 case ("assistant", "text"):
@@ -130,7 +134,8 @@ public struct CoworkHandoff: Sendable {
         if !notAttached.isEmpty {
             text += "Files not attached (too many or too large); they stay in Claude \(sourceLabel):\n" + notAttached.map { "- \($0)\n" }.joined() + "\n"
         }
-        text += "Not carried over: connectors, scheduled tasks and Project settings of the original account. The original task stays in Claude \(sourceLabel).\n\n"
+        text +=
+            "Not carried over: connectors, scheduled tasks and Project settings of the original account. The original task stays in Claude \(sourceLabel).\n\n"
         text += "## Conversation\n\n" + TranscriptText.markdown(try TranscriptText.messages(in: task.transcript))
         let history = folder.appending(path: "history.md")
         guard fm.createFile(atPath: history.path, contents: Data(text.utf8), attributes: [.posixPermissions: 0o600]) else {
@@ -152,8 +157,11 @@ public struct CoworkHandoff: Sendable {
         var result: [(String, URL)] = []
         for (kind, name) in [("Given", "uploads"), ("Made", "outputs")] {
             let root = taskFolder.appending(path: name, directoryHint: .isDirectory)
-            guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-                                                              options: [.skipsHiddenFiles]) else { continue }
+            guard
+                let walker = FileManager.default.enumerator(
+                    at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                    options: [.skipsHiddenFiles])
+            else { continue }
             for case let url as URL in walker {
                 let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                 if values?.isRegularFile == true, values?.isSymbolicLink != true { result.append((kind, url)) }
@@ -173,7 +181,8 @@ public struct CoworkHandoff: Sendable {
         let fm = FileManager.default
         for item in (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey])) ?? [] {
             guard let created = try? item.resourceValues(forKeys: [.creationDateKey]).creationDate,
-                  now.timeIntervalSince(created) > 30 * 86_400 else { continue }
+                now.timeIntervalSince(created) > 30 * 86_400
+            else { continue }
             try? fm.trashItem(at: item, resultingItemURL: nil)
         }
     }
@@ -206,7 +215,8 @@ public enum Continuation {
     /// is `target`. Reads only; names and counts, never URLs or other values from the card.
     public static func wontFollow(card: URL, target: URL, paths: Paths) -> [WontFollowItem] {
         guard let data = try? Data(contentsOf: card),
-              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [] }
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return [] }
         let account = card.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
         let source = card.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let sameAccount = DesktopData.accountID(in: target)?.lowercased() == account.lowercased()
@@ -215,31 +225,41 @@ public enum Continuation {
         if !sameAccount {
             let connectors = remoteConnectors(in: object)
             if !connectors.isEmpty {
-                items.append(WontFollowItem(kind: .remoteConnectors,
-                                            detail: "Connectors of the other account don't come along; connect them again in this window if you need them.",
-                                            names: connectors))
+                items.append(
+                    WontFollowItem(
+                        kind: .remoteConnectors,
+                        detail: "Connectors of the other account don't come along; connect them again in this window if you need them.",
+                        names: connectors))
             }
         }
         if hasBridge(object) {
-            items.append(WontFollowItem(kind: .remoteControlBridge,
-                                        detail: "Remote Control keeps pointing at the original window; the continued conversation is local to this one.",
-                                        names: []))
+            items.append(
+                WontFollowItem(
+                    kind: .remoteControlBridge,
+                    detail: "Remote Control keeps pointing at the original window; the continued conversation is local to this one.",
+                    names: []))
         }
         if SessionSync.isAccountBoundCard(object) {
-            items.append(WontFollowItem(kind: .accountBoundWorker,
-                                        detail: "This is a Remote Control or Project worker; its cloud session stays with its own account.",
-                                        names: []))
+            items.append(
+                WontFollowItem(
+                    kind: .accountBoundWorker,
+                    detail: "This is a Remote Control or Project worker; its cloud session stays with its own account.",
+                    names: []))
         }
         if !sameAccount, let tasks = scheduledTasks(in: source, account: account) {
-            items.append(WontFollowItem(kind: .scheduledTasks,
-                                        detail: "Scheduled tasks stay with the original account and keep running in its window.",
-                                        names: tasks))
+            items.append(
+                WontFollowItem(
+                    kind: .scheduledTasks,
+                    detail: "Scheduled tasks stay with the original account and keep running in its window.",
+                    names: tasks))
         }
         let id = (object["cliSessionId"] as? String)?.lowercased()
         if ((object["priorCliSessionIds"] as? [String]) ?? []).contains(where: { $0.lowercased() != id }) {
-            items.append(WontFollowItem(kind: .rewindLimit,
-                                        detail: "Claude Desktop copied this conversation earlier; Rewind to points before that copy works only in the original conversation.",
-                                        names: []))
+            items.append(
+                WontFollowItem(
+                    kind: .rewindLimit,
+                    detail: "Claude Desktop copied this conversation earlier; Rewind to points before that copy works only in the original conversation.",
+                    names: []))
         }
         return items
     }
@@ -251,8 +271,7 @@ public enum Continuation {
         case let servers as [String: Any]: names.formUnion(servers.keys)
         case let servers as [Any]:
             for server in servers {
-                if let name = server as? String { names.insert(name) }
-                else if let name = (server as? [String: Any])?["name"] as? String { names.insert(name) }
+                if let name = server as? String { names.insert(name) } else if let name = (server as? [String: Any])?["name"] as? String { names.insert(name) }
             }
         default: break
         }
@@ -286,7 +305,8 @@ public enum Continuation {
             let accountDir = dataDir.appending(path: "\(folder)/\(account)", directoryHint: .isDirectory)
             for org in (try? FileManager.default.contentsOfDirectory(at: accountDir, includingPropertiesForKeys: nil)) ?? [] {
                 guard let data = try? Data(contentsOf: org.appending(path: "scheduled-tasks.json")),
-                      let object = try? JSONSerialization.jsonObject(with: data) else { continue }
+                    let object = try? JSONSerialization.jsonObject(with: data)
+                else { continue }
                 let tasks: [Any]
                 switch object {
                 case let list as [Any]: tasks = list

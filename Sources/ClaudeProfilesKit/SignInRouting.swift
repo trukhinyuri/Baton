@@ -23,14 +23,21 @@ public struct SignInRouting: Sendable {
     let register: @Sendable (URL, Bool) -> Int32
 
     public init(paths: Paths) {
-        self.init(paths: paths, registerReporting: { app, on in
-            ProfileManager.run("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
-                               [on ? "-f" : "-u", app.path])
-        })
+        self.init(
+            paths: paths,
+            registerReporting: { app, on in
+                ProfileManager.run(
+                    "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+                    [on ? "-f" : "-u", app.path])
+            })
     }
 
     init(paths: Paths, register: @escaping @Sendable (URL, Bool) -> Void) {
-        self.init(paths: paths, registerReporting: { register($0, $1); return 0 })
+        self.init(
+            paths: paths,
+            registerReporting: {
+                register($0, $1); return 0
+            })
     }
 
     init(paths: Paths, registerReporting: @escaping @Sendable (URL, Bool) -> Int32) {

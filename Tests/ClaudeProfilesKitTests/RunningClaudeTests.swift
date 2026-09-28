@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Telling which account a running Claude shows")

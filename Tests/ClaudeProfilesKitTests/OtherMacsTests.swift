@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 extension Sandbox {
@@ -7,8 +8,10 @@ extension Sandbox {
     @discardableResult
     func claudeBundle(at url: URL, version: String = "2.9939.2", identifier: String = ClaudeVersion.bundleIdentifier) throws -> URL {
         try FileManager.default.createDirectory(at: url.appending(path: "Contents/MacOS"), withIntermediateDirectories: true)
-        let info = ["CFBundleIdentifier": identifier, "CFBundleShortVersionString": version, "CFBundleVersion": version,
-                    "CFBundleExecutable": "Claude", "CFBundlePackageType": "APPL"]
+        let info = [
+            "CFBundleIdentifier": identifier, "CFBundleShortVersionString": version, "CFBundleVersion": version,
+            "CFBundleExecutable": "Claude", "CFBundlePackageType": "APPL",
+        ]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: url.appending(path: "Contents/Info.plist"))
         return url
     }
@@ -32,27 +35,32 @@ struct OtherMacsTests {
         #expect(Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [engine] }).path == user.path)
 
         let elsewhere = try box.claudeBundle(at: box.root.appending(path: "Other/Claude.app"))
-        #expect(Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [engine, elsewhere] }).path == elsewhere.path,
-                "Launch Services' choice comes first")
+        #expect(
+            Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [engine, elsewhere] }).path == elsewhere.path,
+            "Launch Services' choice comes first")
 
         let installed = try box.claudeBundle(at: system.appending(path: "Claude.app"))
-        #expect(Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [] }).path == installed.path,
-                "/Applications before ~/Applications")
+        #expect(
+            Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [] }).path == installed.path,
+            "/Applications before ~/Applications")
 
         let impostor = try box.claudeBundle(at: box.root.appending(path: "Impostor/Claude.app"), identifier: "com.example.other")
         #expect(Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [impostor] }).path == installed.path)
 
         let nowhere = box.root.appending(path: "Empty", directoryHint: .isDirectory)
-        #expect(Paths.findClaude(home: nowhere, systemApplications: nowhere, lookup: { _ in [] }).path == nowhere.appending(path: "Claude.app").path,
-                "with no Claude anywhere, the usual place, so the error names it")
+        #expect(
+            Paths.findClaude(home: nowhere, systemApplications: nowhere, lookup: { _ in [] }).path == nowhere.appending(path: "Claude.app").path,
+            "with no Claude anywhere, the usual place, so the error names it")
     }
 
     @Test func restoresMainAfterStaleSignIn() throws {
         let box = try Sandbox()
         let recorder = Recorder()
-        let routing = SignInRouting(paths: box.paths, registerReporting: { app, on in
-            recorder.calls.append((app.lastPathComponent, on)); return 0
-        })
+        let routing = SignInRouting(
+            paths: box.paths,
+            registerReporting: { app, on in
+                recorder.calls.append((app.lastPathComponent, on)); return 0
+            })
 
         // No sign-in on record: the main app is registered again, every start.
         #expect(try routing.restoreMainIfIdle(allProfileIDs: ["work"]))
@@ -78,10 +86,12 @@ struct OtherMacsTests {
         let box = try Sandbox()
         let recorder = Recorder()
         recorder.failing = ["Claude.app"]
-        let routing = SignInRouting(paths: box.paths, registerReporting: { app, on in
-            recorder.calls.append((app.lastPathComponent, on))
-            return recorder.failing.contains(app.lastPathComponent) ? 17 : 0
-        })
+        let routing = SignInRouting(
+            paths: box.paths,
+            registerReporting: { app, on in
+                recorder.calls.append((app.lastPathComponent, on))
+                return recorder.failing.contains(app.lastPathComponent) ? 17 : 0
+            })
 
         #expect {
             try routing.restoreMainIfIdle(allProfileIDs: [])

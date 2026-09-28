@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 extension Sandbox {
@@ -39,8 +40,9 @@ struct CoworkSyncTests {
             #expect(report.pairs == 3 && report.cardsPreserved == 1)
             #expect(report.changes == 0 && report.backedUp == 0)
             for target in [sameAccount, otherAccount] {
-                #expect(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty,
-                        "an absolute cwd does not transfer Cowork history or VM ownership")
+                #expect(
+                    try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty,
+                    "an absolute cwd does not transfer Cowork history or VM ownership")
             }
         }
         #expect(box.read(a.appending(path: "local_1.json")) == card)
@@ -55,7 +57,8 @@ struct CoworkSyncTests {
         let a = try box.coworkPair(box.main, account: Sandbox.accountA)
         let b = try box.coworkPair(box.work, account: Sandbox.accountB)
         let original = #"{"sessionId":"local_1","cliSessionId":"cli-1","enabledMcpTools":{"originalTool":true},"remoteMcpServersConfig":[{"name":"original"}]}"#
-        let foreign = #"{"sessionId":"local_1","cliSessionId":"cli-1","enabledMcpTools":{"differentTool":true},"remoteMcpServersConfig":[{"name":"other-profile"}]}"#
+        let foreign =
+            #"{"sessionId":"local_1","cliSessionId":"cli-1","enabledMcpTools":{"differentTool":true},"remoteMcpServersConfig":[{"name":"other-profile"}]}"#
         try box.write(original, to: a.appending(path: "local_1.json"), modified: Date().addingTimeInterval(-3600))
         try box.write(foreign, to: b.appending(path: "local_1.json"))
         let dates = [a, b].map { SyncFolders.modificationDate($0.appending(path: "local_1.json")) }

@@ -136,10 +136,12 @@ struct ProfileRow: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
                 if status.isOpenWithoutProfile {
-                    Label("A Claude \(status.label) window shows the main account — click \(status.isRunning ? "Show" : "Open") to replace it",
-                          systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                        .help("This app copy was opened without the profile, from its own Dock icon or by macOS at login. Keep the launcher in the Dock instead.")
+                    Label(
+                        "A Claude \(status.label) window shows the main account — click \(status.isRunning ? "Show" : "Open") to replace it",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption).foregroundStyle(.orange)
+                    .help("This app copy was opened without the profile, from its own Dock icon or by macOS at login. Keep the launcher in the Dock instead.")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -156,11 +158,16 @@ struct ProfileRow: View {
                     Divider()
                     if let profile = status.profile {
                         Button("Show Launcher in Finder") { model.revealLauncher(status) }
-                        Toggle("Keep the permission mode when continuing here", isOn: Binding(
-                            get: { profile.carriesPermissionMode },
-                            set: { model.setCarryPermissionMode($0, for: profile.id) }
-                        ))
-                        .help("A conversation continued into this profile keeps its permission mode (for example “accept edits”) instead of falling back to the default. Off unless you turn it on.")
+                        Toggle(
+                            "Keep the permission mode when continuing here",
+                            isOn: Binding(
+                                get: { profile.carriesPermissionMode },
+                                set: { model.setCarryPermissionMode($0, for: profile.id) }
+                            )
+                        )
+                        .help(
+                            "A conversation continued into this profile keeps its permission mode (for example “accept edits”) instead of falling back to the default. Off unless you turn it on."
+                        )
                         Divider()
                         Button("Remove Subscription…", role: .destructive) { model.pendingRemoval = status }
                     } else {
@@ -192,15 +199,18 @@ struct EmptyHint: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Add your next subscription").font(.body.weight(.semibold))
-                Text("Each one gets its own Claude window and a labeled Dock icon, so you always know which account you are in. Your Claude Code sessions show up in every window, so you can pick up any of them in whichever subscription you choose.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    "Each one gets its own Claude window and a labeled Dock icon, so you always know which account you are in. Your Claude Code sessions show up in every window, so you can pick up any of them in whichever subscription you choose."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4])).foregroundStyle(.separator))
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4])).foregroundStyle(.separator))
     }
 }
 
@@ -233,10 +243,12 @@ struct ContentView: View {
             header
             if let tired = model.limitReached, let best = model.bestDestination(excluding: tired.id) {
                 // With folder rules, where work may continue depends on the work; the sheet offers only allowed windows.
-                LimitBanner(tired: tired, best: model.folderRules?.isEmpty == true ? model.label(of: best) : nil,
-                            note: model.folderRules?.isEmpty == true ? model.staleNote(best) : "") { model.isContinuing = true }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 10)
+                LimitBanner(
+                    tired: tired, best: model.folderRules?.isEmpty == true ? model.label(of: best) : nil,
+                    note: model.folderRules?.isEmpty == true ? model.staleNote(best) : ""
+                ) { model.isContinuing = true }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
             }
             ScrollView {
                 VStack(spacing: 8) {
@@ -267,7 +279,9 @@ struct ContentView: View {
             Button("Remove", role: .destructive) { model.remove(status) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("Its app copy and sign-in move to the Trash. While its window is open, removing it is refused: quit it first (⌘Q in that window). Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the profile; cloud Projects stay with their account.")
+            Text(
+                "Its app copy and sign-in move to the Trash. While its window is open, removing it is refused: quit it first (⌘Q in that window). Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the profile; cloud Projects stay with their account."
+            )
         }
         .alert(model.errorTitle, isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
@@ -354,7 +368,9 @@ struct WindowStatusSheet: View {
                     row("Sharing scope", status.scope ?? "None until you sign in")
                     row("Scope from", status.scopeSource)
                     row("Local only", status.localOnly.map { $0 ? "On" : "Off" } ?? "Not available in this version")
-                    row("Claude Code running", status.liveSessions == 0 ? "No sessions" : "\(status.liveSessions) session\(status.liveSessions == 1 ? "" : "s")")
+                    row(
+                        "Claude Code running", status.liveSessions == 0 ? "No sessions" : "\(status.liveSessions) session\(status.liveSessions == 1 ? "" : "s")"
+                    )
                 }
                 section("Not shared, and why", status.skipReasons, empty: "Everything local is shared.")
                 section("Waiting for a restart", status.pendingChanges, empty: "No changes waiting.")

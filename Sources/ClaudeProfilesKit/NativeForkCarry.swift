@@ -39,8 +39,10 @@ public enum NativeForkCarry {
     /// A scratchpad folder with more files than this is build output, an unpacked app or a copy of a repository.
     static let maxNotesPerFolder = 200
     /// A scratchpad folder with one of these at its top is a copy of a project, not notes.
-    static let projectManifests: Set<String> = ["Package.swift", "package.json", "Cargo.toml", "go.mod", "pyproject.toml",
-                                                "pom.xml", "build.gradle", "CMakeLists.txt", "Makefile"]
+    static let projectManifests: Set<String> = [
+        "Package.swift", "package.json", "Cargo.toml", "go.mod", "pyproject.toml",
+        "pom.xml", "build.gradle", "CMakeLists.txt", "Makefile",
+    ]
     /// A file made up to this long after the new transcript still counts as made before the copy.
     static let clockSlack: TimeInterval = 60
 
@@ -52,8 +54,9 @@ public enum NativeForkCarry {
         for dataDir in dataDirs {
             for card in cards(in: dataDir.appending(path: SessionSync.sessionsFolder, directoryHint: .isDirectory)) {
                 guard let data = try? Data(contentsOf: card),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let new = (json["cliSessionId"] as? String)?.lowercased(), transcripts[new] != nil else { continue }
+                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                    let new = (json["cliSessionId"] as? String)?.lowercased(), transcripts[new] != nil
+                else { continue }
                 for old in (json["priorCliSessionIds"] as? [String]) ?? [] where old.lowercased() != new && transcripts[old.lowercased()] != nil {
                     found.insert(Lineage(old: old.lowercased(), new: new))
                 }
@@ -77,8 +80,9 @@ public enum NativeForkCarry {
         var ids: [String] = []
         for line in data.split(separator: UInt8(ascii: "\n")) where ids.count < limit {
             guard let record = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  let type = record["type"] as? String, ["user", "assistant", "system", "attachment"].contains(type),
-                  let uuid = record["uuid"] as? String else { continue }
+                let type = record["type"] as? String, ["user", "assistant", "system", "attachment"].contains(type),
+                let uuid = record["uuid"] as? String
+            else { continue }
             ids.append(uuid)
         }
         return ids
@@ -151,12 +155,15 @@ public enum NativeForkCarry {
                 guard (created(source) ?? .distantPast) <= forkedAt else { continue }
                 let target = newFolder.appending(path: "\(kind)/\(relative)")
                 if FileManager.default.fileExists(atPath: target.path) { plan.kept += 1; continue }
-                plan.copies.append(Copy(source: source, target: target, name: "projects/\(project)/\(lineage.new)/\(kind)/\(relative)",
-                                        rewritesIDs: rewritesIDs("\(kind)/\(relative)")))
+                plan.copies.append(
+                    Copy(
+                        source: source, target: target, name: "projects/\(project)/\(lineage.new)/\(kind)/\(relative)",
+                        rewritesIDs: rewritesIDs("\(kind)/\(relative)")))
             }
         }
-        scratchPlan(oldProject: old.deletingLastPathComponent().lastPathComponent, project: project, lineage: lineage,
-                    tempDir: paths.claudeTempDir, madeBy: forkedAt, into: &plan)
+        scratchPlan(
+            oldProject: old.deletingLastPathComponent().lastPathComponent, project: project, lineage: lineage,
+            tempDir: paths.claudeTempDir, madeBy: forkedAt, into: &plan)
         return plan
     }
 
@@ -202,16 +209,16 @@ public enum NativeForkCarry {
         let fm = FileManager.default
         try fm.createDirectory(at: copy.target.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard copy.rewritesIDs else {
-            do { try fm.copyItem(at: copy.source, to: copy.target); return true }
-            catch where fm.fileExists(atPath: copy.target.path) { return false }
+            do { try fm.copyItem(at: copy.source, to: copy.target); return true } catch  where fm.fileExists(atPath: copy.target.path) { return false }
         }
-        let data = TranscriptFork.replacing(lineage.old, with: lineage.new,
-                                            in: TranscriptFork.completeRecords(try Data(contentsOf: copy.source)))
+        let data = TranscriptFork.replacing(
+            lineage.old, with: lineage.new,
+            in: TranscriptFork.completeRecords(try Data(contentsOf: copy.source)))
         let temporary = copy.target.deletingLastPathComponent().appending(path: ".\(copy.target.lastPathComponent).\(UUID().uuidString).tmp")
         guard fm.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: copy.target.path])
         }
-        do { try fm.moveItem(at: temporary, to: copy.target); return true }   // never replaces an existing file
+        do { try fm.moveItem(at: temporary, to: copy.target); return true }  // never replaces an existing file
         catch {
             try? fm.removeItem(at: temporary)
             if fm.fileExists(atPath: copy.target.path) { return false }

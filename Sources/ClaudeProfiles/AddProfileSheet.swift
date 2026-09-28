@@ -55,10 +55,17 @@ struct AddProfileSheet: View {
                 GridRow {
                     Text("Dock label")
                     HStack {
-                        TextField("WORK", text: Binding(get: { form.label }, set: { form.label = String($0.uppercased().prefix(Profile.maxLabelLength)); form.labelEdited = true }))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(minWidth: 100, maxWidth: 140)
-                            .accessibilityLabel("Dock label")
+                        TextField(
+                            "WORK",
+                            text: Binding(
+                                get: { form.label },
+                                set: {
+                                    form.label = String($0.uppercased().prefix(Profile.maxLabelLength)); form.labelEdited = true
+                                })
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 100, maxWidth: 140)
+                        .accessibilityLabel("Dock label")
                         if form.labelIsTaken {
                             Text("Already used").font(.caption).foregroundStyle(.orange)
                         }
@@ -68,7 +75,9 @@ struct AddProfileSheet: View {
                     Text("Color")
                     HStack(spacing: 8) {
                         ForEach(Profile.palette, id: \.self) { hex in
-                            Button { form.color = hex } label: {
+                            Button {
+                                form.color = hex
+                            } label: {
                                 Circle()
                                     .fill(Color(hex: hex))
                                     .frame(width: 20, height: 20)

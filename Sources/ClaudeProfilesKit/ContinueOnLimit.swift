@@ -77,16 +77,20 @@ public enum TranscriptFork {
     ///   the one the transcript is in (`<claudeDir>/projects/<folder>/<id>.jsonl`).
     /// - Returns: the new session id, lowercased like the ones Claude Code makes.
     @discardableResult
-    public static func fork(_ conversation: Conversation, claudeDir: URL? = nil,
-                            newID: String = UUID().uuidString.lowercased()) throws -> String {
+    public static func fork(
+        _ conversation: Conversation, claudeDir: URL? = nil,
+        newID: String = UUID().uuidString.lowercased()
+    ) throws -> String {
         try forkReporting(conversation, claudeDir: claudeDir, newID: newID).id
     }
 
     /// `fork(_:claudeDir:newID:)`, also carrying the scratchpad.
     /// - Parameter tempDir: Claude Code's temp folder with each session's scratchpad and task output
     ///   (`Paths.claudeTempDir`). Its notes go into the copy's scratchpad under `from-<old id>`; `nil` leaves them.
-    public static func forkReporting(_ conversation: Conversation, claudeDir: URL? = nil, tempDir: URL? = nil,
-                                     newID: String = UUID().uuidString.lowercased()) throws -> Report {
+    public static func forkReporting(
+        _ conversation: Conversation, claudeDir: URL? = nil, tempDir: URL? = nil,
+        newID: String = UUID().uuidString.lowercased()
+    ) throws -> Report {
         let fm = FileManager.default
         let source = conversation.transcript
         let directory = source.deletingLastPathComponent()
@@ -101,8 +105,9 @@ public enum TranscriptFork {
         }
         let newTemp = tempDir?.appending(path: "\(directory.lastPathComponent)/\(newID)", directoryHint: .isDirectory)
         guard !fm.fileExists(atPath: target.path), !fm.fileExists(atPath: newFolder.path),
-              !perSession.contains(where: { fm.fileExists(atPath: $0.1.path) }),
-              !(newTemp.map { fm.fileExists(atPath: $0.path) } ?? false) else {
+            !perSession.contains(where: { fm.fileExists(atPath: $0.1.path) }),
+            !(newTemp.map { fm.fileExists(atPath: $0.path) } ?? false)
+        else {
             throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
         }
 
@@ -131,7 +136,7 @@ public enum TranscriptFork {
             report.sourceLength = history.count
             report.sourceTail = ContinueCopies.tail(of: history)
         } catch {
-            for url in made { try? fm.removeItem(at: url) }   // made by this call a moment ago
+            for url in made { try? fm.removeItem(at: url) }  // made by this call a moment ago
             throw error
         }
         if let tempDir { carryScratchpad(from: oldID, into: &report, folder: directory.lastPathComponent, tempDir: tempDir) }
@@ -142,13 +147,17 @@ public enum TranscriptFork {
     private static func carryScratchpad(from oldID: String, into report: inout Report, folder: String, tempDir: URL) {
         let lineage = NativeForkCarry.Lineage(old: oldID, new: report.id)
         var plan = NativeForkCarry.Plan()
-        NativeForkCarry.scratchPlan(oldProject: folder, project: folder, lineage: lineage, tempDir: tempDir,
-                                    madeBy: .distantFuture, into: &plan)
+        NativeForkCarry.scratchPlan(
+            oldProject: folder, project: folder, lineage: lineage, tempDir: tempDir,
+            madeBy: .distantFuture, into: &plan)
         report.leftBehind = plan.leftBehind
         report.worktrees = plan.worktrees
         for copy in plan.copies {
-            if (try? NativeForkCarry.place(copy, lineage: lineage)) == true { report.scratchCopied.append(copy.name) }
-            else { report.leftBehind.append(copy.name) }
+            if (try? NativeForkCarry.place(copy, lineage: lineage)) == true {
+                report.scratchCopied.append(copy.name)
+            } else {
+                report.leftBehind.append(copy.name)
+            }
         }
     }
 
@@ -289,8 +298,7 @@ public enum TranscriptFork {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
         }
         do {
-            if fm.fileExists(atPath: url.path) { _ = try fm.replaceItemAt(url, withItemAt: temporary) }
-            else { try fm.moveItem(at: temporary, to: url) }
+            if fm.fileExists(atPath: url.path) { _ = try fm.replaceItemAt(url, withItemAt: temporary) } else { try fm.moveItem(at: temporary, to: url) }
         } catch {
             try? fm.removeItem(at: temporary)
             throw error
@@ -338,7 +346,10 @@ struct ContinueCopies: Sendable {
         let copy = transcript.deletingLastPathComponent().appending(path: "\(entry.copy).jsonl")
         guard FileManager.default.fileExists(atPath: copy.path) else { return nil }
         if let length = entry.sourceLength, let tail = entry.sourceTail, let now = Self.fingerprint(of: transcript),
-           now.length == length, now.tail == tail { return entry.copy }
+            now.length == length, now.tail == tail
+        {
+            return entry.copy
+        }
         if let copied = SyncFolders.modificationDate(copy), let changed = SyncFolders.modificationDate(transcript), copied > changed {
             return entry.copy
         }
@@ -398,8 +409,9 @@ enum SessionCards {
             let url = folder.appending(path: name)
             if let modifiedSince, (SyncFolders.modificationDate(url) ?? .distantPast) < modifiedSince { continue }
             guard let data = try? Data(contentsOf: url), let start = data.range(of: key)?.upperBound,
-                  let end = data[start...].firstIndex(of: UInt8(ascii: "\"")), end - start <= 64,
-                  let id = String(data: data[start..<end], encoding: .utf8), !id.isEmpty else { continue }
+                let end = data[start...].firstIndex(of: UInt8(ascii: "\"")), end - start <= 64,
+                let id = String(data: data[start..<end], encoding: .utf8), !id.isEmpty
+            else { continue }
             found.insert(id.lowercased())
         }
         return found
@@ -472,7 +484,8 @@ public enum ModelSupport {
         for pair in (try? SessionSync.sessionPairs(dataDirs: [dataDir], folder: SessionSync.sessionsFolder)) ?? [] {
             for name in (try? fm.contentsOfDirectory(atPath: pair.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
                 guard let card = ConversationIndex.readCard(pair.appending(path: name)), SessionSync.isAccountBoundCard(card),
-                      let model = card["model"] as? String, !model.isEmpty else { continue }
+                    let model = card["model"] as? String, !model.isEmpty
+                else { continue }
                 found.insert(model)
             }
         }
@@ -482,7 +495,8 @@ public enum ModelSupport {
     /// `{"perModel":{"claude-opus-5-5[1m]":{…}}}` → the model names.
     static func models(inSessionResult json: String) -> Set<String> {
         guard let object = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-              let perModel = object["perModel"] as? [String: Any] else { return [] }
+            let perModel = object["perModel"] as? [String: Any]
+        else { return [] }
         return Set(perModel.keys.filter { !$0.isEmpty })
     }
 }
@@ -507,8 +521,10 @@ public enum DestinationRanking {
     /// usage of their latest sample, lowest first; a newer sample first when two are equal, then those without
     /// usage data. An old sample isn't pushed back: a subscription kept in reserve is sampled only when its window
     /// is used, so its sample is old precisely because nobody has used it since.
-    public static func ranked(_ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
-                              now: Date = Date()) -> [ProfileStatus] {
+    public static func ranked(
+        _ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
+        now: Date = Date()
+    ) -> [ProfileStatus] {
         let candidates = statuses.filter {
             $0.isSignedIn && $0.id != excluded && !isAtLimit($0, now: now) && isAllowed($0, accounts: accounts)
         }
@@ -520,8 +536,10 @@ public enum DestinationRanking {
         }.map(\.element)
     }
 
-    public static func best(_ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
-                            now: Date = Date()) -> String? {
+    public static func best(
+        _ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
+        now: Date = Date()
+    ) -> String? {
         ranked(statuses, excluding: excluded, accounts: accounts, now: now).first?.id
     }
 

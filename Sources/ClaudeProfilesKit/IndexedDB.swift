@@ -48,7 +48,8 @@ struct IndexedDBStore: Sendable {
         for (key, value) in live where key.starts(with: names) {
             var reader = ByteReader(key, at: names.count)
             guard (try? IDBKey.readString(&reader)) != nil, let name = try? IDBKey.readString(&reader),
-                  reader.isAtEnd, name == database, let id = IDBKey.decodeInt(value) else { continue }
+                reader.isAtEnd, name == database, let id = IDBKey.decodeInt(value)
+            else { continue }
             databaseIDs.append(id)
         }
         guard databaseIDs.count == 1, let databaseID = databaseIDs.first else { return nil }
@@ -60,7 +61,10 @@ struct IndexedDBStore: Sendable {
         guard live[IDBKey.objectStoreMetadata(databaseID, objectStoreID, .name)] == IDBKey.utf16BE(objectStore) else { return nil }
         let lastVersion = live[IDBKey.objectStoreMetadata(databaseID, objectStoreID, .lastVersion)].flatMap(IDBKey.decodeInt) ?? 0
         if let autoIncrement = live[IDBKey.objectStoreMetadata(databaseID, objectStoreID, .autoIncrement)],
-           autoIncrement.contains(where: { $0 != 0 }) { return nil }
+            autoIncrement.contains(where: { $0 != 0 })
+        {
+            return nil
+        }
         var storeID = ByteWriter()
         storeID.appendVarint64(objectStoreID)
         let indexes = IDBKey.prefix(databaseID, 0, 0) + [IDBKey.indexMetadataType] + storeID.bytes
@@ -78,9 +82,10 @@ struct IndexedDBStore: Sendable {
                 blobKeys.insert(name)
             }
         }
-        return Snapshot(dataVersion: live[IDBKey.prefix(0, 0, 0) + [IDBKey.dataVersionType]].flatMap(IDBKey.decodeInt),
-                        databaseID: databaseID, objectStoreID: objectStoreID, lastVersion: lastVersion,
-                        records: records, blobKeys: blobKeys)
+        return Snapshot(
+            dataVersion: live[IDBKey.prefix(0, 0, 0) + [IDBKey.dataVersionType]].flatMap(IDBKey.decodeInt),
+            databaseID: databaseID, objectStoreID: objectStoreID, lastVersion: lastVersion,
+            records: records, blobKeys: blobKeys)
     }
 
     /// Stores each value (serialized the way `Record.value` is) under its key, as IndexedDB's own `put` does:
@@ -183,14 +188,14 @@ enum IDBValue {
                 _ = try reader.varint64()
                 if !reader.isAtEnd, reader.data[reader.pos] == 0xFE { _ = try reader.bytes(13) }
             }
-            while !reader.isAtEnd, reader.data[reader.pos] == 0x00 { _ = try reader.byte() }   // padding
+            while !reader.isAtEnd, reader.data[reader.pos] == 0x00 { _ = try reader.byte() }  // padding
             let tag = try reader.byte()
             let length = Int(try reader.varint64())
             let payload = try reader.bytes(length)
             guard reader.isAtEnd else { return nil }
             switch tag {
-            case 0x22: return String(decoding: payload.map { UInt16($0) }, as: UTF16.self)   // Latin-1
-            case 0x63:   // UTF-16LE
+            case 0x22: return String(decoding: payload.map { UInt16($0) }, as: UTF16.self)  // Latin-1
+            case 0x63:  // UTF-16LE
                 guard length % 2 == 0 else { return nil }
                 let units = stride(from: 0, to: length, by: 2).map { UInt16(payload[$0]) | UInt16(payload[$0 + 1]) << 8 }
                 return String(decoding: units, as: UTF16.self)

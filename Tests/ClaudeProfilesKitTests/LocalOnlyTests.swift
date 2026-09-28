@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 extension Sandbox {
@@ -30,21 +31,21 @@ private func preferences(_ url: URL) throws -> [String: Any] {
 @Suite("Local only")
 struct LocalOnlyTests {
     static let config = """
-    {
-      "mcpServers": {"files": {"command": "/usr/bin/true", "args": ["-v"]}},
-      "preferences": {
-        "ccdScheduledTasksEnabled": true,
-        "ccRemoteControlDefaultEnabled": true,
-        "coworkScheduledTasksEnabled" :true,
-        "remoteControlStayReachable":   true,
-        "wakeSchedulerEnabled": true,
-        "zoom": 1.0,
-        "name": "caf\\u00e9 \\"quoted\\""
-      },
-      "zz": [1, 2.50, {"a": null}]
-    }
+        {
+          "mcpServers": {"files": {"command": "/usr/bin/true", "args": ["-v"]}},
+          "preferences": {
+            "ccdScheduledTasksEnabled": true,
+            "ccRemoteControlDefaultEnabled": true,
+            "coworkScheduledTasksEnabled" :true,
+            "remoteControlStayReachable":   true,
+            "wakeSchedulerEnabled": true,
+            "zoom": 1.0,
+            "name": "caf\\u00e9 \\"quoted\\""
+          },
+          "zz": [1, 2.50, {"a": null}]
+        }
 
-    """
+        """
 
     func closed(_ box: Sandbox) -> LocalOnly { LocalOnly(paths: box.paths, isRunning: { _ in false }) }
 
@@ -155,8 +156,9 @@ struct LocalOnlyTests {
         let all = try localOnly.setEnabled(false, window: nil, windows: ["main", "work"])
         #expect(all == ["main": .off, "work": .off])
         #expect(box.read(box.desktopConfig(box.main)) == Self.config)
-        #expect(try localOnly.setEnabled(true, window: nil, windows: ["main", "work"]) == ["main": .on, "work": .off],
-                "a window's own choice outlives the global one")
+        #expect(
+            try localOnly.setEnabled(true, window: nil, windows: ["main", "work"]) == ["main": .on, "work": .off],
+            "a window's own choice outlives the global one")
     }
 
     @Test func settingsSyncNeverOverridesLocalOnlyKeys() throws {
@@ -164,8 +166,9 @@ struct LocalOnlyTests {
         try box.installClaude()
         try box.signIn(box.main, account: Sandbox.accountA)
         try box.signIn(box.work, account: Sandbox.accountB)
-        try box.write(#"{"preferences":{"ccRemoteControlDefaultEnabled":true,"remoteControlStayReachable":true,"keepAwakeEnabled":true,"epitaxyPrefs":{"epitaxy-transcript-links-in-preview":true}}}"#,
-                      to: box.desktopConfig(box.main))
+        try box.write(
+            #"{"preferences":{"ccRemoteControlDefaultEnabled":true,"remoteControlStayReachable":true,"keepAwakeEnabled":true,"epitaxyPrefs":{"epitaxy-transcript-links-in-preview":true}}}"#,
+            to: box.desktopConfig(box.main))
         try box.write(Self.config, to: box.desktopConfig(box.work))
         let localOnly = closed(box)
         _ = try localOnly.apply(window: "work")
@@ -199,16 +202,20 @@ struct LocalOnlyTests {
         let config = box.desktopConfig(box.work).path.dropFirst(box.root.path.count + 1)
         let own = [box.paths.localOnlyFile, box.paths.stateDir.appending(path: "local-only.lock")]
         let expected = Set([String(config)] + own.map { String($0.path.dropFirst(box.root.path.count + 1)) })
-        #expect(changed.subtracting(expected).allSatisfy { $0.hasPrefix("Library/Application Support/Claude Profiles/Backups/") },
-                "only the window's config, Local only's own record and backups change: \(changed.sorted())")
+        #expect(
+            changed.subtracting(expected).allSatisfy { $0.hasPrefix("Library/Application Support/Claude Profiles/Backups/") },
+            "only the window's config, Local only's own record and backups change: \(changed.sorted())")
         #expect(box.read(transcript)?.contains("history-suppression") == true)
         let prefs = try preferences(box.desktopConfig(box.work))
         for key in ["ccdScheduledTasksEnabled", "coworkScheduledTasksEnabled", "wakeSchedulerEnabled"] {
             #expect(prefs[key] as? Bool == true, "\(key) is a local scheduler switch and stays as it is")
         }
         #expect(LocalOnly.ownedKeys.isDisjoint(with: LocalOnly.neverTouched))
-        #expect(LocalOnly.neverTouched.isSuperset(of: ["ccdScheduledTasksEnabled", "coworkScheduledTasksEnabled", "wakeSchedulerEnabled",
-                                                       "chatTabEnabled", "disableMultiAccount"]))
+        #expect(
+            LocalOnly.neverTouched.isSuperset(of: [
+                "ccdScheduledTasksEnabled", "coworkScheduledTasksEnabled", "wakeSchedulerEnabled",
+                "chatTabEnabled", "disableMultiAccount",
+            ]))
     }
 
     @Test func reportsMissingKeyForUnknownClaudeVersion() throws {

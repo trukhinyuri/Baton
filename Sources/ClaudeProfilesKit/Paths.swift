@@ -20,23 +20,27 @@ public struct Paths: Sendable, Equatable {
 
     public static var standard: Paths {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return Paths(home: home,
-                     claudeApp: findClaude(home: home, lookup: launchServicesApps),
-                     claudeTempDir: URL(fileURLWithPath: "/private/tmp/claude-\(getuid())", isDirectory: true))
+        return Paths(
+            home: home,
+            claudeApp: findClaude(home: home, lookup: launchServicesApps),
+            claudeTempDir: URL(fileURLWithPath: "/private/tmp/claude-\(getuid())", isDirectory: true))
     }
 
     /// Claude Desktop: where Launch Services has it, else in /Applications, else in ~/Applications. Profile engines
     /// and launchers carry its bundle id too and are never taken for it, nor is a copy in the Trash.
     /// - Returns: `/Applications/Claude.app` when there is no Claude anywhere, so the error names the usual place.
-    public static func findClaude(home: URL, systemApplications: URL = URL(fileURLWithPath: "/Applications", isDirectory: true),
-                                  lookup: (String) -> [URL]) -> URL {
+    public static func findClaude(
+        home: URL, systemApplications: URL = URL(fileURLWithPath: "/Applications", isDirectory: true),
+        lookup: (String) -> [URL]
+    ) -> URL {
         let own = Paths(home: home, claudeApp: home).launchersDir.standardizedFileURL.path + "/"
         func isClaude(_ app: URL) -> Bool {
             let path = app.standardizedFileURL.path
             guard !path.hasPrefix(own), !path.contains("/.Trash/") else { return false }
             return ClaudeVersion.bundleInfo(at: app)?["CFBundleIdentifier"] as? String == ClaudeVersion.bundleIdentifier
         }
-        let candidates = lookup(ClaudeVersion.bundleIdentifier)
+        let candidates =
+            lookup(ClaudeVersion.bundleIdentifier)
             + [systemApplications.appending(path: "Claude.app"), home.appending(path: "Applications/Claude.app")]
         return candidates.first(where: isClaude) ?? systemApplications.appending(path: "Claude.app", directoryHint: .isDirectory)
     }

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Profiles")
@@ -39,8 +40,9 @@ struct ProfileTests {
         let box = try Sandbox()
         let registry = ProfileRegistry(paths: box.paths)
         #expect(try registry.load().isEmpty)
-        let profile = Profile(id: "work", label: "WORK", email: "a@b.co", color: "#1971C2",
-                              createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let profile = Profile(
+            id: "work", label: "WORK", email: "a@b.co", color: "#1971C2",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000))
         try registry.save([profile])
         #expect(try registry.load() == [profile])
     }
@@ -74,16 +76,18 @@ struct ProfileTests {
 struct DesktopDataTests {
     @Test func readsOnlyTheAccountIDFromConfig() throws {
         let box = try Sandbox()
-        try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountA)","oauth:tokenCache":"secret"}"#,
-                      to: box.main.appending(path: "config.json"))
+        try box.write(
+            #"{"lastKnownAccountUuid":"\#(Sandbox.accountA)","oauth:tokenCache":"secret"}"#,
+            to: box.main.appending(path: "config.json"))
         #expect(DesktopData.accountID(in: box.main) == Sandbox.accountA)
         #expect(DesktopData.accountID(in: box.work) == nil)
     }
 
     @Test func readsLatestUsageSample() throws {
         let box = try Sandbox()
-        try box.write(#"{"version":1,"samples":[{"t":1790338178961,"u":{"fh":20,"sd":79}},{"t":1790337278917,"u":{"fh":15,"sd":77}}]}"#,
-                      to: box.main.appending(path: "plan-usage-history.json"))
+        try box.write(
+            #"{"version":1,"samples":[{"t":1790338178961,"u":{"fh":20,"sd":79}},{"t":1790337278917,"u":{"fh":15,"sd":77}}]}"#,
+            to: box.main.appending(path: "plan-usage-history.json"))
         let usage = try #require(DesktopData.usage(in: box.main))
         #expect(usage.fiveHour == 20)
         #expect(usage.week == 79)

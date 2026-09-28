@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 extension Sandbox {
@@ -147,13 +148,16 @@ struct SessionSyncRulesTests {
         try FolderRules(paths: box.paths).set("/employer", accounts: ["me@employer.example"])
         let before = box.snapshot()
 
-        let report = try box.sync(propagateDeletions: true) { $0.dryRun = true; $0.isWindowOpen = { _ in false } }
+        let report = try box.sync(propagateDeletions: true) {
+            $0.dryRun = true; $0.isWindowOpen = { _ in false }
+        }
 
         #expect(box.snapshot() == before, "a dry run writes, moves and removes nothing")
         #expect(report.cardsWritten == 3 && report.retiredByRule == 1 && report.cardsRemoved == 1 && report.archiveIndexesWritten == 1)
         let real = try box.sync(propagateDeletions: true) { $0.isWindowOpen = { _ in false } }
-        #expect(real.cardsWritten == report.cardsWritten && real.retiredByRule == report.retiredByRule
+        #expect(
+            real.cardsWritten == report.cardsWritten && real.retiredByRule == report.retiredByRule
                 && real.cardsRemoved == report.cardsRemoved && real.tombstonesWritten == report.tombstonesWritten,
-                "a dry run reports what a real run does")
+            "a dry run reports what a real run does")
     }
 }

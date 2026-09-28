@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Interface sharing")
@@ -41,26 +42,30 @@ struct InterfaceSyncTests {
 
     @Test func portableSidebarFieldsAreSharedWithoutAccountOrPermissionState() throws {
         let box = try sandbox()
-        try put(box.main, [
-            InterfaceSync.sidebarKey: try sidebar([
-                "sidebarWidth": 242, "pinnedOrder": ["code:local_1"], "navPinnedIds": ["routines-chorus"],
-                "collapsedGroups": ["project-done"], "lastSidebarScopeKey": Self.mainScope,
-                "customGroupsByScope": [Self.mainScope: ["groups": ["g1"]], "old/scope": ["groups": ["stale"]]],
-                "sidebarRowCountsByScope": [Self.mainScope: ["code.recents": 18]], "navHasCodeRoutinesByOrg": ["org-a": true],
-            ]),
-            "epitaxy-unread-v1": #"{"state":{"unreadIds":["local_1"]},"version":0}"#,
-            "LSS-persisted.epitaxy-folder-permission-mode.\(Sandbox.accountA)": #"{"value":{"scratch:":"auto"},"tabId":"","timestamp":1}"#,
-            "composer-draft:epitaxy-local_1": "unsent text",
-            "__qk_hint_account_uuid": Sandbox.accountA,
-        ])
-        try put(box.work, [
-            InterfaceSync.sidebarKey: try sidebar([
-                "sidebarWidth": 288, "pinnedOrder": [], "navPinnedIds": NSNull(), "collapsedGroups": [],
-                "lastSidebarScopeKey": Self.workScope, "customGroupsByScope": [:],
-                "sidebarRowCountsByScope": [Self.workScope: ["code.recents": 50]], "navHasCodeRoutinesByOrg": [:],
-            ]),
-            "LSS-persisted.code-sessions-status-filter.\(Sandbox.accountB)": #"{"value":"all","tabId":"","timestamp":1}"#,
-        ])
+        try put(
+            box.main,
+            [
+                InterfaceSync.sidebarKey: try sidebar([
+                    "sidebarWidth": 242, "pinnedOrder": ["code:local_1"], "navPinnedIds": ["routines-chorus"],
+                    "collapsedGroups": ["project-done"], "lastSidebarScopeKey": Self.mainScope,
+                    "customGroupsByScope": [Self.mainScope: ["groups": ["g1"]], "old/scope": ["groups": ["stale"]]],
+                    "sidebarRowCountsByScope": [Self.mainScope: ["code.recents": 18]], "navHasCodeRoutinesByOrg": ["org-a": true],
+                ]),
+                "epitaxy-unread-v1": #"{"state":{"unreadIds":["local_1"]},"version":0}"#,
+                "LSS-persisted.epitaxy-folder-permission-mode.\(Sandbox.accountA)": #"{"value":{"scratch:":"auto"},"tabId":"","timestamp":1}"#,
+                "composer-draft:epitaxy-local_1": "unsent text",
+                "__qk_hint_account_uuid": Sandbox.accountA,
+            ])
+        try put(
+            box.work,
+            [
+                InterfaceSync.sidebarKey: try sidebar([
+                    "sidebarWidth": 288, "pinnedOrder": [], "navPinnedIds": NSNull(), "collapsedGroups": [],
+                    "lastSidebarScopeKey": Self.workScope, "customGroupsByScope": [:],
+                    "sidebarRowCountsByScope": [Self.workScope: ["code.recents": 50]], "navHasCodeRoutinesByOrg": [:],
+                ]),
+                "LSS-persisted.code-sessions-status-filter.\(Sandbox.accountB)": #"{"value":"all","tabId":"","timestamp":1}"#,
+            ])
 
         let changed = try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work")
 
@@ -88,14 +93,22 @@ struct InterfaceSyncTests {
         let box = try sandbox()
         let sync = InterfaceSync(paths: box.paths)
         let unread = "epitaxy-unread-v1"
-        try put(box.main, [InterfaceSync.sidebarKey: try sidebar(["sidebarWidth": 242, "pinnedOrder": ["code:local_1"]]),
-                           unread: #"{"state":{"unreadIds":["local_1"]}}"#])
+        try put(
+            box.main,
+            [
+                InterfaceSync.sidebarKey: try sidebar(["sidebarWidth": 242, "pinnedOrder": ["code:local_1"]]),
+                unread: #"{"state":{"unreadIds":["local_1"]}}"#,
+            ])
         try put(box.work, [InterfaceSync.sidebarKey: try sidebar(["sidebarWidth": 288, "pinnedOrder": []])])
         try sync.run(into: box.work, profileID: "work")
 
         // The profile's window changes its width and reads the session; the main app pins another session.
-        try put(box.work, [InterfaceSync.sidebarKey: try sidebar(["sidebarWidth": 300, "pinnedOrder": ["code:local_1"]]),
-                           unread: #"{"state":{"unreadIds":[]}}"#])
+        try put(
+            box.work,
+            [
+                InterfaceSync.sidebarKey: try sidebar(["sidebarWidth": 300, "pinnedOrder": ["code:local_1"]]),
+                unread: #"{"state":{"unreadIds":[]}}"#,
+            ])
         try put(box.main, [InterfaceSync.sidebarKey: try sidebar(["sidebarWidth": 242, "pinnedOrder": ["code:local_2"]])])
         try sync.run(into: box.work, profileID: "work")
 
@@ -122,14 +135,16 @@ struct InterfaceSyncTests {
         try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountB)"}"#, to: config)
         let holder = Process()
         holder.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
-        holder.arguments = ["-e", #"$|=1; open(my $fh, "+<", $ARGV[0]) or die $!; flock($fh, 2) or die $!; print "locked\n"; <STDIN>;"#,
-                            LocalStorage(dataDir: box.work).dbDir.appending(path: "LOCK").path]
+        holder.arguments = [
+            "-e", #"$|=1; open(my $fh, "+<", $ARGV[0]) or die $!; flock($fh, 2) or die $!; print "locked\n"; <STDIN>;"#,
+            LocalStorage(dataDir: box.work).dbDir.appending(path: "LOCK").path,
+        ]
         let stdout = Pipe(), stdin = Pipe()
         holder.standardOutput = stdout
         holder.standardInput = stdin
         try holder.run()
         defer { stdin.fileHandleForWriting.closeFile(); holder.waitUntilExit() }
-        _ = stdout.fileHandleForReading.availableData   // the holder's "locked" line
+        _ = stdout.fileHandleForReading.availableData  // the holder's "locked" line
 
         #expect(try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work") == 0, "the window is open")
         #expect(try items(box.work)["epitaxy-editor-prefs"] == nil)
@@ -151,14 +166,22 @@ struct InterfaceSyncTests {
     @Test func portablePrefsShareWithoutImportingUnknownOrAccountPreferences() throws {
         let box = try sandbox()
         let (a, b) = (Sandbox.accountA, Sandbox.accountB)
-        try writePrefs(box, box.main, ["epitaxy-transcript-links-in-preview": true,
-                                       "epitaxy-folder-permission-mode.\(a)": ["scratch:": "auto"],
-                                       "desktop-frame.paneStore.v1": ["project": "chan_other"],
-                                       "projects.chan_other.overviewPaneOpen": true, "futurePreference": true])
-        try writePrefs(box, box.work, ["epitaxy-transcript-links-in-preview": false,
-                                       "epitaxy-folder-permission-mode.\(b)": ["scratch:": "ask"],
-                                       "desktop-frame.paneStore.v1": ["project": "chan_own"],
-                                       "projects.chan_own.overviewPaneOpen": false, "ownOnly": 2])
+        try writePrefs(
+            box, box.main,
+            [
+                "epitaxy-transcript-links-in-preview": true,
+                "epitaxy-folder-permission-mode.\(a)": ["scratch:": "auto"],
+                "desktop-frame.paneStore.v1": ["project": "chan_other"],
+                "projects.chan_other.overviewPaneOpen": true, "futurePreference": true,
+            ])
+        try writePrefs(
+            box, box.work,
+            [
+                "epitaxy-transcript-links-in-preview": false,
+                "epitaxy-folder-permission-mode.\(b)": ["scratch:": "ask"],
+                "desktop-frame.paneStore.v1": ["project": "chan_own"],
+                "projects.chan_own.overviewPaneOpen": false, "ownOnly": 2,
+            ])
         let settings = SettingsSync(paths: box.paths), interface = InterfaceSync(paths: box.paths)
         try settings.run(into: box.work)
         try interface.run(into: box.work, profileID: "work")
@@ -183,15 +206,23 @@ struct InterfaceSyncTests {
         let box = try sandbox()
         let hidden = "dframe-unpinned-epitaxy-project-ids"
         let stars = "LSS-persisted.starred-local-code-sessions"
-        let source = [hidden: #"["chan_main"]"#, stars: #"{"value":["local_main"]}"#,
-                      InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_main"], "sidebarWidth": 250])]
-        let target = [hidden: #"["chan_own"]"#, stars: #"{"value":["local_own","session_remote"]}"#,
-                      InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_own", "project:chan_own"], "sidebarWidth": 240])]
+        let source = [
+            hidden: #"["chan_main"]"#, stars: #"{"value":["local_main"]}"#,
+            InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_main"], "sidebarWidth": 250]),
+        ]
+        let target = [
+            hidden: #"["chan_own"]"#, stars: #"{"value":["local_own","session_remote"]}"#,
+            InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_own", "project:chan_own"], "sidebarWidth": 240]),
+        ]
         try put(box.main, source)
         try put(box.work, target)
         let starred = "store:pin-state:dframe-starred-code", projects = "store:pin-state:dframe-unpinned-epitaxy-project"
-        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_main"]},"version":0}"#),
-                                             projects: (2, #"{"state":{"unpinnedIds":["chan_main"]},"version":0}"#)])
+        try makePinStore(
+            box.main,
+            records: [
+                starred: (1, #"{"state":{"starredIds":["local_main"]},"version":0}"#),
+                projects: (2, #"{"state":{"unpinnedIds":["chan_main"]},"version":0}"#),
+            ])
         let ownStarred = #"{"state":{"starredIds":["local_own","session_remote"]},"version":0}"#
         let ownProjects = #"{"state":{"unpinnedIds":["chan_own"]},"version":0}"#
         let idb = try makePinStore(box.work, records: [starred: (1, ownStarred), projects: (2, ownProjects)])
@@ -210,8 +241,12 @@ struct InterfaceSyncTests {
         let pair = try box.pair(box.main, account: Sandbox.accountA)
         try box.write(NativeSessionScopeTests.worker, to: pair.appending(path: "local_worker.json"))
         let key = "LSS-persisted.starred-local-code-sessions"
-        try put(box.main, [key: #"{"value":["local_1","local_worker"]}"#,
-                           InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_worker"]])])
+        try put(
+            box.main,
+            [
+                key: #"{"value":["local_1","local_worker"]}"#,
+                InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_worker"]]),
+            ])
         let own = #"{"value":["local_2"]}"#
         try put(box.work, [key: own, InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_2"]])])
         let sync = InterfaceSync(paths: box.paths)
@@ -230,8 +265,12 @@ struct InterfaceSyncTests {
         try SessionSync.NativeScopeState(scopes: ["local_1.json": [Self.mainScope]]).save(to: scopeFile)
         let key = "LSS-persisted.starred-local-code-sessions"
         let own = #"{"value":["local_2"]}"#
-        try put(box.main, [key: #"{"value":["local_1"]}"#,
-                           InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_1"]])])
+        try put(
+            box.main,
+            [
+                key: #"{"value":["local_1"]}"#,
+                InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_1"]]),
+            ])
         try put(box.work, [key: own, InterfaceSync.sidebarKey: try sidebar(["pinnedOrder": ["code:local_2"]])])
         try writePrefs(box, box.main, ["starred-local-code-sessions": ["local_1"]])
         try writePrefs(box, box.work, ["starred-local-code-sessions": ["local_2"]])
@@ -278,9 +317,11 @@ struct InterfaceSyncTests {
     /// Claude's key-value IndexedDB database with `records` (key → version, JSON text), built on a copy of the
     /// Local Storage fixture: any LevelDB database will do, the two kinds of keys never collide.
     @discardableResult
-    func makePinStore(_ dataDir: URL, records: [String: (UInt64, String)], databaseID: UInt64 = 1,
-                      blobs: Set<String> = [], dataVersion: UInt64 = 0x10_0000_0015,
-                      extra: (_ database: UInt64, _ objectStore: UInt64) -> [([UInt8], [UInt8])] = { _, _ in [] }) throws -> IndexedDBStore {
+    func makePinStore(
+        _ dataDir: URL, records: [String: (UInt64, String)], databaseID: UInt64 = 1,
+        blobs: Set<String> = [], dataVersion: UInt64 = 0x10_0000_0015,
+        extra: (_ database: UInt64, _ objectStore: UInt64) -> [([UInt8], [UInt8])] = { _, _ in [] }
+    ) throws -> IndexedDBStore {
         let store = IndexedDBStore(dataDir: dataDir, database: InterfaceSync.pinDatabase, objectStore: InterfaceSync.pinObjectStore)
         let fixture = Bundle.module.resourceURL!.appending(path: "Fixtures/LocalStorageFixture/Local Storage/leveldb", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: store.dbDir.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -317,8 +358,12 @@ struct InterfaceSyncTests {
         let mainStarred = #"{"state":{"starredIds":["local_1"]},"version":0}"#
         let mainGroups = #"{"state":{"expandedIds":["routines"]},"version":0}"#
         try makePinStore(box.main, records: [starred: (7, mainStarred), groups: (8, mainGroups)], databaseID: 5)
-        let work = try makePinStore(box.work, records: [groups: (2, #"{"state":{"expandedIds":[]},"version":0}"#),
-                                                        "unrelated": (3, "own")], databaseID: 2)
+        let work = try makePinStore(
+            box.work,
+            records: [
+                groups: (2, #"{"state":{"expandedIds":[]},"version":0}"#),
+                "unrelated": (3, "own"),
+            ], databaseID: 2)
         let sync = InterfaceSync(paths: box.paths)
 
         #expect(try sync.run(into: box.work, profileID: "work") == 1)
@@ -349,10 +394,18 @@ struct InterfaceSyncTests {
     @Test func pinRecordsWithBlobsOrAnotherVersionAreLeftAlone() throws {
         let box = try sandbox()
         let starred = "store:pin-state:dframe-starred-code", groups = "store:pin-state:dframe-session-groups"
-        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_a"]},"version":1}"#),
-                                             groups: (2, #"{"state":{"expandedIds":["b"]},"version":0}"#)])
-        let work = try makePinStore(box.work, records: [starred: (1, #"{"state":{"starredIds":[]},"version":0}"#),
-                                                        groups: (2, #"{"state":{"expandedIds":[]},"version":0}"#)], blobs: [groups])
+        try makePinStore(
+            box.main,
+            records: [
+                starred: (1, #"{"state":{"starredIds":["local_a"]},"version":1}"#),
+                groups: (2, #"{"state":{"expandedIds":["b"]},"version":0}"#),
+            ])
+        let work = try makePinStore(
+            box.work,
+            records: [
+                starred: (1, #"{"state":{"starredIds":[]},"version":0}"#),
+                groups: (2, #"{"state":{"expandedIds":[]},"version":0}"#),
+            ], blobs: [groups])
         #expect(try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work") == 0)
         let records = try #require(try work.read()?.records)
         #expect(records[starred]?.string == #"{"state":{"starredIds":[]},"version":0}"#)
@@ -374,9 +427,11 @@ struct InterfaceSyncTests {
             return [(key, IDBKey.utf16BE("byDate"))]
         }
         let keyGenerator: (UInt64, UInt64) -> [([UInt8], [UInt8])] = { db, os in [(IDBKey.objectStoreMetadata(db, os, .autoIncrement), [1])] }
-        for (name, extra, dataVersion) in [("index", index, UInt64(0x10_0000_0015)),
-                                           ("key generator", keyGenerator, 0x10_0000_0015),
-                                           ("data version", { _, _ in [] }, 0x10_0000_0014)] {
+        for (name, extra, dataVersion) in [
+            ("index", index, UInt64(0x10_0000_0015)),
+            ("key generator", keyGenerator, 0x10_0000_0015),
+            ("data version", { _, _ in [] }, 0x10_0000_0014),
+        ] {
             let box = try sandbox()
             try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_a"]},"version":0}"#)])
             let work = try makePinStore(box.work, records: [starred: (1, own)], dataVersion: dataVersion, extra: extra)
@@ -397,7 +452,7 @@ struct InterfaceSyncTests {
         let now = Date()
         let blocked = Backup(paths: box.paths, now: now).dayDir.appending(path: "Interface")
         try FileManager.default.createDirectory(at: blocked.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data().write(to: blocked)   // a file where the backup of the replaced pins would go
+        try Data().write(to: blocked)  // a file where the backup of the replaced pins would go
         let sync = InterfaceSync(paths: box.paths)
 
         #expect(throws: (any Error).self) { try sync.run(into: box.work, profileID: "work", now: now) }

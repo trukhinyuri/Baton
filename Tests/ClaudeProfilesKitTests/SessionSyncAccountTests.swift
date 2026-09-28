@@ -1,13 +1,15 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 extension Sandbox {
     /// Writes the profile registry by hand with `carryPermissionMode` for `work`, the per-profile opt-in.
     func carryPermissionMode(_ on: Bool) throws {
         try FileManager.default.createDirectory(at: paths.stateDir, withIntermediateDirectories: true)
-        try write(##"[{"id":"work","label":"WORK","color":"#1971C2","createdAt":"2026-09-01T00:00:00Z","carryPermissionMode":\##(on)}]"##,
-                  to: paths.registryFile)
+        try write(
+            ##"[{"id":"work","label":"WORK","color":"#1971C2","createdAt":"2026-09-01T00:00:00Z","carryPermissionMode":\##(on)}]"##,
+            to: paths.registryFile)
     }
 }
 
@@ -18,7 +20,8 @@ private func fixture(_ name: String) throws -> String {
 
 @Suite("Account-scoped fields in shared cards")
 struct SessionSyncAccountTests {
-    static let card = #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","permissionMode":"bypassPermissions","chromePermissionMode":"skip_all_permission_checks","bridgeSessionIds":["bridge-1"],"remoteMcpServersConfig":[{"uuid":"u","name":"Org Slack","url":"https://mcp.example","tools":[]}],"enabledMcpTools":{"org-slack:read":true,"local:stdio:tool-1":true},"cuGrantFlags":{"clipboardRead":true},"peerReceipts":[{"messageId":"m"}],"remoteControlAutoEligible":true,"title":"T"}"#
+    static let card =
+        #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","permissionMode":"bypassPermissions","chromePermissionMode":"skip_all_permission_checks","bridgeSessionIds":["bridge-1"],"remoteMcpServersConfig":[{"uuid":"u","name":"Org Slack","url":"https://mcp.example","tools":[]}],"enabledMcpTools":{"org-slack:read":true,"local:stdio:tool-1":true},"cuGrantFlags":{"clipboardRead":true},"peerReceipts":[{"messageId":"m"}],"remoteControlAutoEligible":true,"title":"T"}"#
 
     @Test func crossAccountCopyDropsAccountScopedKeys() throws {
         let box = try Sandbox()
@@ -55,17 +58,21 @@ struct SessionSyncAccountTests {
             let b = try box.pair(box.work, account: Sandbox.accountB)
             try box.carryPermissionMode(optIn)
             try box.write(#"{"sessionId":"local_1","permissionMode":"bypassPermissions","title":"T"}"#, to: a.appending(path: "local_1.json"))
-            try box.write(#"{"sessionId":"local_2","permissionMode":"bypassPermissions"}"#, to: a.appending(path: "local_2.json"),
-                          modified: Date())
+            try box.write(
+                #"{"sessionId":"local_2","permissionMode":"bypassPermissions"}"#, to: a.appending(path: "local_2.json"),
+                modified: Date())
             // The window here chose its own mode for this session; that stays whatever the opt-in.
-            try box.write(#"{"sessionId":"local_2","permissionMode":"acceptEdits"}"#, to: b.appending(path: "local_2.json"),
-                          modified: Date().addingTimeInterval(-600))
+            try box.write(
+                #"{"sessionId":"local_2","permissionMode":"acceptEdits"}"#, to: b.appending(path: "local_2.json"),
+                modified: Date().addingTimeInterval(-600))
 
             _ = try box.sync()
 
             let copied = box.read(b.appending(path: "local_1.json"))
             #expect(copied == (optIn ? #"{"sessionId":"local_1","permissionMode":"bypassPermissions","title":"T"}"# : #"{"sessionId":"local_1","title":"T"}"#))
-            #expect(box.read(b.appending(path: "local_2.json")) == (optIn ? #"{"sessionId":"local_2","permissionMode":"bypassPermissions"}"# : #"{"sessionId":"local_2","permissionMode":"acceptEdits"}"#))
+            #expect(
+                box.read(b.appending(path: "local_2.json"))
+                    == (optIn ? #"{"sessionId":"local_2","permissionMode":"bypassPermissions"}"# : #"{"sessionId":"local_2","permissionMode":"acceptEdits"}"#))
         }
     }
 
@@ -74,8 +81,9 @@ struct SessionSyncAccountTests {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let b = try box.pair(box.work, account: Sandbox.accountB)
-        try box.write(#"{"sessionId":"local_1","bridgeSessionIds":["b-own"],"title":"old"}"#, to: b.appending(path: "local_1.json"),
-                      modified: Date().addingTimeInterval(-600))
+        try box.write(
+            #"{"sessionId":"local_1","bridgeSessionIds":["b-own"],"title":"old"}"#, to: b.appending(path: "local_1.json"),
+            modified: Date().addingTimeInterval(-600))
         try box.write(#"{"sessionId":"local_1","bridgeSessionIds":["a-own"],"title":"new"}"#, to: a.appending(path: "local_1.json"))
 
         _ = try box.sync()
@@ -93,7 +101,7 @@ struct SessionSyncAccountTests {
         let b = try box.pair(box.work, account: Sandbox.accountB)
         try box.write(Self.card, to: b.appending(path: "local_1.json"))
         Thread.sleep(forTimeInterval: 0.05)
-        try box.write(Self.card, to: b.appending(path: "local_1.json"))   // saved again, in place
+        try box.write(Self.card, to: b.appending(path: "local_1.json"))  // saved again, in place
         let modified = try #require(SyncFolders.modificationDate(b.appending(path: "local_1.json")))
         try box.write(Self.card, to: a.appending(path: "local_1.json"), modified: modified)
 

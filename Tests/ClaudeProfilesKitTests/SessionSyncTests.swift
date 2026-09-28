@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 /// A throwaway home directory with a main data dir and one profile.
@@ -32,6 +33,7 @@ struct Sandbox {
     }
 
     /// Assumes no running `claude` process, so tests never look at this Mac's processes.
+    @discardableResult
     func sync(propagateDeletions: Bool = false) throws -> SessionSync.Report {
         var sync = SessionSync(paths: paths, dataDirs: [main, work])
         sync.liveSessionIDs = []
@@ -129,8 +131,9 @@ struct SessionSyncTests {
         #expect(box.read(b.appending(path: "local_1.json")) == card(box.work), "cwd stays, originCwd moves")
         #expect(box.read(a.appending(path: "local_2.json")) == card(box.main))
         #expect(report.cardsWritten == 2)
-        #expect(SyncFolders.modificationDate(b.appending(path: "local_1.json")).map { abs($0.timeIntervalSince(modified)) < 1 } == true,
-                "the card's date isn't changed, so it doesn't look newer than it is")
+        #expect(
+            SyncFolders.modificationDate(b.appending(path: "local_1.json")).map { abs($0.timeIntervalSince(modified)) < 1 } == true,
+            "the card's date isn't changed, so it doesn't look newer than it is")
         #expect(try box.sync().changes == 0, "a second run has nothing to do")
     }
 
@@ -152,8 +155,9 @@ struct SessionSyncTests {
 
         #expect(box.read(b.appending(path: "local_1.json")) == card(link, "hi"))
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link) == folder)
-        #expect(URL(filePath: link).resolvingSymlinksInPath() == URL(filePath: folder).resolvingSymlinksInPath(),
-                "Claude Code files the conversation under the real folder in every window")
+        #expect(
+            URL(filePath: link).resolvingSymlinksInPath() == URL(filePath: folder).resolvingSymlinksInPath(),
+            "Claude Code files the conversation under the real folder in every window")
         #expect(box.read(a.appending(path: "local_1.json")) == card(folder, "hi"), "the window that started it keeps the real folder")
         #expect(try box.sync().changes == 0, "a second run has nothing to do")
 
@@ -209,8 +213,9 @@ struct SessionSyncTests {
 
         try box.sync()
 
-        #expect(box.read(b.appending(path: "local_1.json")) == #"{"cwd":"\#(folder)","originCwd":"\#(taken)"}"#,
-                "only originCwd moves, as when there is no folder to link to")
+        #expect(
+            box.read(b.appending(path: "local_1.json")) == #"{"cwd":"\#(folder)","originCwd":"\#(taken)"}"#,
+            "only originCwd moves, as when there is no folder to link to")
         #expect((try? FileManager.default.attributesOfItem(atPath: taken)[.type] as? FileAttributeType) == .typeDirectory)
     }
 
@@ -238,7 +243,9 @@ struct BackupTests {
 
         var discarded: [URL] = []
         var backup = Backup(paths: box.paths, now: Date())
-        backup.discard = { discarded.append($0); try FileManager.default.removeItem(at: $0) }
+        backup.discard = {
+            discarded.append($0); try FileManager.default.removeItem(at: $0)
+        }
         let moved = backup.prune()
 
         #expect(moved == 1)
@@ -301,10 +308,12 @@ struct SettingsSyncTests {
         try fm.createDirectory(at: box.main.appending(path: "Claude Extensions/ext"), withIntermediateDirectories: true)
         try box.write("{}", to: box.main.appending(path: "Claude Extensions/ext/manifest.json"))
         try SettingsIsolationTests().writeExtensionIndex(box, box.main, versions: ["ext": "1"])
-        try box.write(#"{"mcpServers":{"a":{"command":"x"}},"preferences":{"keepAwakeEnabled":true,"sidebarMode":"code"}}"#,
-                      to: box.main.appending(path: "claude_desktop_config.json"))
-        try box.write(#"{"mcpServers":{"old":{}},"preferences":{"sidebarMode":"chat","ownOnly":1}}"#,
-                      to: box.work.appending(path: "claude_desktop_config.json"))
+        try box.write(
+            #"{"mcpServers":{"a":{"command":"x"}},"preferences":{"keepAwakeEnabled":true,"sidebarMode":"code"}}"#,
+            to: box.main.appending(path: "claude_desktop_config.json"))
+        try box.write(
+            #"{"mcpServers":{"old":{}},"preferences":{"sidebarMode":"chat","ownOnly":1}}"#,
+            to: box.work.appending(path: "claude_desktop_config.json"))
         try box.write(#"{"token":"main"}"#, to: box.main.appending(path: "config.json"))
         try box.write(#"{"token":"work"}"#, to: box.work.appending(path: "config.json"))
 
@@ -324,8 +333,9 @@ struct SettingsSyncTests {
 
     @Test func eachWindowKeepsItsOwnSchedulerSwitches() throws {
         let box = try Sandbox()
-        try box.write(#"{"preferences":{"ccdScheduledTasksEnabled":true,"coworkScheduledTasksEnabled":true,"wakeSchedulerEnabled":true}}"#,
-                      to: box.main.appending(path: "claude_desktop_config.json"))
+        try box.write(
+            #"{"preferences":{"ccdScheduledTasksEnabled":true,"coworkScheduledTasksEnabled":true,"wakeSchedulerEnabled":true}}"#,
+            to: box.main.appending(path: "claude_desktop_config.json"))
         try SettingsSync(paths: box.paths).run(into: box.work)
         var prefs = try #require(SettingsSync.readJSON(box.work.appending(path: "claude_desktop_config.json"))?["preferences"] as? [String: Any])
         for key in SettingsSync.windowPreferences {
@@ -333,10 +343,12 @@ struct SettingsSyncTests {
         }
         #expect(prefs["wakeSchedulerEnabled"] as? Bool == false, "only the main app wakes the Mac")
 
-        try box.write(#"{"preferences":{"ccdScheduledTasksEnabled":true,"coworkScheduledTasksEnabled":false,"wakeSchedulerEnabled":true}}"#,
-                      to: box.work.appending(path: "claude_desktop_config.json"))
-        try box.write(#"{"preferences":{"ccdScheduledTasksEnabled":false,"coworkScheduledTasksEnabled":true}}"#,
-                      to: box.main.appending(path: "claude_desktop_config.json"))
+        try box.write(
+            #"{"preferences":{"ccdScheduledTasksEnabled":true,"coworkScheduledTasksEnabled":false,"wakeSchedulerEnabled":true}}"#,
+            to: box.work.appending(path: "claude_desktop_config.json"))
+        try box.write(
+            #"{"preferences":{"ccdScheduledTasksEnabled":false,"coworkScheduledTasksEnabled":true}}"#,
+            to: box.main.appending(path: "claude_desktop_config.json"))
         try SettingsSync(paths: box.paths).run(into: box.work)
         prefs = try #require(SettingsSync.readJSON(box.work.appending(path: "claude_desktop_config.json"))?["preferences"] as? [String: Any])
         #expect(prefs["ccdScheduledTasksEnabled"] as? Bool == true, "the profile runs its own tasks")
@@ -348,8 +360,9 @@ struct SettingsSyncTests {
         let box = try Sandbox()
         try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountA)"}"#, to: box.main.appending(path: "config.json"))
         try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountB)"}"#, to: box.work.appending(path: "config.json"))
-        try box.write(#"{"owners":{"\#(Sandbox.accountA)":{"github":{"push":true}}}}"#,
-                      to: box.main.appending(path: "mcp-user-tool-toggles.json"))
+        try box.write(
+            #"{"owners":{"\#(Sandbox.accountA)":{"github":{"push":true}}}}"#,
+            to: box.main.appending(path: "mcp-user-tool-toggles.json"))
         let own = #"{"owners":{"\#(Sandbox.accountB)":{"github":{"push":false}}}}"#
         let target = box.work.appending(path: "mcp-user-tool-toggles.json")
         try box.write(own, to: target)
@@ -363,8 +376,9 @@ struct SettingsSyncTests {
     @Test func appearanceIsCopiedButSignInIsNot() throws {
         let box = try Sandbox()
         let fm = FileManager.default
-        try box.write(#"{"userThemeMode":"dark","locale":"en-US","oauth:tokenCache":"main-secret","lastKnownAccountUuid":"\#(Sandbox.accountA)"}"#,
-                      to: box.main.appending(path: "config.json"))
+        try box.write(
+            #"{"userThemeMode":"dark","locale":"en-US","oauth:tokenCache":"main-secret","lastKnownAccountUuid":"\#(Sandbox.accountA)"}"#,
+            to: box.main.appending(path: "config.json"))
         let own = box.work.appending(path: "config.json")
         try box.write(#"{"userThemeMode":"light","oauth:tokenCache":"work-secret","lastKnownAccountUuid":"\#(Sandbox.accountB)"}"#, to: own)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: own.path)
@@ -413,8 +427,9 @@ struct OrganizationTests {
         try box.pair(box.work, account: Sandbox.accountB, org: older)
         try box.pair(box.work, account: Sandbox.accountB, org: newer)
         try box.pair(box.work, account: Sandbox.accountB, org: "not-an-org")
-        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)],
-                             ofItemAtPath: box.work.appending(path: "claude-code-sessions/\(Sandbox.accountB)/\(older)").path)
+        try fm.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-3600)],
+            ofItemAtPath: box.work.appending(path: "claude-code-sessions/\(Sandbox.accountB)/\(older)").path)
         #expect(DesktopData.organizationID(in: box.work, accountID: Sandbox.accountB) == newer)
         #expect(DesktopData.organizationID(in: box.work, accountID: Sandbox.accountA) == nil)
     }
@@ -424,8 +439,9 @@ struct OrganizationTests {
         let org = "33333333-3333-3333-3333-333333333333"
         try ProfileRegistry(paths: box.paths).save([Profile(id: "work", label: "WORK", email: "w@example.com", color: "#1971C2")])
         try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountB)"}"#, to: box.work.appending(path: "config.json"))
-        try FileManager.default.createDirectory(at: box.work.appending(path: "local-agent-mode-sessions/\(Sandbox.accountB)/\(org)"),
-                                                withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: box.work.appending(path: "local-agent-mode-sessions/\(Sandbox.accountB)/\(org)"),
+            withIntermediateDirectories: true)
         let main = try box.pair(box.main, account: Sandbox.accountA)
         try box.write(#"{"title":"one"}"#, to: main.appending(path: "local_1.json"))
 
@@ -442,8 +458,9 @@ struct OrganizationTests {
         try box.pair(box.work, account: Sandbox.accountB, org: older)
         let cowork = box.work.appending(path: "local-agent-mode-sessions/\(Sandbox.accountB)/\(newer)")
         try fm.createDirectory(at: cowork, withIntermediateDirectories: true)
-        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)],
-                             ofItemAtPath: box.work.appending(path: "claude-code-sessions/\(Sandbox.accountB)/\(older)").path)
+        try fm.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-3600)],
+            ofItemAtPath: box.work.appending(path: "claude-code-sessions/\(Sandbox.accountB)/\(older)").path)
         #expect(DesktopData.organizationID(in: box.work, accountID: Sandbox.accountB) == newer)
     }
 
@@ -457,7 +474,8 @@ struct OrganizationTests {
         // No `lastSidebarScopeKey` recorded: Claude hasn't said which organization is current.
         let result = DesktopData.scope(dataDir: box.work, items: [:])
 
-        #expect(result == .ambiguous(reason: "several organizations: open the Code tab once"),
-                "today it silently returns the newest folder instead of asking for the Code tab to be opened once")
+        #expect(
+            result == .ambiguous(reason: "several organizations: open the Code tab once"),
+            "today it silently returns the newest folder instead of asking for the Code tab to be opened once")
     }
 }

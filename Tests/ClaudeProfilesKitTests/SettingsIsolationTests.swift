@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ClaudeProfilesKit
 
 @Suite("Portable settings and account isolation")
@@ -10,8 +11,10 @@ struct SettingsIsolationTests {
 
     func writeExtensionIndex(_ box: Sandbox, _ dir: URL, versions: [String: String]) throws {
         let records = versions.mapValues { version -> [String: Any] in
-            ["version": version, "hash": "package-" + version, "installedAt": "2026-09-27T12:00:00Z",
-             "manifest": [:], "signatureInfo": [:], "source": "fixture"]
+            [
+                "version": version, "hash": "package-" + version, "installedAt": "2026-09-27T12:00:00Z",
+                "manifest": [:], "signatureInfo": [:], "source": "fixture",
+            ]
         }.map { id, value -> (String, [String: Any]) in
             var record = value; record["id"] = id; return (id, record)
         }
@@ -172,12 +175,24 @@ struct SettingsIsolationTests {
         func writeSSH(_ dir: URL, _ object: [String: Any]) throws {
             try JSONSerialization.data(withJSONObject: object).write(to: dir.appending(path: filename))
         }
-        try writeSSH(box.main, ["configs": [["id": "shared", "name": "Shared", "sshHost": "main-host"],
-                                           ["id": "conflict", "name": "Main", "sshHost": "main-conflict"]],
-                               "trustedHosts": ["main-host", "main-conflict"]])
-        try writeSSH(box.work, ["configs": [["id": "private", "name": "Private", "sshHost": "private-host"],
-                                           ["id": "conflict", "name": "Own", "sshHost": "own-conflict"]],
-                               "trustedHosts": ["private-host"]])
+        try writeSSH(
+            box.main,
+            [
+                "configs": [
+                    ["id": "shared", "name": "Shared", "sshHost": "main-host"],
+                    ["id": "conflict", "name": "Main", "sshHost": "main-conflict"],
+                ],
+                "trustedHosts": ["main-host", "main-conflict"],
+            ])
+        try writeSSH(
+            box.work,
+            [
+                "configs": [
+                    ["id": "private", "name": "Private", "sshHost": "private-host"],
+                    ["id": "conflict", "name": "Own", "sshHost": "own-conflict"],
+                ],
+                "trustedHosts": ["private-host"],
+            ])
         let sync = SettingsSync(paths: box.paths)
         try sync.run(into: box.work)
         var result = try #require(SettingsSync.readJSON(box.work.appending(path: filename)))
@@ -185,8 +200,12 @@ struct SettingsIsolationTests {
         #expect(configs.map { $0["id"]! } == ["private", "conflict", "shared"])
         #expect(configs.first { $0["id"] == "conflict" }?["sshHost"] == "own-conflict")
         #expect(result["trustedHosts"] as? [String] == ["private-host"])
-        try writeSSH(box.main, ["configs": [["id": "shared", "name": "Shared", "sshHost": "updated-host"]],
-                               "trustedHosts": ["updated-host"]])
+        try writeSSH(
+            box.main,
+            [
+                "configs": [["id": "shared", "name": "Shared", "sshHost": "updated-host"]],
+                "trustedHosts": ["updated-host"],
+            ])
         try sync.run(into: box.work)
         result = try #require(SettingsSync.readJSON(box.work.appending(path: filename)))
         configs = try #require(result["configs"] as? [[String: String]])
@@ -197,8 +216,9 @@ struct SettingsIsolationTests {
         let fresh = box.root.appending(path: "fresh-profile")
         try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
         try sync.run(into: fresh)
-        #expect(SettingsSync.readJSON(fresh.appending(path: filename))?["trustedHosts"] == nil,
-                "new profiles must make their own trust decisions")
+        #expect(
+            SettingsSync.readJSON(fresh.appending(path: filename))?["trustedHosts"] == nil,
+            "new profiles must make their own trust decisions")
     }
 
     @Test func unknownSSHSchemaIsPreservedRatherThanGuessed() throws {
@@ -254,8 +274,10 @@ struct SettingsIsolationTests {
     @Test func portableChangesUseThreeWayMergeWithoutRecordingConfigurationSecrets() throws {
         let box = try Sandbox()
         let sync = SettingsSync(paths: box.paths)
-        let initial: [String: Any] = ["preferences": ["sidebarMode": "code"],
-                                     "mcpServers": ["local": ["command": "tool", "env": ["TOKEN": "fixture-sensitive-value"]]]]
+        let initial: [String: Any] = [
+            "preferences": ["sidebarMode": "code"],
+            "mcpServers": ["local": ["command": "tool", "env": ["TOKEN": "fixture-sensitive-value"]]],
+        ]
         try write(box, box.main, initial)
         try write(box, box.work, ["preferences": ["sidebarMode": "chat"]])
         try sync.run(into: box.work)
@@ -298,8 +320,10 @@ struct SettingsIsolationTests {
         let original = try Data(contentsOf: target)
         let holder = Process()
         holder.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
-        holder.arguments = ["-e", #"$|=1; open(my $fh, "+<", $ARGV[0]) or die $!; flock($fh, 2) or die $!; print "locked\n"; <STDIN>;"#,
-                            LocalStorage(dataDir: box.work).dbDir.appending(path: "LOCK").path]
+        holder.arguments = [
+            "-e", #"$|=1; open(my $fh, "+<", $ARGV[0]) or die $!; flock($fh, 2) or die $!; print "locked\n"; <STDIN>;"#,
+            LocalStorage(dataDir: box.work).dbDir.appending(path: "LOCK").path,
+        ]
         let stdout = Pipe(), stdin = Pipe()
         holder.standardOutput = stdout
         holder.standardInput = stdin
