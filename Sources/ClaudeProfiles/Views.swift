@@ -265,7 +265,7 @@ struct ContentView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Subscriptions").font(.title2.weight(.semibold))
-                Text("When one subscription reaches its limit, continue any local Code session, Project branch or Cowork task in another.")
+                Text("When one subscription reaches its limit, continue any local Code session or Cowork task in another.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
