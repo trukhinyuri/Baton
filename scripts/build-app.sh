@@ -15,6 +15,8 @@ if ! printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|
     exit 1
 fi
 APP="build/Claude Profiles.app"
+COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo dev)"
+if [ "$COMMIT" != dev ] && ! git diff --quiet HEAD -- 2>/dev/null; then COMMIT="$COMMIT+dirty"; fi
 BUILD_DIR="${CLAUDE_PROFILES_BUILD_DIR:-.build}"
 
 swift build --scratch-path "$BUILD_DIR" -c release --product ClaudeProfiles
@@ -40,6 +42,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>ClaudeProfilesCommit</key><string>${COMMIT}</string>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>

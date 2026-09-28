@@ -30,6 +30,7 @@ USAGE
   claude-profiles rule <folder> --only <email>[,<email>…] | --remove
                                                  Let only these accounts continue work in the folder and
                                                  inside it, or drop the folder's rule
+  claude-profiles --version                     Print the version and commit
 """
 
 func fail(_ message: String) -> Never {
@@ -271,6 +272,8 @@ do {
         } else {
             try IconRenderer.icnsData(for: IconRenderer.appIcon()).write(to: url)
         }
+    case "--version", "version":
+        print(BuildInfo.current.description)
     case "help", "-h", "--help":
         print(usage)
     default:
