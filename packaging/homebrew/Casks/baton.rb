@@ -21,9 +21,11 @@ cask "baton" do
 
   uninstall quit: "io.github.trukhinyuri.claudeprofiles"
 
-  # Only the app's own preferences, caches and old app copies. Profiles/ (every window's sign-in), Backups/,
-  # the launchers in ~/Applications/Claude Profiles, ~/.claude and Claude's own data are never removed.
+  # Only the app's own preferences, caches and old app copies, in Baton's folder and in the Claude Profiles one of its
+  # name before 1.0 (the bundle id kept that name). Profiles/ (every window's sign-in), Backups/, the launchers in
+  # ~/Applications/Baton or ~/Applications/Claude Profiles, ~/.claude and Claude's own data are never removed.
   zap trash: [
+    "~/Library/Application Support/Baton/AppBackups",
     "~/Library/Application Support/Claude Profiles/AppBackups",
     "~/Library/Caches/io.github.trukhinyuri.claudeprofiles",
     "~/Library/Preferences/io.github.trukhinyuri.claudeprofiles.plist",

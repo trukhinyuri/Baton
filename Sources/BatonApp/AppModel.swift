@@ -49,6 +49,9 @@ final class AppModel: ObservableObject {
 
     init() {
         if !isDemo { Self.handOverToRunningCopy() }
+        // Before any path is resolved, timer runs, launcher is rebuilt or session is shared: the manager's paths are
+        // whichever folders exist once this is done. Skipped while Baton runs from inside the old launchers folder.
+        let migration = isDemo ? nil : LegacyMigration.run(home: FileManager.default.homeDirectoryForCurrentUser, app: Bundle.main.bundleURL)
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/baton")
         manager = ProfileManager(cliPath: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil)
         reload()
@@ -67,7 +70,12 @@ final class AppModel: ObservableObject {
         }
         // Re-registers the main Claude after an abandoned sign-in and notes a Claude Desktop version
         // outside the tested range: information for the footer, never a blocking alert.
-        let startUp = manager.startUpChecks()
+        var startUp = manager.startUpChecks()
+        switch migration {
+        case .migrated(let moved)?: show(notice: LegacyMigration.message(for: .migrated(moved), home: manager.paths.home))
+        case .failed(let message)?: startUp.append(message)
+        default: break  // kept or both exist: the status panel and `baton doctor` say why
+        }
         if !startUp.isEmpty { setupWarning = startUp.joined(separator: " ") }
         cloudMoveLockOn = manager.cloudMoveLock.status() == .on
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -118,7 +126,8 @@ final class AppModel: ObservableObject {
             windowStatuses = await Task.detached {
                 WindowStatus.collect(
                     manager: manager, diagnostics: (try? Diagnostics.inspect(paths: manager.paths)) ?? [],
-                    localOnly: localOnly, pending: pending)
+                    localOnly: localOnly, pending: pending,
+                    folderNotes: LegacyMigration.notes(paths: manager.paths, app: Bundle.main.bundleURL))
             }.value
         }
     }

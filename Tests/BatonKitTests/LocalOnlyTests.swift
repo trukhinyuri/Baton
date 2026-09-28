@@ -203,7 +203,7 @@ struct LocalOnlyTests {
         let own = [box.paths.localOnlyFile, box.paths.stateDir.appending(path: "local-only.lock")]
         let expected = Set([String(config)] + own.map { String($0.path.dropFirst(box.root.path.count + 1)) })
         #expect(
-            changed.subtracting(expected).allSatisfy { $0.hasPrefix("Library/Application Support/Claude Profiles/Backups/") },
+            changed.subtracting(expected).allSatisfy { $0.hasPrefix("Library/Application Support/Baton/Backups/") },
             "only the window's config, Local only's own record and backups change: \(changed.sorted())")
         #expect(box.read(transcript)?.contains("history-suppression") == true)
         let prefs = try preferences(box.desktopConfig(box.work))
