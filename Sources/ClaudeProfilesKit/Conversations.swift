@@ -130,6 +130,21 @@ public enum ConversationIndex {
         return current.filter { ids.contains($0.id) || ($0.kind == .projectBranch && $0.ownerID.map(owners.contains) == true) }
     }
 
+    /// How many conversations “Continue All” opens at once unless asked for more. Each one becomes a session in the
+    /// destination window, so a busy folder moved whole would spend that subscription in minutes.
+    public static let continueAllLimit = 6
+
+    /// What “Continue All” moves from `folder` to `destination`: the `limit` most recent of `recent(in:…)`, leaving out
+    /// branches that already belong to the destination, and how many more were left out.
+    public static func continueAllBatch(in folder: String, since: Date, from conversations: [Conversation], to destination: String,
+                                        folderOnly: Bool = false, limit: Int = continueAllLimit) -> (batch: [Conversation], leftOut: Int) {
+        let matching = recent(in: folder, since: since, from: conversations, folderOnly: folderOnly)
+            .filter { !($0.kind == .projectBranch && $0.ownerID == destination) }
+            .sorted { $0.lastActivity > $1.lastActivity }
+        let batch = Array(matching.prefix(max(limit, 0)))
+        return (batch, matching.count - batch.count)
+    }
+
     /// An absolute path with `~`, `.`, `..` and symbolic links resolved, without a trailing slash.
     static func canonical(_ path: String) -> String {
         let expanded = (path as NSString).expandingTildeInPath

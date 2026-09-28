@@ -185,6 +185,27 @@ struct FolderBatchTests {
         #expect(found.map(\.sessionID) == ["root", "sub", "viaLink"])
     }
 
+    @Test func continueAllTakesTheMostRecentAndCountsTheRest() {
+        let now = Date()
+        let none = URL(fileURLWithPath: "/nonexistent.jsonl")
+        func make(_ id: String, _ kind: Conversation.Kind, _ ago: TimeInterval, owner: String = "main") -> Conversation {
+            Conversation(kind: kind, sessionID: id, title: id, folders: ["/repo"], lastActivity: now.addingTimeInterval(-ago),
+                         transcript: none, ownerID: owner)
+        }
+        let all = [
+            make("c", .code, 300), make("a", .code, 60), make("mine", .projectBranch, 30, owner: "team"),
+            make("b", .projectBranch, 120), make("d", .code, 400), make("old", .code, 2 * 86_400),
+        ]
+        let since = now.addingTimeInterval(-86_400)
+
+        let (batch, leftOut) = ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team",
+                                                                  folderOnly: true, limit: 2)
+
+        #expect(batch.map(\.sessionID) == ["a", "b"])
+        #expect(leftOut == 2)
+        #expect(ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team", folderOnly: true).leftOut == 0)
+    }
+
     @Test func bringsTheOtherBranchesOfTheSameProject() {
         let now = Date()
         let none = URL(fileURLWithPath: "/nonexistent.jsonl")

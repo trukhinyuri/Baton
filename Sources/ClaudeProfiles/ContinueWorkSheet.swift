@@ -68,13 +68,15 @@ struct ContinueWorkSheet: View {
 
     private var folder: String? { selected?.kind == .cowork ? nil : selected?.folders.first }
 
-    /// Code sessions and Project branches in the selected session's folder from the last day, with the other
-    /// branches of their Projects.
-    private var folderBatch: [Conversation] {
-        guard let folder else { return [] }
-        return ConversationIndex.recent(in: folder, since: Date().addingTimeInterval(-Self.folderWindow), from: model.conversations)
-            .filter { !($0.kind == .projectBranch && $0.ownerID == form.destination) }
+    /// The most recent Code sessions and Project branches in the selected session's folder from the last day, with
+    /// the other branches of their Projects, and how many more there are.
+    private var folderSelection: (batch: [Conversation], leftOut: Int) {
+        guard let folder else { return ([], 0) }
+        return ConversationIndex.continueAllBatch(in: folder, since: Date().addingTimeInterval(-Self.folderWindow),
+                                                  from: model.conversations, to: form.destination)
     }
+
+    private var folderBatch: [Conversation] { folderSelection.batch }
 
     /// Whether the chosen window may take the whole batch and the new session under the folder rules.
     private var batchAllowed: Bool {
@@ -163,7 +165,8 @@ struct ContinueWorkSheet: View {
                 HStack(spacing: 8) {
                     Image(systemName: "folder").foregroundStyle(.secondary)
                     Text("\(folderBatch.count - elsewhere) in \((folder as NSString).lastPathComponent)"
-                         + (elsewhere > 0 ? " + \(elsewhere) of their Project in other folders" : "") + " from the last day")
+                         + (elsewhere > 0 ? " + \(elsewhere) of their Project in other folders" : "") + " from the last day"
+                         + (folderSelection.leftOut > 0 ? ", the most recent; \(folderSelection.leftOut) older left" : ""))
                         .lineLimit(1).truncationMode(.middle)
                         .help(folderBatch.map { $0.title + ($0.works(in: folder) ? "" : " — " + (($0.folders.first ?? "") as NSString).abbreviatingWithTildeInPath) }
                             .joined(separator: "\n"))
@@ -175,7 +178,7 @@ struct ContinueWorkSheet: View {
                               ? "A folder rule doesn't let Claude \(destinationLabel) take all of them."
                               : batchNeedsStop
                               ? "Some of them may still be written to in their window. Choose Automatic or As a copy, or close them there first."
-                              : "Opens every Code session and Project branch of this folder with a message in the last day, and the other branches of their Projects, in one go.")
+                              : "Opens the \(ConversationIndex.continueAllLimit) most recent Code sessions and Project branches of this folder with a message in the last day, with the other branches of their Projects, in one go. Continue older ones one at a time.")
                 }
                 .font(.callout)
             }
