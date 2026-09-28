@@ -1,4 +1,3 @@
-import AppKit
 import ClaudeProfilesKit
 import SwiftUI
 
@@ -13,7 +12,6 @@ final class ContinueWorkForm: ObservableObject {
     @Published var stopped: String?
     @Published var alsoNewSession = true
     @Published var problem: String?
-    @Published var copied = false
     @Published var plan: ContinuePlan?
 }
 
@@ -44,8 +42,7 @@ struct ContinueWorkSheet: View {
     /// Signed-in windows the selected conversation can move to, within its folder rule.
     private var destinations: [ProfileStatus] {
         model.statuses.filter {
-            $0.isSignedIn && (selected?.kind == .code || $0.id != selected?.ownerID)
-                && DestinationRanking.isAllowed($0, accounts: allowed?.accounts)
+            $0.isSignedIn && $0.id != selected?.ownerID && DestinationRanking.isAllowed($0, accounts: allowed?.accounts)
         }
     }
 
@@ -68,8 +65,7 @@ struct ContinueWorkSheet: View {
 
     private var folder: String? { selected?.kind == .cowork ? nil : selected?.folders.first }
 
-    /// The most recent Code sessions and Project branches in the selected session's folder from the last day, with
-    /// the other branches of their Projects, and how many more there are.
+    /// The most recent Code sessions in the selected session's folder from the last day, and how many more there are.
     private var folderSelection: (batch: [Conversation], leftOut: Int) {
         guard let folder else { return ([], 0) }
         return ConversationIndex.continueAllBatch(in: folder, since: Date().addingTimeInterval(-Self.folderWindow),
@@ -128,7 +124,7 @@ struct ContinueWorkSheet: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .frame(width: 280)
-                    .help("Automatic continues Project branches, sessions still open in a running Claude Code process and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session.")
+                    .help("Automatic continues sessions still open in a running Claude Code process and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session.")
                 }
             }
 
@@ -161,15 +157,12 @@ struct ContinueWorkSheet: View {
             if let problem = form.problem { Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
 
             if let folder, !folderBatch.isEmpty {
-                let elsewhere = folderBatch.filter { !$0.works(in: folder) }.count
                 HStack(spacing: 8) {
                     Image(systemName: "folder").foregroundStyle(.secondary)
-                    Text("\(folderBatch.count - elsewhere) in \((folder as NSString).lastPathComponent)"
-                         + (elsewhere > 0 ? " + \(elsewhere) of their Project in other folders" : "") + " from the last day"
+                    Text("\(folderBatch.count) in \((folder as NSString).lastPathComponent) from the last day"
                          + (folderSelection.leftOut > 0 ? ", the most recent; \(folderSelection.leftOut) older left" : ""))
                         .lineLimit(1).truncationMode(.middle)
-                        .help(folderBatch.map { $0.title + ($0.works(in: folder) ? "" : " — " + (($0.folders.first ?? "") as NSString).abbreviatingWithTildeInPath) }
-                            .joined(separator: "\n"))
+                        .help(folderBatch.map(\.title).joined(separator: "\n"))
                     Toggle("Also start a new session there", isOn: $form.alsoNewSession).toggleStyle(.checkbox)
                     Spacer()
                     Button("Continue All in \(destinationLabel.isEmpty ? "…" : destinationLabel)") { goAll() }
@@ -178,16 +171,13 @@ struct ContinueWorkSheet: View {
                               ? "A folder rule doesn't let Claude \(destinationLabel) take all of them."
                               : batchNeedsStop
                               ? "Some of them may still be written to in their window. Choose Automatic or As a copy, or close them there first."
-                              : "Opens the \(ConversationIndex.continueAllLimit) most recent Code sessions and Project branches of this folder with a message in the last day, with the other branches of their Projects, in one go. Continue older ones one at a time.")
+                              : "Opens the \(ConversationIndex.continueAllLimit) most recent Code sessions of this folder with a message in the last day, in one go. Continue older ones one at a time.")
                 }
                 .font(.callout)
             }
 
             Divider()
             HStack(spacing: 8) {
-                Button(form.copied ? "Request copied" : "Copy handoff request") { copyRequest() }
-                    .help("For a claude.ai chat or a cloud Project, which are not on this Mac: paste the request in that chat, then paste its answer into a new chat in the other subscription.")
-                Text("for claude.ai chats").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(primaryTitle) { go() }
@@ -261,19 +251,9 @@ struct ContinueWorkSheet: View {
             return "Opens this same session in \(to). Its history is shared by all your subscriptions, so nothing is copied."
         case (.code, true):
             return "Opens a copy of this session with its whole history in \(to). The original stays as it is, so its window can keep working on it.\(why)"
-        case (.projectBranch, false):
-            return "Opens this branch's history as a regular Code session in \(to). The Project stays with \(from); stop the branch there first, because its coordinator may write to it again."
-        case (.projectBranch, true):
-            return "Opens a copy of this branch's history as a regular Code session in \(to). The Project, its coordinator and this branch stay with \(from) and can keep working."
         case (.cowork, _):
             return "Starts a new Cowork task in \(to) with this task's history and files attached, for you to review and send. The original task, its connectors and schedules stay with \(from)."
         }
-    }
-
-    private func copyRequest() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(Handoff.request, forType: .string)
-        form.copied = true
     }
 
     private func go() {
@@ -351,7 +331,6 @@ struct ConversationRow: View {
     private var icon: String {
         switch conversation.kind {
         case .code: "chevron.left.forwardslash.chevron.right"
-        case .projectBranch: "arrow.triangle.branch"
         case .cowork: "sparkles"
         }
     }
@@ -360,7 +339,6 @@ struct ConversationRow: View {
         var parts: [String]
         switch conversation.kind {
         case .code: parts = ["Code"]
-        case .projectBranch: parts = ["Project branch · \(owner ?? "")"]
         case .cowork: parts = ["Cowork · \(owner ?? "")"]
         }
         if let folder = conversation.folders.first {
@@ -399,9 +377,7 @@ struct DiagnosticsSheet: View {
                     ForEach(entries) { entry in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(entry.label).font(.headline)
-                            Text("\(entry.localCode) local Code · \(entry.localCowork) Cowork cards · \(entry.accountBoundWorkers) account-linked workers")
-                            Text("Remote Control: \(entry.remoteControlEnabled.map { $0 ? "enabled" : "disabled" } ?? "not recorded") · \(entry.listedRemoteFolders) listed folders")
-                                .foregroundStyle(.secondary)
+                            Text("\(entry.localCode) local Code · \(entry.localCowork) Cowork cards")
                             ForEach(entry.issues, id: \.self) { Text($0).foregroundStyle(.orange) }
                             ForEach(entry.missingFolders, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
                         }

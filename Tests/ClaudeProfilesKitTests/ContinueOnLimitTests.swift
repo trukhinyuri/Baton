@@ -35,8 +35,8 @@ struct TranscriptForkTests {
         let env = box.paths.claudeDir.appending(path: "session-env/\(old)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: env, withIntermediateDirectories: true)
         let before = try Data(contentsOf: transcript)
-        let conversation = Conversation(kind: .projectBranch, sessionID: old, title: "t", folders: ["/repo"],
-                                        lastActivity: Date(), transcript: transcript, ownerID: "main")
+        let conversation = Conversation(kind: .code, sessionID: old, title: "t", folders: ["/repo"],
+                                        lastActivity: Date(), transcript: transcript)
 
         let new = try TranscriptFork.fork(conversation)
 
@@ -118,18 +118,16 @@ struct ContinueModeTests {
     func conversation(_ kind: Conversation.Kind, lastMessage: Date, in box: Sandbox) throws -> Conversation {
         let transcript = try box.transcript(lines: [record(Sandbox.cli, at: lastMessage)])
         return Conversation(kind: kind, sessionID: Sandbox.cli, title: "t", folders: ["/repo"], lastActivity: lastMessage,
-                            transcript: transcript, ownerID: kind == .code ? nil : "main")
+                            transcript: transcript, ownerID: kind == .cowork ? "main" : nil)
     }
 
-    @Test func automaticCopiesBranchesAndRecentlyActiveSessions() throws {
+    @Test func automaticCopiesRecentlyActiveSessions() throws {
         let box = try Sandbox()
         let now = Date()
         let quiet = try conversation(.code, lastMessage: now.addingTimeInterval(-20 * 60), in: box)
         #expect(!ContinueMode.auto.forks(quiet, now: now), "quiet for 20 minutes: the same session")
         let busy = try conversation(.code, lastMessage: now.addingTimeInterval(-5 * 60), in: box)
         #expect(ContinueMode.auto.forks(busy, now: now), "a message 5 minutes ago: it may still be running")
-        let branch = try conversation(.projectBranch, lastMessage: now.addingTimeInterval(-3 * 3600), in: box)
-        #expect(ContinueMode.auto.forks(branch, now: now), "its Project's coordinator may write to it again")
     }
 
     @Test func aSessionOpenInARunningProcessIsCopiedHoweverQuiet() throws {
@@ -164,7 +162,7 @@ struct ContinueModeTests {
     @Test func explicitChoiceWinsAndCoworkIsNeverForked() throws {
         let box = try Sandbox()
         let now = Date()
-        let busy = try conversation(.projectBranch, lastMessage: now, in: box)
+        let busy = try conversation(.code, lastMessage: now, in: box)
         #expect(!ContinueMode.same.forks(busy, now: now))
         let quiet = try conversation(.code, lastMessage: now.addingTimeInterval(-86_400), in: box)
         #expect(ContinueMode.fork.forks(quiet, now: now))
@@ -189,7 +187,7 @@ struct FolderBatchTests {
         }
         let all = [
             make("root", .code, repo.path, 60),
-            make("sub", .projectBranch, repo.path + "/sub", 120),
+            make("sub", .code, repo.path + "/sub", 120),
             make("viaLink", .code, link.path + "/", 180),
             make("sibling", .code, box.root.path + "/work/repo2", 60),
             make("old", .code, repo.path, 2 * 86_400),
@@ -204,59 +202,17 @@ struct FolderBatchTests {
     @Test func continueAllTakesTheMostRecentAndCountsTheRest() {
         let now = Date()
         let none = URL(fileURLWithPath: "/nonexistent.jsonl")
-        func make(_ id: String, _ kind: Conversation.Kind, _ ago: TimeInterval, owner: String = "main") -> Conversation {
-            Conversation(kind: kind, sessionID: id, title: id, folders: ["/repo"], lastActivity: now.addingTimeInterval(-ago),
-                         transcript: none, ownerID: owner)
+        func make(_ id: String, _ ago: TimeInterval) -> Conversation {
+            Conversation(kind: .code, sessionID: id, title: id, folders: ["/repo"], lastActivity: now.addingTimeInterval(-ago), transcript: none)
         }
-        let all = [
-            make("c", .code, 300), make("a", .code, 60), make("mine", .projectBranch, 30, owner: "team"),
-            make("b", .projectBranch, 120), make("d", .code, 400), make("old", .code, 2 * 86_400),
-        ]
+        let all = [make("c", 300), make("a", 60), make("b", 120), make("d", 400), make("old", 2 * 86_400)]
         let since = now.addingTimeInterval(-86_400)
 
-        let (batch, leftOut) = ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team",
-                                                                  folderOnly: true, limit: 2)
+        let (batch, leftOut) = ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team", limit: 2)
 
         #expect(batch.map(\.sessionID) == ["a", "b"])
         #expect(leftOut == 2)
-        #expect(ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team", folderOnly: true).leftOut == 0)
-    }
-
-    @Test func bringsTheOtherBranchesOfTheSameProject() {
-        let now = Date()
-        let none = URL(fileURLWithPath: "/nonexistent.jsonl")
-        func make(_ id: String, _ kind: Conversation.Kind, _ folder: String, owner: String?, _ ago: TimeInterval = 60) -> Conversation {
-            Conversation(kind: kind, sessionID: id, title: id, folders: [folder], lastActivity: now.addingTimeInterval(-ago),
-                         transcript: none, ownerID: owner)
-        }
-        let all = [
-            make("branch", .projectBranch, "/work/assistant", owner: "robin"),
-            make("session", .code, "/work/assistant", owner: nil),
-            make("sibling", .projectBranch, "/work/tools", owner: "robin"),
-            make("otherWindow", .projectBranch, "/work/tools", owner: "vir"),
-            make("oldSibling", .projectBranch, "/work/tools", owner: "robin", 3 * 86_400),
-            make("plain", .code, "/work/tools", owner: nil),
-        ]
-        let since = now.addingTimeInterval(-86_400)
-
-        #expect(ConversationIndex.recent(in: "/work/assistant", since: since, from: all).map(\.sessionID) == ["branch", "session", "sibling"])
-        #expect(ConversationIndex.recent(in: "/work/assistant", since: since, from: all, folderOnly: true).map(\.sessionID) == ["branch", "session"])
-        #expect(ConversationIndex.recent(in: "/work/tools", since: since, from: all).map(\.sessionID) == ["branch", "sibling", "otherWindow", "plain"],
-                "a Project branch in the folder brings its Project's others, wherever they work")
-    }
-
-    @Test func scanKeepsTheModelAndEffortOfTheOwnersCard() throws {
-        let box = try Sandbox()
-        let a = try box.pair(box.main, account: Sandbox.accountA)
-        try box.transcript()
-        let branch = #"{"cliSessionId":"\#(Sandbox.cli)","projectThreadChild":true,"cwd":"/repo","model":"claude-opus-5-5[1m]","effort":"xhigh"}"#
-        try box.write(branch, to: a.appending(path: "local_branch.json"))
-
-        let found = ConversationIndex.scan(paths: box.paths, windows: [("main", box.main)])
-
-        #expect(found.count == 1)
-        #expect(found[0].model == "claude-opus-5-5[1m]" && found[0].effort == "xhigh")
-        #expect(found[0].card?.lastPathComponent == "local_branch.json")
+        #expect(ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team").leftOut == 0)
     }
 
     @Test func newSessionLinkNamesTheFolder() throws {
@@ -323,7 +279,7 @@ struct ModelCarryTests {
 
 @Suite("Preparing the destination")
 struct ContinuePlanTests {
-    /// MAIN owns a Project branch on the long-context model; WORK is signed in as `workEmail` and closed.
+    /// MAIN has an ordinary Code session on the long-context model; WORK is signed in as `workEmail` and closed.
     func setUp(workHasRunLongContext: Bool = true, workEmail: String = "me@team.example") throws -> (Sandbox, ProfileManager, Conversation, URL) {
         let box = try Sandbox()
         try ProfileRegistry(paths: box.paths).save([Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")])
@@ -335,8 +291,8 @@ struct ContinuePlanTests {
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let b = try box.pair(box.work, account: Sandbox.accountB, org: "cccccccc-cccc-cccc-cccc-cccccccccccc")
         try box.transcript(lines: [record(Sandbox.cli, at: Date().addingTimeInterval(-3600), model: "claude-opus-5-5")])
-        let card = #"{"sessionId":"local_branch","cliSessionId":"\#(Sandbox.cli)","projectThreadChild":true,"cwd":"/repo","originCwd":"/repo","title":"Duties","model":"claude-opus-5-5[1m]","effort":"xhigh","permissionMode":"bypassPermissions","remoteControlSpawn":{"folder":"/repo"}}"#
-        try box.write(card, to: a.appending(path: "local_branch.json"))
+        let card = #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo","originCwd":"/repo","title":"Duties","model":"claude-opus-5-5[1m]","effort":"xhigh","permissionMode":"bypassPermissions"}"#
+        try box.write(card, to: a.appending(path: "local_1.json"))
         if workHasRunLongContext {
             try box.write(#"{"cliSessionId":"z","rcChild":true,"model":"claude-opus-5-5[1m]"}"#, to: b.appending(path: "local_rc.json"))
         }
@@ -345,11 +301,11 @@ struct ContinuePlanTests {
         return (box, manager, conversation, b)
     }
 
-    @Test func branchContinuesAsACopyThatClaudeImportsItself() throws {
+    @Test func continuingForksACopyThatClaudeImportsItself() throws {
         let (box, manager, conversation, b) = try setUp()
-        #expect(conversation.kind == .projectBranch)
+        #expect(conversation.kind == .code)
 
-        var plan = try #require(try manager.plan([conversation], in: "work").first)
+        var plan = try #require(try manager.plan([conversation], in: "work", mode: .fork).first)
         #expect(plan.forks && plan.opened == nil)
         #expect(plan.model == ModelNote(model: "claude-opus-5-5[1m]", kind: .chooseBeforeSending),
                 "Claude takes the model from the history, which doesn't say long context")
@@ -364,20 +320,25 @@ struct ContinuePlanTests {
 
     @Test func copyTitleNamesSourceWindow() throws {
         let (_, manager, conversation, _) = try setUp()
-        #expect(conversation.kind == .projectBranch && conversation.ownerID == "main")
+        #expect(conversation.kind == .code && conversation.ownerID == nil)
 
-        var plan = try #require(try manager.plan([conversation], in: "work").first)
-        try manager.prepare(&plan)
+        var plain = try #require(try manager.plan([conversation], in: "work", mode: .fork).first)
+        try manager.prepare(&plain)
+        #expect(plain.conversation.title == "Duties · copy", "a plain copy suffix when the source window isn't known")
 
-        #expect(plan.conversation.title == "Duties · from MAIN")
+        var owned = conversation
+        owned.ownerID = "main"
+        var withOwner = try #require(try manager.plan([owned], in: "work", mode: .fork).first)
+        try manager.prepare(&withOwner)
+        #expect(withOwner.conversation.title == "Duties · from MAIN", "the source window's label when it is known")
     }
 
     @Test func continueAllTwiceMakesNoSecondCopy() throws {
         let (box, manager, conversation, _) = try setUp()
-        var first = try #require(try manager.plan([conversation], in: "work").first)
+        var first = try #require(try manager.plan([conversation], in: "work", mode: .fork).first)
         try manager.prepare(&first)
 
-        var second = try #require(try manager.plan([conversation], in: "work").first)
+        var second = try #require(try manager.plan([conversation], in: "work", mode: .fork).first)
         try manager.prepare(&second)
 
         #expect(second.sessionID == first.sessionID, "the same copy is reused, not a second one")
@@ -409,10 +370,7 @@ struct ContinuePlanTests {
 
     @Test func aRegularSessionKeepsItsSharedCardInAClosedWindow() throws {
         let (_, manager, conversation, _) = try setUp(workHasRunLongContext: false)
-        var code = conversation
-        code.kind = .code
-        code.ownerID = nil
-        let plan = try #require(try manager.plan([code], in: "work").first)
+        let plan = try #require(try manager.plan([conversation], in: "work").first)
         #expect(!plan.forks && plan.model?.kind == .unverified)
     }
 
@@ -468,9 +426,8 @@ struct ContinuePlanTests {
         #expect(throws: ProfileError.self) { try manager.plan([conversation], in: "work") }
     }
 
-    @Test func refusesCoworkAndTheOwnersOwnWindow() throws {
+    @Test func refusesCowork() throws {
         let (_, manager, conversation, _) = try setUp()
-        #expect(throws: ProfileError.sameWindow("MAIN")) { try manager.plan([conversation], in: "main") }
         var cowork = conversation
         cowork.kind = .cowork
         #expect(throws: ProfileError.coworkNeedsItsOwnHandoff(conversation.title)) { try manager.plan([cowork], in: "work") }

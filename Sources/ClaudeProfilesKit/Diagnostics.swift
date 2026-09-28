@@ -13,8 +13,6 @@ public enum Diagnostics {
         public var accountBoundWorkers = 0
         public var ambiguousWorkers = 0
         public var missingFolders: [String] = []
-        public var remoteControlEnabled: Bool?
-        public var listedRemoteFolders = 0
         public var issues: [String] = []
     }
 
@@ -84,15 +82,6 @@ public enum Diagnostics {
             }
             entry.missingFolders = missing.sorted()
             if !missing.isEmpty { entry.issues.append("\(missing.count) working folders are missing. Use Choose folder in Claude before continuing those sessions.") }
-            let settings = directory.appending(path: "claude_desktop_config.json")
-            if fm.fileExists(atPath: settings.path) {
-                do {
-                    let object = try JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any]
-                    let prefs = object?["preferences"] as? [String: Any]
-                    entry.remoteControlEnabled = prefs?["ccRemoteControlDefaultEnabled"] as? Bool
-                    entry.listedRemoteFolders = (prefs?["remoteControlPinnedFolders"] as? [Any])?.count ?? 0
-                } catch { entry.issues.append("Desktop settings could not be read; they were left unchanged.") }
-            }
             return entry
         }
         // A native marker in any copy applies to the whole ID, including older copies without that marker.

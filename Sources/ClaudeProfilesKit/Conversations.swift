@@ -5,9 +5,6 @@ public struct Conversation: Identifiable, Equatable, Sendable {
     public enum Kind: String, Sendable {
         /// A Claude Code session. Every profile shares its history, so the same session opens in another window.
         case code
-        /// A local branch of a Claude Code Project. The Project stays with its account; the branch's history
-        /// opens as a regular Code session in another window.
-        case projectBranch
         /// A Cowork task. Its history stays with its account, so it continues as a new task that gets the
         /// history and the task's files attached.
         case cowork
@@ -22,12 +19,12 @@ public struct Conversation: Identifiable, Equatable, Sendable {
     /// When the conversation last had a message.
     public var lastActivity: Date
     public var transcript: URL
-    /// `"main"` or the profile id whose account owns a Project branch or Cowork task; `nil` for Code sessions,
-    /// which every window shares.
+    /// `"main"` or the profile id whose account owns a Cowork task; `nil` for Code sessions, which every window
+    /// shares.
     public var ownerID: String?
     /// A Cowork task's own folder, with the files it was given (`uploads`) and made (`outputs`).
     public var taskFolder: URL?
-    /// The session card the conversation was found by: for a Project branch, the one in its owner's window.
+    /// The session card the conversation was found by.
     public var card: URL?
     /// The model and effort the conversation last ran with, from its card. Claude Desktop keeps a long-context
     /// choice such as `claude-opus-5-5[1m]` only there, not in the transcript.
@@ -81,19 +78,20 @@ public enum ConversationIndex {
         for (id, dataDir) in windows {
             for pair in (try? SessionSync.sessionPairs(dataDirs: [dataDir], folder: SessionSync.sessionsFolder)) ?? [] {
                 for name in (try? fm.contentsOfDirectory(atPath: pair.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
-                    // Shared copies of a card are the same everywhere; Project branches exist only with their account.
+                    // Shared copies of a card are the same everywhere; account-bound cards (native Project or
+                    // Remote Control workers) exist only with their account and are never offered for continuing.
                     guard !readCards.contains(name), let card = readCard(pair.appending(path: name)) else { continue }
-                    let branch = SessionSync.isAccountBoundCard(card)
-                    if !branch { readCards.insert(name) }
+                    guard !SessionSync.isAccountBoundCard(card) else { continue }
+                    readCards.insert(name)
                     guard card["isArchived"] as? Bool != true,
                           let session = (card["cliSessionId"] as? String)?.lowercased(), let transcript = transcripts[session],
-                          found[session] == nil || (found[session]?.kind == .projectBranch && !branch) else { continue }
+                          found[session] == nil else { continue }
                     let folder = (card["originCwd"] as? String) ?? (card["cwd"] as? String)
                     found[session] = Conversation(
-                        kind: branch ? .projectBranch : .code, sessionID: session, title: title(of: card),
+                        kind: .code, sessionID: session, title: title(of: card),
                         folders: folder.map { $0.contains(SessionSync.scratchFolder) ? [] : [$0] } ?? [],
                         lastActivity: lastActivity(of: transcript) ?? .distantPast,
-                        transcript: transcript, ownerID: branch ? id : nil,
+                        transcript: transcript, ownerID: nil,
                         card: pair.appending(path: name), model: nonEmpty(card["model"]), effort: nonEmpty(card["effort"]))
                 }
             }
@@ -115,32 +113,21 @@ public enum ConversationIndex {
         return found.values.sorted { $0.lastActivity > $1.lastActivity }
     }
 
-    /// Code sessions and Project branches working in `folder` (or inside it) with a message since `since`, most
-    /// recent first. Cowork tasks are left out: they continue one at a time with their files attached.
-    ///
-    /// A Project's branches can work in other folders and stop with its account's limit all the same, so unless
-    /// `folderOnly` is set, the other branches of the windows whose Project branches work in `folder` come too.
-    public static func recent(in folder: String, since: Date, from conversations: [Conversation],
-                              folderOnly: Bool = false) -> [Conversation] {
-        let current = conversations.filter { $0.kind != .cowork && $0.lastActivity >= since }
-        let inFolder = current.filter { $0.works(in: folder) }
-        guard !folderOnly else { return inFolder }
-        let owners = Set(inFolder.filter { $0.kind == .projectBranch }.compactMap(\.ownerID))
-        let ids = Set(inFolder.map(\.id))
-        return current.filter { ids.contains($0.id) || ($0.kind == .projectBranch && $0.ownerID.map(owners.contains) == true) }
+    /// Code sessions working in `folder` (or inside it) with a message since `since`, most recent first. Cowork
+    /// tasks are left out: they continue one at a time with their files attached.
+    public static func recent(in folder: String, since: Date, from conversations: [Conversation]) -> [Conversation] {
+        conversations.filter { $0.kind != .cowork && $0.lastActivity >= since && $0.works(in: folder) }
     }
 
     /// How many conversations “Continue All” opens at once unless asked for more. Each one becomes a session in the
     /// destination window, so a busy folder moved whole would spend that subscription in minutes.
     public static let continueAllLimit = 6
 
-    /// What “Continue All” moves from `folder` to `destination`: the `limit` most recent of `recent(in:…)`, leaving out
-    /// branches that already belong to the destination, and how many more were left out.
+    /// What “Continue All” moves from `folder` to `destination`: the `limit` most recent of `recent(in:…)`, and how
+    /// many more were left out.
     public static func continueAllBatch(in folder: String, since: Date, from conversations: [Conversation], to destination: String,
-                                        folderOnly: Bool = false, limit: Int = continueAllLimit) -> (batch: [Conversation], leftOut: Int) {
-        let matching = recent(in: folder, since: since, from: conversations, folderOnly: folderOnly)
-            .filter { !($0.kind == .projectBranch && $0.ownerID == destination) }
-            .sorted { $0.lastActivity > $1.lastActivity }
+                                        limit: Int = continueAllLimit) -> (batch: [Conversation], leftOut: Int) {
+        let matching = recent(in: folder, since: since, from: conversations).sorted { $0.lastActivity > $1.lastActivity }
         let batch = Array(matching.prefix(max(limit, 0)))
         return (batch, matching.count - batch.count)
     }

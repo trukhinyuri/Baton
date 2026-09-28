@@ -15,16 +15,12 @@ struct DiagnosticsTests {
         try box.write(worker, to: a.appending(path: "local_worker.json"))
         try box.write(worker, to: b.appending(path: "local_worker.json"))
         try box.write(#"{"title":"portable"}"#, to: b.appending(path: "local_ordinary.json"))
-        try box.write(#"{"preferences":{"ccRemoteControlDefaultEnabled":true,"remoteControlPinnedFolders":["/folder"],"secret":"not-for-report"}}"#, to: box.work.appending(path: "claude_desktop_config.json"))
         let reports = try Diagnostics.inspect(paths: box.paths)
         #expect(reports.count == 2)
         #expect(reports[1].localCode == 1)
         #expect(reports[1].accountBoundWorkers == 1)
         #expect(reports[1].ambiguousWorkers == 1)
-        #expect(reports[1].remoteControlEnabled == true)
-        #expect(reports[1].listedRemoteFolders == 1)
         #expect(reports[1].missingFolders == ["/missing-folder-diagnostic"])
-        #expect(!String(decoding: try JSONEncoder().encode(reports), as: UTF8.self).contains("not-for-report"))
         #expect(box.read(b.appending(path: "local_worker.json")) == worker)
     }
 

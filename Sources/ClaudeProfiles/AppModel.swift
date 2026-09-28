@@ -240,8 +240,6 @@ enum DemoData {
                          lastActivity: now.addingTimeInterval(-240), transcript: none),
             Conversation(kind: .cowork, sessionID: "2", title: "Quarterly report draft", folders: ["/Users/alex/Documents/Reports"],
                          lastActivity: now.addingTimeInterval(-1_800), transcript: none, ownerID: "main"),
-            Conversation(kind: .projectBranch, sessionID: "3", title: "Fix flaky checkout tests", folders: ["/Users/alex/src/shop"],
-                         lastActivity: now.addingTimeInterval(-5_400), transcript: none, ownerID: "work"),
             Conversation(kind: .code, sessionID: "4", title: "Explain the retry logic", folders: [],
                          lastActivity: now.addingTimeInterval(-26_000), transcript: none),
             Conversation(kind: .cowork, sessionID: "5", title: "Compare three vendors", folders: [],

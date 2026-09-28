@@ -1,13 +1,13 @@
 import Foundation
 
-/// Whether continuing a Code session or Project branch elsewhere keeps working in the same session or in a copy.
+/// Whether continuing a Code session elsewhere keeps working in the same session or in a copy.
 public enum ContinueMode: String, Sendable, CaseIterable {
     /// The same session, so the original window must not write to it any more.
     case same
     /// A copy under a new id: the original can keep running, and nothing writes to one session from two windows.
     case fork
-    /// A copy for Project branches, which their Project's coordinator may write to again, and for sessions that
-    /// may still be written to (see `Conversation.mayStillWrite`); the same session otherwise.
+    /// A copy for sessions that may still be written to (see `Conversation.mayStillWrite`); the same session
+    /// otherwise.
     case auto
 
     /// A session with a message this recent may still be running in its window.
@@ -18,12 +18,12 @@ public enum ContinueMode: String, Sendable, CaseIterable {
         switch self {
         case .same: return false
         case .fork: return true
-        case .auto: return conversation.kind == .projectBranch || conversation.mayStillWrite(now: now)
+        case .auto: return conversation.mayStillWrite(now: now)
         }
     }
 }
 
-/// How one Code session or Project branch continues in another window.
+/// How one Code session continues in another window.
 public struct ContinuePlan: Equatable, Sendable {
     public var conversation: Conversation
     /// `"main"` or a profile id.

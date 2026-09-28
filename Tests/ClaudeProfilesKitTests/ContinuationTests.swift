@@ -73,17 +73,17 @@ struct ImportedCardTests {
         #expect(box.exists(a.appending(path: "deleted_local_\(Sandbox.cli)")))
     }
 
-    @Test func projectBranchIsNotDeletedWithItsContinuedCopy() throws {
+    @Test func accountBoundCardIsNotDeletedWithItsContinuedCopy() throws {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let b = try box.pair(box.work, account: Sandbox.accountB)
-        let branch = #"{"sessionId":"local_branch","cliSessionId":"\#(Sandbox.cli)","title":"Branch","projectThreadChild":true}"#
-        try box.write(branch, to: a.appending(path: "local_branch.json"))
+        let native = #"{"sessionId":"local_branch","cliSessionId":"\#(Sandbox.cli)","title":"Branch","projectThreadChild":true}"#
+        try box.write(native, to: a.appending(path: "local_branch.json"))
         try box.write("", to: b.appending(path: "deleted_local_\(Sandbox.cli)"))
 
         _ = try box.sync(propagateDeletions: true)
 
-        #expect(box.read(a.appending(path: "local_branch.json")) == branch)
+        #expect(box.read(a.appending(path: "local_branch.json")) == native)
     }
 
     @Test func unrelatedCardsAreUntouched() throws {
@@ -104,7 +104,7 @@ struct ImportedCardTests {
 
 @Suite("Finding conversations")
 struct ConversationIndexTests {
-    @Test func listsCodeSessionsBranchesAndCoworkTasksNewestFirst() throws {
+    @Test func listsCodeSessionsAndCoworkTasksNewestFirstSkippingAccountBoundCards() throws {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let b = try box.pair(box.work, account: Sandbox.accountB)
@@ -135,11 +135,10 @@ struct ConversationIndexTests {
 
         let found = ConversationIndex.scan(paths: box.paths, windows: [("main", box.main), ("work", box.work)])
 
-        #expect(found.map(\.sessionID) == [cowork, code, branch])
+        #expect(found.map(\.sessionID) == [cowork, code], "the account-bound branch card is never offered for continuing")
         #expect(found[0].kind == .cowork && found[0].ownerID == "work" && found[0].folders == ["/docs"])
         #expect(found[0].taskFolder?.lastPathComponent == "local_task")
         #expect(found[1].kind == .code && found[1].ownerID == nil && found[1].title == "Fix build" && found[1].folders == ["/repo"])
-        #expect(found[2].kind == .projectBranch && found[2].ownerID == "work")
     }
 
     @Test func sessionWithoutAFolderShowsNoFolder() throws {

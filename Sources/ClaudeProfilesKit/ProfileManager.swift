@@ -79,8 +79,7 @@ public struct ProfileStatus: Identifiable, Equatable, Sendable {
 public struct SyncReport: Equatable, Sendable {
     public var sessions: SessionSync.Report
     public var cowork: CoworkSync.Report
-    public var groups: GroupSync.Report
-    public var changes: Int { sessions.changes + cowork.changes + groups.windowsChanged.count }
+    public var changes: Int { sessions.changes + cowork.changes }
 }
 
 /// Creates, opens and removes profiles. Every operation is local to this Mac.
@@ -301,8 +300,6 @@ public final class ProfileManager: @unchecked Sendable {
                 catch { problems.append("Setup: \(error.localizedDescription)") }
                 do { _ = try InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id) }
                 catch { problems.append("Interface: \(error.localizedDescription)") }
-                do { _ = try shareGroups() }
-                catch { problems.append("Groups: \(error.localizedDescription)") }
                 if !problems.isEmpty {
                     openWarning = "Claude \(profile.label) opened, but some shared settings could not be refreshed. " + problems.joined(separator: " ")
                 }
@@ -367,8 +364,6 @@ public final class ProfileManager: @unchecked Sendable {
                 var problems: [String] = []
                 do { _ = try prepareSessionsForLaunch() }
                 catch { problems.append("sessions could not be shared first: \(error.localizedDescription)") }
-                do { _ = try shareGroups() }
-                catch { problems.append("sidebar groups could not be shared first: \(error.localizedDescription)") }
                 if !problems.isEmpty { lock.withLock { openWarning = "Claude opened, but " + problems.joined(separator: "; ") } }
             }
         } catch {
@@ -398,8 +393,8 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     /// Continues `conversation` in `destination` (`"main"` or a profile id), opening that window if needed.
-    /// Code sessions and Project branches open there as the same session or as a copy (see `ContinueMode`);
-    /// Cowork tasks become a new task there.
+    /// Code sessions open there as the same session or as a copy (see `ContinueMode`); Cowork tasks become a
+    /// new task there.
     public func continueConversation(_ conversation: Conversation, in destination: String,
                                      mode: ContinueMode = .auto) async throws -> ContinueResult {
         guard conversation.kind == .cowork else {
@@ -417,7 +412,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// - Parameter folder: a folder a new session will start in as well, which its folder rule covers too.
     public func plan(_ conversations: [Conversation], in destination: String, mode: ContinueMode = .auto,
                      newSessionIn folder: String? = nil, now: Date = Date()) throws -> [ContinuePlan] {
-        let label = try checkDestination(destination)
+        try checkDestination(destination)
         try checkRules(folders: conversations.flatMap(\.folders) + (folder.map { [$0] } ?? []), destination: destination)
         let dataDir = dataDir(of: destination)
         let isOpen = isWindowOpen(destination)
@@ -427,7 +422,6 @@ public final class ProfileManager: @unchecked Sendable {
             var conversation = found
             conversation.hasLiveProcess = found.hasLiveProcess || live.contains(found.sessionID)
             guard conversation.kind != .cowork else { throw ProfileError.coworkNeedsItsOwnHandoff(conversation.title) }
-            if conversation.kind == .projectBranch, conversation.ownerID == destination { throw ProfileError.sameWindow(label) }
             let forks = mode.forks(conversation, now: now)
             // A closed window reads the shared card of a regular Code session, with its model, when it starts;
             // anything else Claude imports there and takes the model from the history.
@@ -504,8 +498,8 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     /// Makes the copy a plan calls for. A second call for the same source session and destination reuses the
-    /// copy already made there instead of forking another (see `ContinueCopies`), and the copy's title is marked
-    /// with the source window's label when that window is known (a Project branch's owner).
+    /// copy already made there instead of forking another (see `ContinueCopies`). The copy's title is marked
+    /// with the source window's label when that window is known, and with a plain "copy" otherwise.
     /// - Returns: the new copy's id and the folder it's in, if this call forked one; `nil` if the plan doesn't
     ///   fork or reused an existing copy. Used by `continueAll` to roll a copy back if a later one in the same
     ///   run fails.
@@ -513,6 +507,7 @@ public final class ProfileManager: @unchecked Sendable {
     func prepare(_ plan: inout ContinuePlan) throws -> (id: String, folder: URL)? {
         guard plan.forks else { return nil }
         if let owner = plan.conversation.ownerID { plan.conversation.title += " · from \(label(of: owner))" }
+        else { plan.conversation.title += " · copy" }
         let copies = ContinueCopies(paths: paths)
         let folder = plan.conversation.transcript.deletingLastPathComponent()
         if let reused = copies.existingCopy(of: plan.conversation.sessionID, in: plan.destination, folder: folder) {
@@ -600,15 +595,6 @@ public final class ProfileManager: @unchecked Sendable {
         return report
     }
 
-    /// Shares sidebar groups between every window. Takes `sync.lock`, so call it without holding that lock.
-    @discardableResult
-    func shareGroups() throws -> GroupSync.Report {
-        guard let report = try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: true, {
-            try GroupSync(paths: paths).run(windows: windows)
-        }) else { throw POSIXError(.EWOULDBLOCK) }
-        return report
-    }
-
     // MARK: Remove
 
     /// Quits the profile's window and moves its app copy and data (including its sign-in) to the Trash.
@@ -651,8 +637,7 @@ public final class ProfileManager: @unchecked Sendable {
         }
     }
 
-    /// Shares ordinary local Code sessions and the sidebar groups holding them; inventories Cowork without
-    /// cross-profile writes.
+    /// Shares ordinary local Code sessions; inventories Cowork without cross-profile writes.
     /// - Returns: `nil` if another sync (from the app or the CLI) is already running.
     @discardableResult
     public func syncSessions() throws -> SyncReport? {
@@ -661,8 +646,7 @@ public final class ProfileManager: @unchecked Sendable {
             let propagateDeletions = !isAnyClaudeRunning
             let sessions = try SessionSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
             let cowork = try CoworkSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
-            let groups = try GroupSync(paths: paths).run(windows: windows)
-            return SyncReport(sessions: sessions, cowork: cowork, groups: groups)
+            return SyncReport(sessions: sessions, cowork: cowork)
         }
     }
 

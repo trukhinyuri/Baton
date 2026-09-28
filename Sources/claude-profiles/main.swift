@@ -10,30 +10,26 @@ USAGE
                                                  Create a profile and open it to sign in
   claude-profiles open <profile>                Open a profile's window (id or label)
   claude-profiles remove <profile>              Quit it and move its copy and sign-in to the Trash
-  claude-profiles sync                          Share local Code sessions and sidebar groups; inspect Cowork without copying it
+  claude-profiles sync                          Share local Code sessions; inspect Cowork without copying it
   claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
-  claude-profiles doctor [--json]               Read-only session, folder and Remote Control checks
-  claude-profiles conversations [--all]         Recent local Code sessions, Project branches and Cowork tasks
+  claude-profiles doctor [--json]               Read-only session and folder checks
+  claude-profiles conversations [--all]         Recent local Code sessions and Cowork tasks
   claude-profiles continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
                                                  Continue a conversation in another profile: a Code session
                                                  as itself or as a copy, or a new Cowork task with its history
   claude-profiles continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
-                           [--folder-only] [--new] [--dry-run]
-                                                 Continue the Code sessions and Project branches of a folder
-                                                 with a message since --since, in one go, with the other
-                                                 branches of their Projects unless --folder-only: the --max
-                                                 most recent (6 unless given); --new also starts a new session
-                                                 By default Project branches and sessions still open in a
-                                                 running Claude Code process or with a message in the last
-                                                 10 minutes continue as a copy; --same keeps the same session
-                                                 (add --anyway once you've closed it there), --fork copies
+                           [--new] [--dry-run]
+                                                 Continue the Code sessions of a folder with a message since
+                                                 --since, in one go: the --max most recent (6 unless given);
+                                                 --new also starts a new session
+                                                 By default sessions still open in a running Claude Code
+                                                 process or with a message in the last 10 minutes continue
+                                                 as a copy; --same keeps the same session (add --anyway once
+                                                 you've closed it there), --fork copies
   claude-profiles rules                         Show which accounts may continue the work in which folders
   claude-profiles rule <folder> --only <email>[,<email>…] | --remove
                                                  Let only these accounts continue work in the folder and
                                                  inside it, or drop the folder's rule
-  claude-profiles handoff --from PROFILE --to PROFILE --title TEXT --context FILE
-                         [--folder PATH] [--source-url URL] [--open]
-                                                 Save reviewed context for a new conversation; never sends it
 """
 
 func fail(_ message: String) -> Never {
@@ -56,16 +52,11 @@ func resolve(_ name: String) -> Profile {
     return profile
 }
 
-func profileLabel(_ name: String) -> String {
-    ["main", "claude"].contains(name.lowercased()) ? "MAIN" : resolve(name).label
-}
-
 func age(_ date: Date) -> String { relativeAge(since: date) }
 
 func kindName(_ conversation: Conversation) -> String {
     switch conversation.kind {
     case .code: "Code"
-    case .projectBranch: "Project branch in \(manager.label(of: conversation.ownerID ?? "main"))"
     case .cowork: "Cowork in \(manager.label(of: conversation.ownerID ?? "main"))"
     }
 }
@@ -160,8 +151,6 @@ do {
         print("\(r.sessions.pairs) session folders · \(r.sessions.cardsWritten) cards copied · \(r.sessions.cardsRemoved) removed · \(r.sessions.tombstonesWritten) deletions shared")
         print("\(r.cowork.pairs) Cowork folders checked · kept in their original profiles; use continue to carry one elsewhere")
         print("\(r.sessions.accountBoundCards + r.cowork.accountBoundCards) account-linked cards scoped · \(r.sessions.ambiguousAccountBoundCards + r.cowork.ambiguousAccountBoundCards) ambiguous cards left untouched")
-        print("\(r.groups.groupsShared) sidebar groups shared · \(r.groups.windowsChanged.count) closed windows updated; open ones get them when they next start")
-        for skipped in r.groups.skipped { print("  Groups not shared with \(skipped)") }
     case "doctor":
         let entries = try Diagnostics.inspect(paths: manager.paths)
         if args.contains("--json") {
@@ -170,26 +159,10 @@ do {
         } else {
             print("Read-only local inventory. Cloud access and feature availability are not tested.")
             for entry in entries {
-                print("\(entry.label): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards, \(entry.accountBoundWorkers) account-linked workers")
-                print("  Remote Control: \(entry.remoteControlEnabled.map { $0 ? "enabled" : "disabled" } ?? "not recorded"); \(entry.listedRemoteFolders) listed folders")
+                print("\(entry.label): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
                 for issue in entry.issues { print("  \(issue)") }
                 for folder in entry.missingFolders { print("  Missing: \(folder)") }
             }
-        }
-    case "handoff":
-        guard let from = value(of: "--from", in: args), let to = value(of: "--to", in: args),
-              let title = value(of: "--title", in: args), let contextFile = value(of: "--context", in: args)
-        else { fail("handoff needs --from, --to, --title and --context; run --help") }
-        let handoff = Handoff(title: title, source: profileLabel(from), destination: profileLabel(to),
-                              context: try String(contentsOfFile: contextFile, encoding: .utf8),
-                              folder: value(of: "--folder", in: args) ?? "", sourceURL: value(of: "--source-url", in: args) ?? "")
-        let file = try handoff.save(paths: manager.paths)
-        print("Saved reviewed context: \(file.path)")
-        print("Pause the original task. Use the saved context in a new conversation in \(handoff.destination). Nothing was sent.")
-        if args.contains("--open") {
-            if ["main", "claude"].contains(to.lowercased()) { try await manager.openMain() }
-            else { try await manager.open(resolve(to).id) }
-            if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
         }
     case "conversations":
         let all = manager.conversations()
@@ -210,20 +183,17 @@ do {
             fail("--max takes a positive number, such as 6")
         }
         let (found, leftOut) = ConversationIndex.continueAllBatch(in: path, since: Date().addingTimeInterval(-since),
-                                                                  from: manager.conversations(), to: destination,
-                                                                  folderOnly: args.contains("--folder-only"), limit: limit)
+                                                                  from: manager.conversations(), to: destination, limit: limit)
         let leftOutNote = leftOut == 0 ? "" : " Left out \(leftOut) older ones: continue them one at a time or raise --max."
         let newSession = args.contains("--new") ? path : nil
         guard !found.isEmpty || newSession != nil else {
-            fail("no Code sessions or Project branches in \(path) with a message in the last \(value(of: "--since", in: args) ?? "24h"). Widen --since or add --new.")
+            fail("no Code sessions in \(path) with a message in the last \(value(of: "--since", in: args) ?? "24h"). Widen --since or add --new.")
         }
         refuseRunning(found, mode: mode)
         let label = manager.label(of: destination)
-        let elsewhere = found.filter { !$0.works(in: path) }.count
-        let also = elsewhere > 0 ? " (\(elsewhere) of them Project branches working in other folders)" : ""
         if args.contains("--dry-run") {
             printPlan(try manager.plan(found, in: destination, mode: mode, newSessionIn: newSession), to: destination)
-            print("Would open \(found.count)\(also) in Claude \(label)" + (newSession.map { " and start a new session in \($0)" } ?? "") + ". Nothing was changed." + leftOutNote)
+            print("Would open \(found.count) in Claude \(label)" + (newSession.map { " and start a new session in \($0)" } ?? "") + ". Nothing was changed." + leftOutNote)
             break
         }
         let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession)
@@ -231,7 +201,7 @@ do {
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
         reportUnopened(plans, in: destination)
         let checked = plans.filter { $0.opened == true }.count
-        print("Opened \(plans.count)\(also) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "")
+        print("Opened \(plans.count) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "")
               + (checked > 0 ? "; \(checked) confirmed imported there" : "") + ". Nothing was sent." + leftOutNote)
     case "continue":
         guard args.count >= 2, let to = value(of: "--to", in: args) else { fail("continue needs a session (or “last”) and --to PROFILE") }
