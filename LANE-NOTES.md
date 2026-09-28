@@ -40,3 +40,27 @@
 - `SessionSync.liveSessionIDs: Set<String>?` — `nil` reads `LiveSessions.ids(claudeDir: paths.claudeDir)`, only when
   a copy would change its `cliSessionId`. Lane B may pass the set it already computed.
 - `Report.keptLive` — copies left alone because their session is open in a running `claude` process.
+
+## W5: archive merge
+
+- `archive-baselines.json` in the state directory (version 1): per window pair, the archived list as last synced.
+  An id missing from a window's list since then was unarchived there and stays unarchived everywhere.
+
+## W6: account email
+
+- `DesktopData.email(in:accountID:)` now parses the IndexedDB LevelDB records first (Snappy tables included), then
+  falls back to the byte scan. Signature unchanged.
+
+## W7: durability (for lane B; also affects SettingsSync and InterfaceSync)
+
+- `Backup.save(_:)` for an overwrite: after the first copy of the day, each new content of a regular file goes to
+  `Backups/<day>/.versions/<sha256>`, stored once whichever file it came from, with a line in `.versions/index.jsonl`
+  (`at`, `path`, `sha256`). Folders keep the old behaviour (first copy of the day only). `prune()` moves a day's
+  `.versions` to the Trash once the day is two calendar days old; whole days still go after 7.
+- Tombstones: with `propagateDeletions` and not `dryRun`, a `deleted_*` marker that every pair has, with no card left
+  anywhere and the newest copy older than 90 days, is backed up and removed from every pair
+  (`Report.tombstonesExpired`, counted in `changes`). Lane B must pass `propagateDeletions: true` only when every
+  target window is closed, as today.
+- `LevelDBStore.writeAtomically` re-checks `isInUse` right before the rename and throws
+  `LocalStorageError.databaseInUse` (temp file removed) if a window opened the database meanwhile. `willRename` is a
+  test hook; production leaves it nil.

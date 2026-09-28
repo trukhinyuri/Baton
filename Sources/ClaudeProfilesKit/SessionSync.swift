@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Makes Claude Code sessions visible in every profile, whichever account created them.
@@ -38,10 +39,15 @@ public struct SessionSync: Sendable {
         public var retiredByRule = 0
         /// Copies left as they are because a running `claude` process has their session open.
         public var keptLive = 0
-        public var changes: Int { cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten + retiredByRule }
+        /// "Session deleted" markers removed after every window had them for 90 days.
+        public var tombstonesExpired = 0
+        public var changes: Int {
+            cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten + retiredByRule + tombstonesExpired
+        }
     }
 
     static let sessionsFolder = "claude-code-sessions"
+    static let tombstoneLifetime: TimeInterval = 90 * 86_400
     static let archiveIndex = "archived-sessions.idx"
 
     public let paths: Paths
@@ -87,6 +93,7 @@ public struct SessionSync: Sendable {
         var importedByFolder: [String: Set<String>] = [:]           // folder path → cards a window imported
         var tombstones = Set<String>()
         var tombstonesByScope: [String: Set<String>] = [:]
+        var tombstoneCopies: [String: (count: Int, newest: Date)] = [:]   // marker → folders that have it
         let scopeFile = paths.stateDir.appending(path: "code-native-session-scopes.json")
         let remembered = try NativeScopeState.load(from: scopeFile)
         var cardScopes = remembered.scopes.mapValues(Set.init)
@@ -119,6 +126,9 @@ public struct SessionSync: Sendable {
                 } else if name.hasPrefix("deleted_") {
                     tombstones.insert(name)
                     tombstonesByScope[scope, default: []].insert(name)
+                    let modified = SyncFolders.modificationDate(url) ?? now
+                    let known = tombstoneCopies[name] ?? (0, .distantPast)
+                    tombstoneCopies[name] = (known.count + 1, max(known.newest, modified))
                 } else if name == Self.archiveIndex, let index = readJSON(url) {
                     archiveLists[pair.path] = Set(index["archived"] as? [String] ?? [])
                     archiveVersion = index["v"] ?? archiveVersion
@@ -295,6 +305,22 @@ public struct SessionSync: Sendable {
                     }
                     report.archiveIndexesWritten += 1
                 }
+            }
+        }
+        // A marker every window has had for 90 days, with no copy of its card left anywhere, has done its job.
+        if propagateDeletions {
+            let expired = tombstoneCopies.filter { marker, copies in
+                let name = Self.cardName(for: String(marker.dropFirst("deleted_".count)))
+                return copies.count == pairs.count && now.timeIntervalSince(copies.newest) > Self.tombstoneLifetime
+                    && !accountBound.contains(name) && !observed.contains(name)
+            }.keys
+            for marker in expired.sorted() {
+                for pair in pairs where !dryRun {
+                    let target = pair.appending(path: marker)
+                    if try backup.save(target, everyTime: true) { report.backedUp += 1 }
+                    try fm.removeItem(at: target)
+                }
+                report.tombstonesExpired += 1
             }
         }
         if !dryRun {
@@ -625,6 +651,10 @@ public struct SessionSync: Sendable {
 
 /// Copies a file into `Backups/<date>/` before Claude Profiles overwrites or removes it.
 /// Day folders older than a week go to the Trash, never straight to deletion.
+///
+/// The first overwrite of a file in a day is copied next to its path; every later content it is overwritten with
+/// goes to the day's `.versions` folder, stored once by its SHA-256 whichever file it came from, with a line in
+/// `index.jsonl` naming the file. Versions are kept at least 24 hours.
 struct Backup {
     let paths: Paths
     let now: Date
@@ -639,7 +669,9 @@ struct Backup {
         return paths.backupsDir.appending(path: formatter.string(from: now), directoryHint: .isDirectory)
     }
 
-    /// Overwrites keep the first version of the day; removals are always kept.
+    static let versionsFolder = ".versions"
+
+    /// Every overwritten content and every removal is kept.
     /// - Returns: `true` if a copy was made.
     func save(_ url: URL, everyTime: Bool = false) throws -> Bool {
         let base = paths.applicationSupport.standardizedFileURL.path
@@ -647,11 +679,41 @@ struct Backup {
         let relative = full.hasPrefix(base + "/") ? String(full.dropFirst(base.count + 1)) : url.lastPathComponent
         var target = dayDir.appending(path: relative)
         if FileManager.default.fileExists(atPath: target.path) {
-            guard everyTime else { return false }
+            guard everyTime else { return try saveVersion(of: url, relative: relative, dayCopy: target) }
             target = target.deletingLastPathComponent().appending(path: "\(Int(now.timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(8))-\(target.lastPathComponent)")
         }
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: url, to: target)
+        return true
+    }
+
+    /// A file's content after its first copy of the day, once per distinct content. Folders keep only that first copy.
+    private func saveVersion(of url: URL, relative: String, dayCopy: URL) throws -> Bool {
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), !isFolder.boolValue else { return false }
+        let data = try Data(contentsOf: url)
+        guard (try? Data(contentsOf: dayCopy)) != data else { return false }
+        // A removal copy made earlier today already holds this content.
+        let folder = dayCopy.deletingLastPathComponent()
+        let removals = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .filter { $0.hasSuffix("-" + dayCopy.lastPathComponent) }
+        if removals.contains(where: { (try? Data(contentsOf: folder.appending(path: $0))) == data }) { return false }
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let versions = dayDir.appending(path: Self.versionsFolder, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: versions, withIntermediateDirectories: true)
+        let entry: [String: Any] = ["at": Int(now.timeIntervalSince1970 * 1000), "path": relative, "sha256": hash]
+        let line = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys, .withoutEscapingSlashes]) + Data("\n".utf8)
+        let index = versions.appending(path: "index.jsonl")
+        if let handle = try? FileHandle(forWritingTo: index) {
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+        } else {
+            try line.write(to: index, options: .atomic)
+        }
+        let blob = versions.appending(path: hash)
+        guard !FileManager.default.fileExists(atPath: blob.path) else { return false }
+        try data.write(to: blob, options: .atomic)
         return true
     }
 
@@ -666,7 +728,8 @@ struct Backup {
         try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys]).write(to: target, options: .atomic)
     }
 
-    /// Moves backup day folders older than `keepDays` to the Trash.
+    /// Moves backup day folders older than `keepDays` to the Trash, and a day's versions once the day is over
+    /// by 24 hours.
     @discardableResult
     func prune() -> Int {
         let cutoff = now.addingTimeInterval(-Double(Self.keepDays) * 86_400)
@@ -675,8 +738,13 @@ struct Backup {
         formatter.dateFormat = "yyyy-MM-dd"
         var moved = 0
         for day in (try? FileManager.default.contentsOfDirectory(at: paths.backupsDir, includingPropertiesForKeys: nil)) ?? [] {
-            guard let date = formatter.date(from: day.lastPathComponent), date < cutoff else { continue }
-            if (try? discard(day)) != nil { moved += 1 }
+            guard let date = formatter.date(from: day.lastPathComponent) else { continue }
+            if date < cutoff {
+                if (try? discard(day)) != nil { moved += 1 }
+            } else if date.addingTimeInterval(2 * 86_400) <= now {
+                let versions = day.appending(path: Self.versionsFolder, directoryHint: .isDirectory)
+                if FileManager.default.fileExists(atPath: versions.path), (try? discard(versions)) != nil { moved += 1 }
+            }
         }
         return moved
     }
