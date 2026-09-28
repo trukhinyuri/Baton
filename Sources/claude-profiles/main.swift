@@ -10,9 +10,12 @@ USAGE
                                                  Create a profile and open it to sign in
   claude-profiles open <profile>                Open a profile's window (id or label)
   claude-profiles remove <profile>              Quit it and move its copy and sign-in to the Trash
-  claude-profiles sync                          Share local Code sessions; inspect Cowork without copying it
+  claude-profiles sync [--dry-run]              Share local Code sessions; inspect Cowork without copying it
   claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
   claude-profiles doctor [--json]               Read-only session and folder checks
+  claude-profiles local-only on|off|status [PROFILE|main] [--json]
+                                                 Keep new Claude Code sessions off Remote Control; on by
+                                                 default. No profile: every window without its own choice
   claude-profiles conversations [--all]         Recent local Code sessions and Cowork tasks
   claude-profiles continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
                                                  Continue a conversation in another profile: a Code session
@@ -49,6 +52,10 @@ let cli = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath
 let manager = ProfileManager(cliPath: cli)
 let args = Array(CommandLine.arguments.dropFirst())
 
+// Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a Claude Desktop version
+// outside the tested range. Informational only: it never blocks the command that follows.
+for warning in manager.startUpChecks() { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
+
 func resolve(_ name: String) -> Profile {
     guard let profile = manager.profiles.first(where: { $0.id == name.lowercased() || $0.label.caseInsensitiveCompare(name) == .orderedSame })
     else { fail("no profile “\(name)”. Run `claude-profiles list`.") }
@@ -56,6 +63,15 @@ func resolve(_ name: String) -> Profile {
 }
 
 func age(_ date: Date) -> String { relativeAge(since: date) }
+
+func describe(_ status: LocalOnly.Status) -> String {
+    switch status {
+    case .on: "Local only: Remote Control off for new sessions"
+    case .off: "Local only off"
+    case .pending: "Local only applies when this window next starts"
+    case .notSupported: "Local only not available in this Claude Desktop version"
+    }
+}
 
 func kindName(_ conversation: Conversation) -> String {
     switch conversation.kind {
@@ -88,15 +104,6 @@ func destinationID(_ name: String) -> String {
     ["main", "claude"].contains(name.lowercased()) ? "main" : resolve(name).id
 }
 
-/// Refuses to write to a session that may still be running in its window unless --anyway says it was closed there.
-func refuseRunning(_ conversations: [Conversation], mode: ContinueMode) {
-    guard mode == .same, !args.contains("--anyway") else { return }
-    let running = conversations.filter { $0.mayStillWrite() }
-    guard !running.isEmpty else { return }
-    let names = running.map { "“\($0.title)” (\($0.hasLiveProcess ? "open in a running Claude Code process" : "a message \(age($0.lastActivity))"))" }
-    fail("\(names.joined(separator: ", ")) may still be written to in its window. Continue as a copy (drop --same), or close it there first and add --anyway.")
-}
-
 func printPlan(_ plans: [ContinuePlan], to destination: String) {
     let label = manager.label(of: destination)
     for plan in plans {
@@ -105,6 +112,21 @@ func printPlan(_ plans: [ContinuePlan], to destination: String) {
         let folder = plan.conversation.folders.first.map { " · " + ($0 as NSString).abbreviatingWithTildeInPath } ?? ""
         print("\(status)\(how)  \(plan.conversation.sessionID.prefix(8))  \(plan.conversation.title) — \(kindName(plan.conversation))\(folder)")
         if let note = plan.model { print("      \(note.isWarning ? "⚠︎ " : "")\(note.message(destination: label))") }
+        for item in plan.wontFollow {
+            let names = item.names.isEmpty ? "" : " (\(item.names.joined(separator: ", ")))"
+            print("      stays behind: \(item.detail)\(names)")
+        }
+    }
+}
+
+/// After opening, whatever the copy's scratchpad left in the original session.
+func printCarried(_ plans: [ContinuePlan]) {
+    for plan in plans {
+        guard let carried = plan.carried, !carried.leftBehind.isEmpty || !carried.worktrees.isEmpty else { continue }
+        var parts: [String] = []
+        if !carried.leftBehind.isEmpty { parts.append("scratchpad: \(carried.leftBehind.joined(separator: ", "))") }
+        if !carried.worktrees.isEmpty { parts.append("git worktrees (not copied): \(carried.worktrees.joined(separator: ", "))") }
+        print("Left in the original \(parts.joined(separator: "; "))")
     }
 }
 
@@ -150,12 +172,37 @@ do {
         try await manager.remove(profile.id)
         print("Moved Claude \(profile.label) to the Trash. Ordinary local Code sessions stay available; local Cowork data moved with the profile.")
     case "sync":
-        guard let r = try manager.syncSessions() else { fail("another sync is running; try again in a moment") }
-        print("\(r.sessions.pairs) session folders · \(r.sessions.cardsWritten) cards copied · \(r.sessions.cardsRemoved) removed · \(r.sessions.tombstonesWritten) deletions shared")
+        let dryRun = args.dropFirst().contains("--dry-run")
+        guard let r = try manager.syncSessions(dryRun: dryRun) else { fail("another sync is running; try again in a moment") }
+        let verb = dryRun ? "would copy" : "copied", removedVerb = dryRun ? "would remove" : "removed", sharedVerb = dryRun ? "would share" : "shared"
+        print("\(r.sessions.pairs) session folders · \(r.sessions.cardsWritten) cards \(verb) · \(r.sessions.cardsRemoved) \(removedVerb) · \(r.sessions.tombstonesWritten) deletions \(sharedVerb)")
+        print("\(r.sessions.withheldByRule) withheld by folder rules · \(r.sessions.retiredByRule) retired by folder rules · \(r.sessions.keptLive) kept live (open in a running Claude Code process) · \(r.sessions.tombstonesExpired) old tombstones expired")
         print("\(r.cowork.pairs) Cowork folders checked · kept in their original profiles; use continue to carry one elsewhere")
         print("\(r.sessions.accountBoundCards + r.cowork.accountBoundCards) account-linked cards scoped · \(r.sessions.ambiguousAccountBoundCards + r.cowork.ambiguousAccountBoundCards) ambiguous cards left untouched")
         let carried = r.carried.reduce(0) { $0 + $1.added.count }
         if carried > 0 { print("\(carried) files carried into \(r.carried.count) sessions Claude Desktop continued as a copy") }
+        if dryRun { print("Nothing was changed.") }
+    case "local-only":
+        guard args.count >= 2 else { fail("local-only needs on, off or status") }
+        switch args[1] {
+        case "on", "off":
+            let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
+            let result = try manager.setLocalOnly(args[1] == "on", window: window)
+            for (id, status) in result.sorted(by: { manager.label(of: $0.key) < manager.label(of: $1.key) }) {
+                print("\(manager.label(of: id)): \(describe(status))")
+            }
+        case "status":
+            let rows = manager.localOnlyStatus()
+            if args.contains("--json") {
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let payload = rows.map { ["window": $0.window, "label": $0.label, "status": $0.status.rawValue] }
+                print(String(decoding: try encoder.encode(payload), as: UTF8.self))
+            } else {
+                for row in rows { print("\(row.label): \(describe(row.status))") }
+            }
+        default:
+            fail("local-only needs on, off or status")
+        }
     case "doctor":
         let entries = try Diagnostics.inspect(paths: manager.paths)
         if args.contains("--json") {
@@ -163,6 +210,15 @@ do {
             print(String(decoding: try encoder.encode(entries), as: UTF8.self))
         } else {
             print("Read-only local inventory. Cloud access and feature availability are not tested.")
+            let installed = ClaudeVersion.installed(at: manager.paths.claudeApp) ?? "unknown"
+            print("Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.tested.lowerBound)–\(ClaudeVersion.tested.upperBound))")
+            if let warning = manager.claudeVersionWarning { print("  \(warning)") }
+            switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
+            case nil: print("Local only: Claude.app unreadable, can't check its settings")
+            case []: print("Local only keys present: ccRemoteControlDefaultEnabled, remoteControlStayReachable")
+            case let missing?: print("Local only: missing in this Claude Desktop: \(missing.joined(separator: ", "))")
+            }
+            for row in manager.localOnlyStatus() { print("\(row.label): \(describe(row.status))") }
             for entry in entries {
                 print("\(entry.label): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
                 for issue in entry.issues { print("  \(issue)") }
@@ -194,17 +250,18 @@ do {
         guard !found.isEmpty || newSession != nil else {
             fail("no Code sessions in \(path) with a message in the last \(value(of: "--since", in: args) ?? "24h"). Widen --since or add --new.")
         }
-        refuseRunning(found, mode: mode)
+        let anyway = args.contains("--anyway")
         let label = manager.label(of: destination)
         if args.contains("--dry-run") {
-            printPlan(try manager.plan(found, in: destination, mode: mode, newSessionIn: newSession), to: destination)
+            printPlan(try manager.plan(found, in: destination, mode: mode, newSessionIn: newSession, anyway: anyway), to: destination)
             print("Would open \(found.count) in Claude \(label)" + (newSession.map { " and start a new session in \($0)" } ?? "") + ". Nothing was changed." + leftOutNote)
             break
         }
-        let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession)
+        let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession, anyway: anyway)
         printPlan(plans, to: destination)
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
         reportUnopened(plans, in: destination)
+        printCarried(plans)
         let checked = plans.filter { $0.opened == true }.count
         print("Opened \(plans.count) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "")
               + (checked > 0 ? "; \(checked) confirmed imported there" : "") + ". Nothing was sent." + leftOutNote)
@@ -218,25 +275,26 @@ do {
         }
         let destination = destinationID(to)
         let mode = continueMode()
-        if args.contains("--anyway"), !args.contains("--same"), conversation.kind != .cowork {
+        let anyway = args.contains("--anyway")
+        if anyway, !args.contains("--same"), conversation.kind != .cowork {
             FileHandle.standardError.write(Data("note: --anyway applies only with --same; continuing as planned below.\n".utf8))
         }
-        refuseRunning([conversation], mode: mode)
-        if conversation.kind == .cowork, conversation.isActive(), !args.contains("--anyway") {
+        if conversation.kind == .cowork, conversation.isActive(), !anyway {
             fail("“\(conversation.title)” was working less than a minute ago, so its history may miss the last steps. Stop it in its window first, or add --anyway.")
         }
         if args.contains("--dry-run") {
             if conversation.kind == .cowork {
                 print("Would start a new Cowork task in Claude \(manager.label(of: destination)) with “\(conversation.title)”'s history and files attached. Nothing was changed.")
             } else {
-                printPlan(try manager.plan([conversation], in: destination, mode: mode), to: destination)
+                printPlan(try manager.plan([conversation], in: destination, mode: mode, anyway: anyway), to: destination)
                 print("Nothing was changed.")
             }
             break
         }
-        switch try await manager.continueConversation(conversation, in: destination, mode: mode) {
+        switch try await manager.continueConversation(conversation, in: destination, mode: mode, anyway: anyway) {
         case .openedSession(let plan):
             printPlan([plan], to: destination)
+            printCarried([plan])
             reportUnopened([plan], in: destination)
             print("Opened “\(conversation.title)”\(plan.forks ? " as a copy" : "") in Claude \(manager.label(of: destination))"
                   + (plan.opened == true ? "; confirmed imported there." : "."))

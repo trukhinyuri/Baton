@@ -149,8 +149,13 @@ struct ProfileRow: View {
                 Button(status.isRunning ? "Show" : "Open") { model.open(status) }
                     .frame(width: 64)
                 Menu {
-                    if !status.isMain {
+                    if let profile = status.profile {
                         Button("Show Launcher in Finder") { model.revealLauncher(status) }
+                        Toggle("Keep the permission mode when continuing here", isOn: Binding(
+                            get: { profile.carriesPermissionMode },
+                            set: { model.setCarryPermissionMode($0, for: profile.id) }
+                        ))
+                        .help("A conversation continued into this profile keeps its permission mode (for example “accept edits”) instead of falling back to the default. Off unless you turn it on.")
                         Divider()
                         Button("Remove Subscription…", role: .destructive) { model.pendingRemoval = status }
                     } else {
@@ -252,7 +257,7 @@ struct ContentView: View {
             Button("Remove", role: .destructive) { model.remove(status) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("Its window closes and its app copy and sign-in move to the Trash. Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the profile; cloud Projects stay with their account.")
+            Text("Its app copy and sign-in move to the Trash. While its window is open, removing it is refused: quit it first (⌘Q in that window). Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the profile; cloud Projects stay with their account.")
         }
         .alert("Something went wrong", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}

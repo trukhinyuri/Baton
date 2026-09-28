@@ -13,7 +13,7 @@ extension Sandbox {
     func desktopConfig(_ dataDir: URL) -> URL { dataDir.appending(path: "claude_desktop_config.json") }
 
     /// Every file under the sandbox with its contents, to show what a call changed.
-    func snapshot() -> [String: Data] {
+    func contentsSnapshot() -> [String: Data] {
         var result: [String: Data] = [:]
         for relative in NativeForkCarry.files(under: root) {
             result[relative] = try? Data(contentsOf: root.appending(path: relative))
@@ -188,13 +188,13 @@ struct LocalOnlyTests {
         try box.installClaude()
         try box.write(Self.config, to: box.desktopConfig(box.work))
         let transcript = try box.transcript(lines: [#"{"type":"history-suppression","cause":"fork_inherit","sessionId":"\#(Sandbox.cli)"}"#])
-        let before = box.snapshot()
+        let before = box.contentsSnapshot()
 
         _ = try closed(box).apply(window: "work")
         _ = try closed(box).disable(window: "work")
         _ = try closed(box).apply(window: "work")
 
-        let after = box.snapshot()
+        let after = box.contentsSnapshot()
         let changed = Set(after.keys.filter { before[$0] != after[$0] })
         let config = box.desktopConfig(box.work).path.dropFirst(box.root.path.count + 1)
         let own = [box.paths.localOnlyFile, box.paths.stateDir.appending(path: "local-only.lock")]

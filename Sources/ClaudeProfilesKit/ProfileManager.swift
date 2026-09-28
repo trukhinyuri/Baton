@@ -287,6 +287,18 @@ public final class ProfileManager: @unchecked Sendable {
         }!
     }
 
+    /// Turns "keep the permission mode when continuing here" on or off for one profile. Off by default: a
+    /// mode chosen under one account is not silently granted in another unless the owner opts in.
+    public func setCarryPermissionMode(_ enabled: Bool, for id: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try FileLock.withLock(registryLock, blocking: true) {
+            var all = try registry.load()
+            guard let index = all.firstIndex(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
+            all[index].carryPermissionMode = enabled ? true : nil
+            try registry.save(all)
+        }
+    }
+
     /// Held while the profile registry is read and written back.
     var registryLock: URL { paths.stateDir.appending(path: "registry.lock") }
     /// Builds a new profile's engine and launcher; tests replace it to skip copying and signing Claude.
@@ -673,9 +685,18 @@ public final class ProfileManager: @unchecked Sendable {
     func prepareSessionsForLaunch() throws -> SessionSync.Report {
         guard let report = try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: true, {
             createSessionFolders()
-            return try SessionSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: false)
+            var sync = SessionSync(paths: paths, dataDirs: dataDirs)
+            sync.isWindowOpen = { [weak self] dataDir in self?.isWindowOpen(forDataDir: dataDir) ?? true }
+            sync.email = { [weak self] dataDir, account in self?.email(in: dataDir, accountID: account) ?? DesktopData.email(in: dataDir, accountID: account) }
+            return try sync.run(propagateDeletions: false)
         }) else { throw POSIXError(.EWOULDBLOCK) }
         return report
+    }
+
+    /// Whether the window whose data directory is `dataDir` is currently open; a data directory this
+    /// manager doesn't recognize counts as open, so sharing never touches it while unsure.
+    private func isWindowOpen(forDataDir dataDir: URL) -> Bool {
+        windows.first { $0.dataDir == dataDir }.map { isWindowOpen($0.id) } ?? true
     }
 
     // MARK: Remove
@@ -723,18 +744,26 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     /// Shares ordinary local Code sessions; inventories Cowork without cross-profile writes.
+    /// - Parameter dryRun: counts what a run would do and writes nothing (`SessionSync.dryRun`; the Cowork
+    ///   inventory and session-folder creation never write regardless, and carrying is skipped entirely).
     /// - Returns: `nil` if another sync (from the app or the CLI) is already running.
     @discardableResult
-    public func syncSessions() throws -> SyncReport? {
+    public func syncSessions(dryRun: Bool = false) throws -> SyncReport? {
         try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: false) {
-            createSessionFolders()
+            if !dryRun { createSessionFolders() }
             let propagateDeletions = !isAnyClaudeRunning
-            let sessions = try SessionSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
+            var sync = SessionSync(paths: paths, dataDirs: dataDirs)
+            sync.isWindowOpen = { [weak self] dataDir in self?.isWindowOpen(forDataDir: dataDir) ?? true }
+            sync.email = { [weak self] dataDir, account in self?.email(in: dataDir, accountID: account) ?? DesktopData.email(in: dataDir, accountID: account) }
+            sync.dryRun = dryRun
+            let sessions = try sync.run(propagateDeletions: propagateDeletions)
             let cowork = try CoworkSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
             // Adds files only, never in Claude's own data, so it runs whether or not windows are open.
             var carried: [NativeForkCarry.Report] = []
-            do { carried = try NativeForkCarry.run(paths: paths, dataDirs: dataDirs) } catch {
-                Log.logger("carry").error("Carry failed: \(error.localizedDescription, privacy: .private)")
+            if !dryRun {
+                do { carried = try NativeForkCarry.run(paths: paths, dataDirs: dataDirs) } catch {
+                    Log.logger("carry").error("Carry failed: \(error.localizedDescription, privacy: .private)")
+                }
             }
             return SyncReport(sessions: sessions, cowork: cowork, carried: carried)
         }

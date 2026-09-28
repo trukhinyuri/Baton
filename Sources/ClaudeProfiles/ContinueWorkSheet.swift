@@ -264,9 +264,10 @@ struct ContinueWorkSheet: View {
         let target = form.destination
         let label = destinationLabel
         let mode = form.mode
+        let anyway = form.stopped == conversation.id
         Task {
             do {
-                switch try await manager.continueConversation(conversation, in: target, mode: mode) {
+                switch try await manager.continueConversation(conversation, in: target, mode: mode, anyway: anyway) {
                 case .openedSession(let plan):
                     guard plan.opened != false else {
                         form.problem = "“\(conversation.title)” did not show up in Claude \(label) within \(Int(manager.importWait)) s. Look for it in its sidebar, or try again with the window open."

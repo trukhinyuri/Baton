@@ -49,6 +49,10 @@ final class AppModel: ObservableObject {
             }
             return
         }
+        // Re-registers the main Claude after an abandoned sign-in and notes a Claude Desktop version
+        // outside the tested range: information for the footer, never a blocking alert.
+        let startUp = manager.startUpChecks()
+        if !startUp.isEmpty { setupWarning = startUp.joined(separator: " ") }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.reload() }
         }
@@ -212,6 +216,11 @@ final class AppModel: ObservableObject {
         guard let id = status.profile?.id else { return }
         let manager = manager
         run("Removing Claude \(status.label)…") { try await manager.remove(id) }
+    }
+
+    func setCarryPermissionMode(_ enabled: Bool, for id: String) {
+        let manager = manager
+        run(nil) { try manager.setCarryPermissionMode(enabled, for: id) }
     }
 
     func revealLauncher(_ status: ProfileStatus) {
