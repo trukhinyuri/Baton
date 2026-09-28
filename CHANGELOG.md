@@ -1,26 +1,22 @@
 # Changelog
 
-## Unreleased
-
-- **Continue All in …** continues the six most recent Code sessions and Project branches of a folder with a message in the last day in one step, together with the branches of the same Projects that work in other folders, and can start a new session there; `claude-profiles continue --folder <path> --to <profile> [--since 24h] [--max 6] [--folder-only] [--new] [--dry-run]` does the same and says how many older ones it left out
-- A session that a running Claude Code process has open, a Project branch, or a session with a message in the last 10 minutes continues as a copy by default, so two windows never write to one session; the copy takes the session's file history and environment with it. **Same session** / `--same` needs confirmation that the original was closed (`--anyway`), **As a copy** / `--fork` always copies
-- Links reach a closed window one by one: the first starts it, the rest follow once its window is on screen, and each continued session is confirmed by the card Claude imports; one that doesn't appear is reported
-- Folder rules (`claude-profiles rule <folder> --only <email>`) keep a folder's work in the listed accounts; continuing it into any other account is refused, and a damaged rules file stops every continuation
-- Claude imports continued sessions itself, with its own trust and permission checks; when the destination's model differs from the session's, the sheet and `--dry-run` ask to choose it before sending
-- Usage shows how old each figure is; figures older than 3 hours are marked. Windows are ordered by weekly usage, lowest first, however old the figure
-- A session whose transcript file is empty is dated by the file instead of being listed last
-- Code sidebar groups are shared by every window, each under its own account: a group made, renamed or deleted in one window, with its ordinary local Code sessions, follows in the others. Closed windows get it right away, open ones when they next start. Groups of Cowork, cloud or Project-worker items stay in their window, and cloud Code Projects stay with their account
-
 ## 0.3.0 — 2026-09-28
 
 - **Continue work…** lists the local Code sessions, Project branches and Cowork tasks of every window, most recent first, with search. Pick one and a subscription to continue in; the one with the most weekly headroom is preselected and those at their limit are marked
-- A Code session or Project branch opens as the same session in the chosen window, which is opened first if needed. The transcript is shared, so nothing is copied
+- **Continue All in …** continues the six most recent Code sessions and Project branches of a folder with a message in the last day in one step, together with the branches of the same Projects that work in other folders, and can start a new session there; `claude-profiles continue --folder <path> --to <profile> [--since 24h] [--max 6] [--folder-only] [--new] [--dry-run]` does the same and says how many older ones it left out
+- An idle Code session opens as the same session in the chosen window, which is opened first if needed. The transcript is shared, so nothing is copied
+- A session that a running Claude Code process has open, a Project branch, or a session with a message in the last 10 minutes continues as a copy by default, so two windows never write to one session; the copy takes the session's file history and environment with it. **Same session** / `--same` needs confirmation that the original was closed (`--anyway`), **As a copy** / `--fork` always copies
 - A Cowork task continues as a new task in the chosen window with a continuation prompt, its full history as `history.md` and copies of the files it was given and made. Nothing is sent: you review and send it there. What cannot be carried over (connectors, schedules, Project settings, files over the size limits) is listed in the history
+- Links reach a closed window one by one: the first starts it, the rest follow once its window is on screen, and each continued session is confirmed by the card Claude imports; one that doesn't appear is reported
+- Claude imports continued sessions itself, with its own trust and permission checks; when the destination's model differs from the session's, the sheet and `--dry-run` ask to choose it before sending
+- Folder rules (`claude-profiles rule <folder> --only <email>`) keep a folder's work in the listed accounts; continuing it into any other account is refused, and a damaged rules file stops every continuation
 - When an open subscription reaches its five-hour or weekly limit, a banner offers to continue its work in the subscription with the most headroom
-- A conversation written to in the last minute is flagged as possibly still running; continuing a Code session then needs confirmation
-- `claude-profiles conversations [--all]` and `claude-profiles continue <id|last> --to <profile> [--anyway]` do the same from the command line
+- Usage shows how old each figure is; figures older than 3 hours are marked. Windows are ordered by weekly usage, lowest first, however old the figure
+- `claude-profiles conversations [--all]` and `claude-profiles continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]` do the same as **Continue work…** from the command line
 - Continuing needs no macOS permissions: the chosen window receives a `claude://` link that only it handles
+- Code sidebar groups are shared by every window, each under its own account: a group made, renamed or deleted in one window, with its ordinary local Code sessions, follows in the others. Closed windows get it right away, open ones when they next start. Groups of Cowork, cloud or Project-worker items stay in their window, and cloud Code Projects stay with their account
 - A window that opens a conversation it had no card for makes its own card; the older copy in that window is backed up and retired, other windows don't get a second card for the same conversation, and deleting either card deletes the conversation
+- A session whose transcript file is empty is dated by the file instead of being listed last
 - Opening a profile no longer fails when sessions can't be shared first; the window opens and the problem is reported
 - MCP servers, extensions and SSH connections are merged one by one, keeping what was added or changed only in a profile; SSH host trust stays with each profile
 - App copies are rebuilt in a staging bundle, verified and swapped in atomically; the previous copy is restored if the new one fails verification
