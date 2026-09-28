@@ -10,10 +10,18 @@ WHERE = sh scripts/install-app.sh --where $(if $(DEST),"$(DEST)")
 build:
 	swift build
 
-# The toolchain sometimes loses the swift-testing macro plugin ("plugin for module 'TestingMacros' not found");
-# building the tests on one job and running them without a rebuild gets past it.
+# The Command Line Tools now and then stop with "plugin for module 'TestingMacros' not found". On that error, and
+# only then, the tests are built once more on a single job and run without rebuilding (docs/TESTING.md).
 test:
-	swift test || (swift build --build-tests -j 1 && swift test --skip-build)
+	@mkdir -p .build; log=.build/make-test.log; \
+	{ swift test 2>&1; echo $$? > "$$log.status"; } | tee "$$log"; \
+	status=$$(cat "$$log.status"); \
+	if [ "$$status" != 0 ] && grep -q "plugin for module 'TestingMacros' not found" "$$log"; then \
+		echo "Retrying once: building the tests on one job, then running them without rebuilding (docs/TESTING.md)."; \
+		swift build --build-tests -j 1 && swift test --skip-build; \
+	else \
+		exit "$$status"; \
+	fi
 
 app:
 	scripts/build-app.sh

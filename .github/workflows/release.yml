@@ -38,9 +38,10 @@ jobs:
             selected { print }
             END { if (!found) exit 1 }
           ' CHANGELOG.md > "$notes_file"
-          # An entry is unreleased while its heading ends in "— unreleased" or it has an "Unreleased." line.
-          if grep -qxF "## $version — unreleased" CHANGELOG.md || grep -qxF "Unreleased." "$notes_file"; then
-            echo "CHANGELOG.md still says $version is unreleased; give it the release date." >&2
+          # The entry's heading carries the release date, like the ones before it: "## 1.0.0 — 2026-10-05".
+          # Until then it reads "## 1.0.0 — unreleased".
+          if ! grep -qE "^## ${version//./\\.} — [0-9]{4}-[0-9]{2}-[0-9]{2}\$" CHANGELOG.md; then
+            echo "CHANGELOG.md: the $version heading needs its release date, as in \"## $version — $(date -u +%F)\"." >&2
             exit 1
           fi
           if ! grep -q '[^[:space:]]' "$notes_file"; then

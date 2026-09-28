@@ -18,8 +18,9 @@ Topics (suggested): `macos`, `macos-app`, `menu-bar-app`, `swift`, `swiftui`, `c
 ## Release title
 
 `Baton 1.0.0 — first leg` for 1.0.0; later releases are `Baton <version>` unless the workflow's `case` gives them a
-name of their own. The release notes are the version's CHANGELOG entry, which must lose its `Unreleased.` line
-before the tag is pushed.
+name of their own. The release notes are the version's CHANGELOG entry. Its heading reads `## 1.0.0 — unreleased`
+until the release and must carry the release date, like the entries before it (`## 1.0.0 — 2026-10-05`), before the
+tag is pushed; the workflow refuses a tag whose heading has no date. The steps are in [RELEASING.md](../RELEASING.md).
 
 ## Homebrew
 

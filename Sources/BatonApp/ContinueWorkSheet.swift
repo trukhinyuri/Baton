@@ -52,7 +52,7 @@ struct ContinueWorkSheet: View {
         let folders = allowed.rules.map { ($0.folder as NSString).abbreviatingWithTildeInPath }.joined(separator: " and ")
         guard model.folderRules != nil else { return "The folder rules can't be read, so nothing continues until they are fixed." }
         return
-            "Work in \(folders) continues only in \(allowed.accounts.sorted().joined(separator: " or ")), and no window is signed in with it. Add that account with “Add Profile”, or change the rule with `baton rule`."
+            "Work in \(folders) continues only in \(allowed.accounts.sorted().joined(separator: " or ")), and no window is signed in with it. Add that account with “Add Subscription”, or change the rule with `baton rule`."
     }
 
     private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.label ?? "" }
@@ -175,7 +175,7 @@ struct ContinueWorkSheet: View {
                     Image(systemName: "folder").foregroundStyle(.secondary)
                     Text(
                         "\(folderBatch.count) in \((folder as NSString).lastPathComponent) from the last day"
-                            + (folderSelection.leftOut > 0 ? ", the most recent; \(folderSelection.leftOut) older left" : "")
+                            + (folderSelection.leftOut > 0 ? ", the most recent; \(folderSelection.leftOut) older left out" : "")
                     )
                     .lineLimit(1).truncationMode(.middle)
                     .help(folderBatch.map(\.title).joined(separator: "\n"))
