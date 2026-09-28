@@ -10,7 +10,7 @@ Google sign-in in Claude Desktop finishes in the browser and returns through a `
 
 ## Decision
 
-Claude Profiles never reads, stores or forwards credentials, tokens, cookies or the Keychain, and never sees the sign-in link. While one profile window signs in, it changes only which app copy Launch Services has registered for `claude://` (`lsregister`), and gives the links back to the main app once that window is signed in, after 15 minutes, or if it never started. The link travels from macOS straight to Claude.
+Baton never reads, stores or forwards credentials, tokens, cookies or the Keychain, and never sees the sign-in link. While one profile window signs in, it changes only which app copy Launch Services has registered for `claude://` (`lsregister`), and gives the links back to the main app once that window is signed in, after 15 minutes, or if it never started. The link travels from macOS straight to Claude.
 
 Its only reads of Claude's `config.json` are the account id and three appearance keys; it edits those keys in place, preserving the file's permissions, and never copies or backs up that file.
 

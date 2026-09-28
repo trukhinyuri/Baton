@@ -1,25 +1,28 @@
 #!/bin/sh
-# Checks a built app before it is packaged or installed. Usage: scripts/verify-build.sh [path/to/Claude Profiles.app]
+# Checks a built app before it is packaged or installed. Usage: scripts/verify-build.sh [path/to/Baton.app]
 # Exits non-zero at the first failed check and says which one.
 set -eu
 
 cd "$(dirname "$0")/.."
-APP="${1:-build/Claude Profiles.app}"
+. scripts/product.env
+APP="${1:-build/$PRODUCT_NAME.app}"
 PLIST="$APP/Contents/Info.plist"
-MAIN="$APP/Contents/MacOS/ClaudeProfiles"
-CLI="$APP/Contents/Helpers/claude-profiles"
+MAIN="$APP/Contents/MacOS/Baton"
+CLI="$APP/Contents/Helpers/baton"
+OLD_CLI="$APP/Contents/Helpers/claude-profiles"
 failed=0
 
 check() { # check <description> <command...>
     what="$1"; shift
     if "$@" >/dev/null 2>&1; then echo "ok    $what"; else echo "FAIL  $what" >&2; failed=1; fi
 }
+old_cli_links() { [ -L "$OLD_CLI" ] && [ "$(readlink "$OLD_CLI")" = baton ]; }
 universal() { [ "$(lipo -archs "$1" 2>/dev/null | tr ' ' '\n' | sort | tr '\n' ' ')" = "arm64 x86_64 " ]; }
 hardened() { codesign -dv "$1" 2>&1 | grep -Eq 'flags=0x[0-9a-f]*\(.*runtime'; }
-has_commit() { commit="$(/usr/libexec/PlistBuddy -c 'Print :ClaudeProfilesCommit' "$PLIST" 2>/dev/null)" && [ -n "$commit" ]; }
+has_commit() { commit="$(/usr/libexec/PlistBuddy -c 'Print :BatonCommit' "$PLIST" 2>/dev/null)" && [ -n "$commit" ]; }
 version_matches() { # the helper reports the bundle's version under the named architecture
     expected="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
-    arch "-$1" "$CLI" --version | grep -q "^Claude Profiles $expected ("
+    arch "-$1" "$CLI" --version | grep -q "^$PRODUCT_NAME $expected ("
 }
 
 [ -d "$APP" ] || { echo "No app at $APP. Run scripts/build-app.sh first." >&2; exit 1; }
@@ -28,7 +31,8 @@ check "helper binary is universal (arm64 x86_64)" universal "$CLI"
 check "app is signed with the hardened runtime" hardened "$APP"
 check "helper is signed with the hardened runtime" hardened "$CLI"
 check "signature verifies (strict, deep)" codesign --verify --strict --deep "$APP"
-check "Info.plist has ClaudeProfilesCommit" has_commit
+check "Info.plist has BatonCommit" has_commit
+check "Helpers/claude-profiles links to baton, for 1.x scripts" old_cli_links
 check "helper --version runs natively (arm64)" version_matches arm64
 if arch -x86_64 /usr/bin/true 2>/dev/null; then
     check "helper --version runs under Rosetta (x86_64)" version_matches x86_64

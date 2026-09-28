@@ -1,6 +1,6 @@
 # Design decisions
 
-Short records of the decisions that shape Claude Profiles, and what would make us revisit each one.
+Short records of the decisions that shape Baton, and what would make us revisit each one.
 
 | # | Decision |
 |---|---|

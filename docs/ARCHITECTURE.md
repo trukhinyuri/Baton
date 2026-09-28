@@ -1,11 +1,11 @@
 # Architecture
 
-Claude Profiles is a thin layer around the official Claude Desktop app. It never changes how Claude talks to Anthropic; it only decides which data directory each Claude window uses and keeps a few local files consistent between them.
+Baton is a thin layer around the official Claude Desktop app. It never changes how Claude talks to Anthropic; it only decides which data directory each Claude window uses and keeps a few local files consistent between them.
 
 ```text
-                ┌──────────────────────── Claude Profiles.app ────────────────────────┐
-                │  SwiftUI window · menu bar · claude-profiles CLI                    │
-                │                 └───────── ClaudeProfilesKit ─────────┘             │
+                ┌───────────────────────────── Baton.app ─────────────────────────────┐
+                │  SwiftUI window · menu bar · baton CLI                              │
+                │                   └───────── BatonKit ─────────┘                    │
                 └───────┬──────────────────────┬───────────────────────┬──────────────┘
           creates/opens │                reads │                 syncs │
                         ▼                      ▼                       ▼
@@ -20,7 +20,7 @@ A profile is three things, all derived from a registry entry in `~/Library/Appli
 
 1. **Engine.** An APFS clone of `/Applications/Claude.app` created with `clonefile(2)`, so it shares disk blocks with the original. The only change is a Finder custom icon, which adds an `Icon\r` file and a Finder flag to the bundle. No code or resource is modified and Anthropic’s signature still verifies with `codesign --verify` (the `--strict` check flags the extra icon file). Because the Dock shows a running app’s icon from its bundle path, each profile window gets its own labeled icon.
 2. **Data directory.** Claude Desktop is an Electron app, and Electron keeps everything (cookies, sign-in, window state, caches) in the directory passed with `--user-data-dir`. Each profile gets its own, so each can be signed in to a different account at the same time.
-3. **Launcher.** A tiny app bundle whose executable is a shell script calling `claude-profiles open <id>`, with a fallback to `open -n -a <engine> --args --user-data-dir=<dir>`. Launchers can be kept in the Dock and are indexed by Spotlight. An engine opened directly starts without its data directory and shows the main app's account: that happens when a running profile window is kept with **Keep in Dock** and its icon is clicked later, or when macOS reopens windows at login. See [Windows opened without their profile](#windows-opened-without-their-profile).
+3. **Launcher.** A tiny app bundle whose executable is a shell script calling `baton open <id>`, with a fallback to `open -n -a <engine> --args --user-data-dir=<dir>`. Launchers can be kept in the Dock and are indexed by Spotlight. An engine opened directly starts without its data directory and shows the main app's account: that happens when a running profile window is kept with **Keep in Dock** and its icon is clicked later, or when macOS reopens windows at login. See [Windows opened without their profile](#windows-opened-without-their-profile).
 
 Engines are rebuilt when `CFBundleVersion` of the installed Claude differs from the clone’s and the profile isn’t running (`ProfileManager.refresh()` and on open).
 
@@ -28,7 +28,7 @@ Engines are rebuilt when `CFBundleVersion` of the installed Claude differs from 
 
 ## Windows opened without their profile
 
-Every profile runs a copy with the same bundle identifier, so the bundle alone doesn't say which account a window shows. `RunningClaude` reads each copy's command line with `sysctl(KERN_PROCARGS2)`, as `ps` does, and takes `--user-data-dir` the way Chromium parses it (`--name=value` or `-name=value`, the last one wins, nothing after `--`). A copy without it uses the main app's data. A profile counts as open only when its engine runs with its own data directory, and `claude-profiles list` and the app flag a profile whose engine runs without it. If arguments can't be read, the bundle decides, as before.
+Every profile runs a copy with the same bundle identifier, so the bundle alone doesn't say which account a window shows. `RunningClaude` reads each copy's command line with `sysctl(KERN_PROCARGS2)`, as `ps` does, and takes `--user-data-dir` the way Chromium parses it (`--name=value` or `-name=value`, the last one wins, nothing after `--`). A copy without it uses the main app's data. A profile counts as open only when its engine runs with its own data directory, and `baton list` and the app flag a profile whose engine runs without it. If arguments can't be read, the bundle decides, as before.
 
 The app watches `NSWorkspace.didLaunchApplicationNotification` and, at its own start, checks copies started in the last two minutes (macOS may reopen them at login before it). An engine started without its data directory is replaced only after a normal quit: `ProfileManager.open(_:)` asks it to quit and waits up to 10 seconds. It never force-quits that window, even if it just started, because Claude may already have restored active work. If the window refuses to quit, opening stops with an explanation and leaves the existing window running; otherwise the profile opens with its own data directory. Until it is replaced, it runs next to the main app on the main app's data. Without the app running, a Dock icon kept this way still opens the main account; the launcher always works.
 
@@ -36,7 +36,7 @@ The app watches `NSWorkspace.didLaunchApplicationNotification` and, at its own s
 
 Claude Desktop opens Google sign-in in the default browser, which returns the result through a `claude://` link. Launch Services delivers that link to the registered copy of Claude, and every profile runs a copy with the same bundle identifier, so without help the main app receives it and discards it as a sign-in it didn’t start.
 
-`SignInRouting` fixes the destination rather than the link. Opening a profile that has no signed-in account unregisters the main app and the other app copies (`lsregister -u`) and registers that profile’s copy, and records this in `sign-in.json`. Each status refresh checks whether the profile is now signed in, has been waiting for more than 15 minutes, or never started; then the copies are unregistered and the main app is registered again. Claude Profiles never sees the link or anything in it. Email sign-in happens inside the window and needs none of this.
+`SignInRouting` fixes the destination rather than the link. Opening a profile that has no signed-in account unregisters the main app and the other app copies (`lsregister -u`) and registers that profile’s copy, and records this in `sign-in.json`. Each status refresh checks whether the profile is now signed in, has been waiting for more than 15 minutes, or never started; then the copies are unregistered and the main app is registered again. Baton never sees the link or anything in it. Email sign-in happens inside the window and needs none of this.
 
 ## Session sharing
 
@@ -81,7 +81,7 @@ Cowork synchronization is consequently inventory-only: no card propagation, path
 
 Continue a local Cowork task in its original profile, or with **Continue work…**, which starts a new task elsewhere from its history and files (below). That does not migrate the original transcript or VM runtime. Diagnostics report missing adjacent local history to help identify old card copies; they cannot reconstruct missing history.
 
-The app synchronizes eligible Code cards at launch and every minute while running (it stays in the menu bar when the window is closed); `claude-profiles sync` does the same on demand. Removing a profile synchronizes Code once more after its window quits, so sessions started in it moments ago are retained. The removed profile's legacy local Cowork files move to the Trash with its data directory. Cowork cards in other profiles remain unchanged and do not preserve those files.
+The app synchronizes eligible Code cards at launch and every minute while running (it stays in the menu bar when the window is closed); `baton sync` does the same on demand. Removing a profile synchronizes Code once more after its window quits, so sessions started in it moments ago are retained. The removed profile's legacy local Cowork files move to the Trash with its data directory. Cowork cards in other profiles remain unchanged and do not preserve those files.
 
 ## Sharing the setup
 
@@ -120,7 +120,7 @@ The upstream capabilities change independently of this application: [Code Projec
 
 `ProfileManager.continueConversation` checks that the destination exists, is signed in and, for Cowork, is not the owner. Then it hands the destination window a `claude://` link with `NSWorkspace.open(_:withApplicationAt:configuration:)`. Launch Services delivers it to the running instance of that app copy, and every profile has its own copy, so no other window receives it and no permission (Accessibility, Automation) is needed. A closed window is started with its `--user-data-dir` and the first link, after the usual session and settings preparation. Claude keeps only one link that arrives before its main window exists, so the others are sent after `CGWindowListCopyWindowInfo` shows a window of that process on screen (no permission needed); if none appears within 90 seconds, the continuation fails and names what was not sent.
 
-- **Code sessions** use `claude://resume?session=<cliSessionId>`. Claude opens the session if the window has loaded its card, and imports it otherwise (see *One card per conversation*) through its own import path, which checks folder trust and resolves the permission mode; Claude Profiles never writes a card for it. The transcript is shared. `continueAll` confirms each session by the `local_<cliSessionId>.json` card that appears in the destination after the link, and reports those that don't. Claude shows a session when its import finishes, which replaces the current view, so a new-session link is sent only after the imports are confirmed.
+- **Code sessions** use `claude://resume?session=<cliSessionId>`. Claude opens the session if the window has loaded its card, and imports it otherwise (see *One card per conversation*) through its own import path, which checks folder trust and resolves the permission mode; Baton never writes a card for it. The transcript is shared. `continueAll` confirms each session by the `local_<cliSessionId>.json` card that appears in the destination after the link, and reports those that don't. Claude shows a session when its import finishes, which replaces the current view, so a new-session link is sent only after the imports are confirmed.
 - **Copies.** A session that `LiveSessions` finds open in a running `claude` process (`~/.claude/sessions/<pid>.json`, checked against the live process, and the `--resume` / `--session-id` arguments of running `claude` processes), or a session written to in the last 10 minutes continues as a copy: `TranscriptFork` writes a new transcript with a new session id, copies the session's `tool-results`, `subagents` and `workflows` folders with ids rewritten, the text files of its scratchpad (up to 1 MB each, 20 MB in total) into `from-<old id>/` in the new scratchpad, and its background task outputs, and hard-links `file-history/<id>` and `session-env/<id>` to the new id (copying if a link fails), as the CLI does when it forks. What it leaves behind, such as larger files or a git worktree inside the old scratchpad, is reported. The transcript is written last, and a failure removes everything made so far. `continue-copies.json` records each copy with the source's length and the hash of its last line, so a copy is reused only while the source is unchanged. Claude's history-suppression records are never removed or rewritten. The copy's title is suffixed with " · from <LABEL>" naming the source window when it is known, or " · copy" otherwise.
 - **Folder rules.** `FolderRules` keeps `folder-rules.json` in the state folder: for a folder, the email addresses of the accounts that may continue its work. `ProfileManager.plan` looks up the closest rule for every conversation's folder and the new-session folder, takes the accounts all of them allow, and refuses a destination whose signed-in email isn't among them. An unreadable file or an unknown destination email refuses as well.
 - **Cowork tasks** use `claude://cowork/new?q=<prompt>&file=<path>…`, which opens a new task with the prompt typed in and the files attached, without sending it. `CoworkHandoff` first writes a folder under `Handoffs/` (mode `0700`): `history.md` (mode `0600`) with the task's title, folders, which files are attached or left out, what is not carried over, and the conversation. `TranscriptText` keeps what the user wrote, Claude's replies and compaction summaries; tool calls become a list of tool names, and thinking, tool output, sub-agent runs and meta records are left out. Past 400,000 characters the first message and the latest ones are kept. Copies of the task's `uploads` and `outputs` (regular files only, up to 10 files, 25 MB each, 50 MB in total) are attached after the history. Folders in `Handoffs/` older than 30 days move to the Trash. The `folder=` parameter is not used: it makes Claude ask for folder access, and the prompt names the folders instead.
@@ -131,7 +131,7 @@ Query values are percent-encoded except for unreserved characters, because Claud
 
 Claude Desktop sometimes forks a session itself when a window opens a session another account started: the card's `cliSessionId` changes, the old id moves to `priorCliSessionIds`, and the new transcript starts with a `fork_inherit` or `compact_boundary` record. Desktop copies the transcript but not the session's side folders. After each sync, `NativeForkCarry` finds such forks and copies the old session's `subagents`, `workflows` and `tool-results` into the new id, adding files and never overwriting one, rewriting the old id in copied transcripts to the new one, and hard-linking `file-history`. The old session's files are never touched; their hashes are compared before and after. A lineage it cannot resolve to exactly one parent is skipped and reported. Each carry is recorded in `carried.json` in the state folder, which makes the step idempotent and lets it be undone.
 
-Desktop drops the Rewind snapshot records when it forks, so Rewind to a point before that fork cannot be restored in the new session; the old transcript still has them. `claude-profiles carry [--dry-run]` runs the step on demand.
+Desktop drops the Rewind snapshot records when it forks, so Rewind to a point before that fork cannot be restored in the new session; the old transcript still has them. `baton carry [--dry-run]` runs the step on demand.
 
 ## Local only
 
@@ -145,7 +145,7 @@ Local only never writes local scheduled-task or wake switches, `/Library/Managed
 
 ## Diagnostics
 
-**Check sessions** and `claude-profiles doctor [--json]` inspect the local installation without changing it. The report inventories ordinary local Code and Cowork cards separately from account-owned workers, and identifies ambiguous worker copies, missing working folders and missing adjacent Cowork history. Counts describe local inventory, not cross-profile portability. It is a local consistency check, not an authenticated test of cloud Project access or a promise that a Cowork session can resume elsewhere. After a Desktop update, use the report and a small real continuation task to validate the workflow you need.
+**Check sessions** and `baton doctor [--json]` inspect the local installation without changing it. The report inventories ordinary local Code and Cowork cards separately from account-owned workers, and identifies ambiguous worker copies, missing working folders and missing adjacent Cowork history. Counts describe local inventory, not cross-profile portability. It is a local consistency check, not an authenticated test of cloud Project access or a promise that a Cowork session can resume elsewhere. After a Desktop update, use the report and a small real continuation task to validate the workflow you need.
 
 ## Reading Claude Desktop data
 
@@ -159,4 +159,4 @@ Local only never writes local scheduled-task or wake switches, `/Library/Managed
 
 ## Testing
 
-All logic lives in `ClaudeProfilesKit` and takes a `Paths` value, so tests run against a temporary home directory and never touch real data. `Backup` accepts a `discard` closure so pruning can be tested without filling the real Trash. See [TESTING.md](TESTING.md).
+All logic lives in `BatonKit` and takes a `Paths` value, so tests run against a temporary home directory and never touch real data. `Backup` accepts a `discard` closure so pruning can be tested without filling the real Trash. See [TESTING.md](TESTING.md).

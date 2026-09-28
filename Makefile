@@ -29,10 +29,10 @@ release: app verify notarize package
 
 install: app
 	sh scripts/install-app.sh "$(DEST)"
-	@echo "Optional CLI: ln -sf \"$(DEST)/Claude Profiles.app/Contents/Helpers/claude-profiles\" /usr/local/bin/claude-profiles"
+	@echo "Optional CLI: ln -sf \"$(DEST)/Baton.app/Contents/Helpers/baton\" /usr/local/bin/baton"
 
 uninstall:
-	rm -rf "$(DEST)/Claude Profiles.app"
+	rm -rf "$(DEST)/Baton.app"
 	@echo "Profiles, sign-ins and launchers are kept. Remove them from the app first if you no longer need them."
 
 clean:

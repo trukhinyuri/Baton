@@ -8,7 +8,7 @@ When a session is resumed under a different account, Claude Code may append a `h
 
 ## Decision
 
-Claude Profiles never writes, edits or removes `history-suppression` records, and its own copies keep them. After a fork made by Desktop, it adds the sidecar files the fork left behind to the new session, adding files only and never touching the old session. It does not restore pre-fork Rewind snapshots into the new session, and it says so instead of implying the whole session moved.
+Baton never writes, edits or removes `history-suppression` records, and its own copies keep them. After a fork made by Desktop, it adds the sidecar files the fork left behind to the new session, adding files only and never touching the old session. It does not restore pre-fork Rewind snapshots into the new session, and it says so instead of implying the whole session moved.
 
 ## Consequences
 

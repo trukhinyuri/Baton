@@ -4,7 +4,7 @@ Status: accepted
 
 ## Context
 
-Claude Profiles sits next to accounts, transcripts and settings. Any network code, even an update check or crash reporter, would make it a party that could move that data, and would need its own privacy story.
+Baton sits next to accounts, transcripts and settings. Any network code, even an update check or crash reporter, would make it a party that could move that data, and would need its own privacy story.
 
 ## Decision
 

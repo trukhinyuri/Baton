@@ -3,10 +3,12 @@
 set -eu
 cd "$(dirname "$0")/.."
 DEST="${1:-$HOME/Applications/Claude Profiles}"
-APP="$DEST/Claude Profiles.app"
+APP="$DEST/Baton.app"
 BACKUPS="$HOME/Library/Application Support/Claude Profiles/AppBackups"
-if pgrep -f '/Claude Profiles.app/Contents/MacOS/ClaudeProfiles' >/dev/null 2>&1; then
-    echo 'Quit Claude Profiles from its menu before installing. Your Claude windows can stay open.' >&2
+# Baton, or the same app from before it was renamed.
+if pgrep -f '/Baton.app/Contents/MacOS/Baton' >/dev/null 2>&1 \
+    || pgrep -f '/Claude Profiles.app/Contents/MacOS/ClaudeProfiles' >/dev/null 2>&1; then
+    echo 'Quit Baton (or Claude Profiles, its earlier name) from its menu before installing. Your Claude windows can stay open.' >&2
     exit 1
 fi
 mkdir -p "$DEST"
@@ -18,16 +20,16 @@ cleanup() {
     rm -rf "$STAGE"
 }
 trap cleanup EXIT HUP INT TERM
-ditto 'build/Claude Profiles.app' "$STAGE/Claude Profiles.app"
-codesign --verify --strict "$STAGE/Claude Profiles.app"
+ditto 'build/Baton.app' "$STAGE/Baton.app"
+codesign --verify --strict "$STAGE/Baton.app"
 if [ -e "$APP" ]; then
     mkdir -p "$BACKUPS" && chmod 700 "$BACKUPS"
-    ZIP="$BACKUPS/Claude Profiles $(date +%Y-%m-%d-%H%M%S).zip"
+    ZIP="$BACKUPS/Baton $(date +%Y-%m-%d-%H%M%S).zip"
     ditto -c -k --keepParent "$APP" "$ZIP"
     unzip -tq "$ZIP" >/dev/null
     mv "$APP" "$STAGE/previous.app"
 fi
-mv "$STAGE/Claude Profiles.app" "$APP"
+mv "$STAGE/Baton.app" "$APP"
 echo "Installed to $APP"
 [ -z "$ZIP" ] || echo "Previous version saved as $ZIP"
 

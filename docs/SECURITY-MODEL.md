@@ -1,10 +1,10 @@
 # Security model
 
-What Claude Profiles can reach, what it does with it, and what it never does. Report a weakness privately through a [security advisory](../SECURITY.md).
+What Baton can reach, what it does with it, and what it never does. Report a weakness privately through a [security advisory](../SECURITY.md).
 
 ## Assets
 
-| Asset | Where | Claude Profiles |
+| Asset | Where | Baton |
 |---|---|---|
 | Sign-in: tokens, cookies, Keychain items | Each data directory, the Keychain | Never reads, copies, backs up or forwards them |
 | Account id | `config.json` → `lastKnownAccountUuid` | Reads this one key |
@@ -18,7 +18,7 @@ What Claude Profiles can reach, what it does with it, and what it never does. Re
 
 ## Boundaries
 
-- **No network.** No code in the app or CLI opens a connection. Links it hands to macOS (`claude://` to a Claude window, `https://github.com/…` for a problem report) are opened by macOS in the app the user chose; Claude Profiles sends nothing itself.
+- **No network.** No code in the app or CLI opens a connection. Links it hands to macOS (`claude://` to a Claude window, `https://github.com/…` for a problem report) are opened by macOS in the app the user chose; Baton sends nothing itself.
 - **No privilege.** No administrator rights, no helper tools, no macOS permissions (Accessibility, Automation, Full Disk Access). It runs as the user and touches only the user's files.
 - **Unmodified Claude.** Every window runs Anthropic's signed code; the app copy differs only by a Finder icon, and its signature still verifies. Nothing is injected, patched or preloaded.
 - **Closed-window writes.** Settings, interface stores and Local only keys are written only while that window's process is not running, checked right before the write. The LevelDB writer refuses to write while another process holds the database's `LOCK`, and only ever adds a new log file.
@@ -39,8 +39,8 @@ Release builds are universal, signed with a Developer ID and the hardened runtim
 
 ```sh
 shasum -a 256 -c SHA256SUMS.txt
-gh attestation verify ClaudeProfiles-v1.0.0.zip -R trukhinyuri/ClaudeProfiles
-spctl --assess --type execute -vv "/Applications/Claude Profiles.app"
+gh attestation verify Baton-v1.0.0.zip -R trukhinyuri/Baton
+spctl --assess --type execute -vv "/Applications/Baton.app"
 ```
 
 A build you make yourself is signed ad hoc, which is enough for your own Mac.

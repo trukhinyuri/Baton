@@ -1,18 +1,20 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+// The app's target is BatonApp, not Baton: on the default case-insensitive macOS disk, a Baton target and the baton
+// CLI would share one source folder and one build product. scripts/build-app.sh puts it in Baton.app/Contents/MacOS/Baton.
 let package = Package(
-    name: "ClaudeProfiles",
+    name: "Baton",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "ClaudeProfiles", targets: ["ClaudeProfiles"]),
-        .executable(name: "claude-profiles", targets: ["claude-profiles"]),
-        .library(name: "ClaudeProfilesKit", targets: ["ClaudeProfilesKit"]),
+        .executable(name: "BatonApp", targets: ["BatonApp"]),
+        .executable(name: "baton", targets: ["baton"]),
+        .library(name: "BatonKit", targets: ["BatonKit"]),
     ],
     targets: [
-        .target(name: "ClaudeProfilesKit"),
-        .executableTarget(name: "ClaudeProfiles", dependencies: ["ClaudeProfilesKit"]),
-        .executableTarget(name: "claude-profiles", dependencies: ["ClaudeProfilesKit"]),
-        .testTarget(name: "ClaudeProfilesKitTests", dependencies: ["ClaudeProfilesKit"], resources: [.copy("Fixtures")]),
+        .target(name: "BatonKit"),
+        .executableTarget(name: "BatonApp", dependencies: ["BatonKit"]),
+        .executableTarget(name: "baton", dependencies: ["BatonKit"]),
+        .testTarget(name: "BatonKitTests", dependencies: ["BatonKit"], resources: [.copy("Fixtures")]),
     ]
 )

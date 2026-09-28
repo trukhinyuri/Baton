@@ -1,15 +1,15 @@
 name: Report a problem
-description: Something in Claude Profiles did not work as described.
+description: Something in Baton did not work as described.
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        **Report a problem** in Claude Profiles (the footer, the menu bar or Help) or `claude-profiles report`
+        **Report a problem** in Baton (the footer, the menu bar or Help) or `baton report`
         fills in the Diagnostics field below. It replaces your home folder, user name, emails, account ids,
         profile labels and folder names, and leaves out session titles, transcripts and anything shaped like a
         token. Your own description is not changed, so leave out anything you would not post in public.
-        Security problems go to a [private advisory](https://github.com/trukhinyuri/ClaudeProfiles/security/advisories/new), not here.
+        Security problems go to a [private advisory](https://github.com/trukhinyuri/Baton/security/advisories/new), not here.
   - type: textarea
     id: what-happened
     attributes:

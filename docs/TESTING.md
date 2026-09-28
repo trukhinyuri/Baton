@@ -10,9 +10,9 @@ scripts/check-cask.sh     # brew style and brew audit on the cask, in a throwawa
 
 ## The suite never touches real data
 
-Every piece of logic lives in `ClaudeProfilesKit` and takes a `Paths` value. Tests build a `Sandbox`: a temporary home folder with a main Claude data directory, profile data directories, `~/.claude` and the state folder, filled with the files a test needs. Nothing reads `~/Library/Application Support/Claude*` or `~/.claude`, and nothing opens a real Claude window. `Backup` takes a `discard` closure, so pruning is tested without filling the real Trash.
+Every piece of logic lives in `BatonKit` and takes a `Paths` value. Tests build a `Sandbox`: a temporary home folder with a main Claude data directory, profile data directories, `~/.claude` and the state folder, filled with the files a test needs. Nothing reads `~/Library/Application Support/Claude*` or `~/.claude`, and nothing opens a real Claude window. `Backup` takes a `discard` closure, so pruning is tested without filling the real Trash.
 
-Fixtures in `Tests/ClaudeProfilesKitTests/Fixtures` are shaped like real Claude data with every identifier, email, path and title replaced. A new fixture taken from a real Mac must be sanitized the same way before it is committed; the problem-report tests run a leak scanner over fixtures like these.
+Fixtures in `Tests/BatonKitTests/Fixtures` are shaped like real Claude data with every identifier, email, path and title replaced. A new fixture taken from a real Mac must be sanitized the same way before it is committed; the problem-report tests run a leak scanner over fixtures like these.
 
 ## Writing a test
 
@@ -30,10 +30,10 @@ If `swift test` stops with *plugin for module 'TestingMacros' not found*, the bu
 
 ## Checking a build
 
-`scripts/verify-build.sh` checks that both binaries are universal (`arm64 x86_64`), signed with the hardened runtime, that the signature verifies, that `Info.plist` records the commit, and that `claude-profiles --version` runs natively and under Rosetta and reports the bundle's version. When `build/SHA256SUMS.txt` exists, it checks the archive against it.
+`scripts/verify-build.sh` checks that both binaries are universal (`arm64 x86_64`), signed with the hardened runtime, that the signature verifies, that `Info.plist` records the commit, and that `baton --version` runs natively and under Rosetta and reports the bundle's version. When `build/SHA256SUMS.txt` exists, it checks the archive against it.
 
 Changes to the app's windows are also checked by hand: run it with sample data, which needs no accounts:
 
 ```sh
-open -n --env CLAUDE_PROFILES_DEMO=1 "build/Claude Profiles.app"
+open -n --env BATON_DEMO=1 "build/Baton.app"
 ```

@@ -1,4 +1,4 @@
-# Why Claude Profiles exists
+# Why Baton exists
 
 *A draft in the author's voice. Yuri edits this.*
 
