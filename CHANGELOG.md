@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — 2026-09-28
+
+- **Continue work…** lists the local Code sessions, Project branches and Cowork tasks of every window, most recent first, with search. Pick one and a subscription to continue in; the one with the most weekly headroom is preselected and those at their limit are marked
+- A Code session or Project branch opens as the same session in the chosen window, which is opened first if needed. The transcript is shared, so nothing is copied
+- A Cowork task continues as a new task in the chosen window with a continuation prompt, its full history as `history.md` and copies of the files it was given and made. Nothing is sent: you review and send it there. What cannot be carried over (connectors, schedules, Project settings, files over the size limits) is listed in the history
+- When an open subscription reaches its five-hour or weekly limit, a banner offers to continue its work in the subscription with the most headroom
+- A conversation written to in the last minute is flagged as possibly still running; continuing a Code session then needs confirmation
+- `claude-profiles conversations [--all]` and `claude-profiles continue <id|last> --to <profile> [--anyway]` do the same from the command line
+- Continuing needs no macOS permissions: the chosen window receives a `claude://` link that only it handles
+- A window that opens a conversation it had no card for makes its own card; the older copy in that window is backed up and retired, other windows don't get a second card for the same conversation, and deleting either card deletes the conversation
+- Opening a profile no longer fails when sessions can't be shared first; the window opens and the problem is reported
+- MCP servers, extensions and SSH connections are merged one by one, keeping what was added or changed only in a profile; SSH host trust stays with each profile
+- App copies are rebuilt in a staging bundle, verified and swapped in atomically; the previous copy is restored if the new one fails verification
+- A closed profile's sessions are shared right before it starts, so launchers don't depend on the app's next background sync
+- The installer keeps the previous app as a ZIP in `~/Library/Application Support/Claude Profiles/AppBackups` (the three latest) instead of runnable `.previous-*.app` copies beside the app, and moves those left by 0.2.0 to the Trash
+
 ## 0.2.0 — 2026-09-27
 
 - Installation stages and verifies the new app and retains the previous app for rollback; a running manager must be quit first, while Claude windows can remain open

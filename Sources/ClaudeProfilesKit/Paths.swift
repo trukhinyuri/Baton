@@ -22,10 +22,15 @@ public struct Paths: Sendable, Equatable {
     /// Data directory of the main Claude Desktop app (the one you open from /Applications).
     public var mainDataDir: URL { applicationSupport.appending(path: "Claude", directoryHint: .isDirectory) }
 
+    /// Claude Code conversations (`<folder>/<session>.jsonl`), shared by every Claude window on this Mac.
+    public var claudeProjectsDir: URL { home.appending(path: ".claude/projects", directoryHint: .isDirectory) }
+
     /// Claude Profiles's own state: profile registry and backups.
     public var stateDir: URL { applicationSupport.appending(path: "Claude Profiles", directoryHint: .isDirectory) }
     public var registryFile: URL { stateDir.appending(path: "profiles.json") }
     public var backupsDir: URL { stateDir.appending(path: "Backups", directoryHint: .isDirectory) }
+    /// Histories and files prepared for continuing a conversation in another profile.
+    public var handoffsDir: URL { stateDir.appending(path: "Handoffs", directoryHint: .isDirectory) }
 
     /// Each profile's Claude Desktop data (sign-in, windows, caches) lives in its own directory here.
     public var profilesDir: URL { stateDir.appending(path: "Profiles", directoryHint: .isDirectory) }

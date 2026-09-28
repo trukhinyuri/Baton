@@ -9,6 +9,8 @@ public enum ProfileError: LocalizedError, Equatable {
     case notFound(String)
     case cloneFailed(String)
     case windowStillRunning(String)
+    case notSignedIn(String)
+    case sameWindow(String)
 
     public var errorDescription: String? {
         switch self {
@@ -19,6 +21,8 @@ public enum ProfileError: LocalizedError, Equatable {
         case .notFound(let id): "No profile “\(id)”."
         case .cloneFailed(let reason): "Couldn’t create the app copy: \(reason)"
         case .windowStillRunning(let label): "Claude \(label) is open without its profile and did not quit. Finish or stop its active work, close that window, then open the profile again."
+        case .notSignedIn(let label): "Sign in to Claude \(label) first, then continue there."
+        case .sameWindow(let label): "This already belongs to Claude \(label). Choose another profile to continue in."
         }
     }
 }
@@ -97,6 +101,16 @@ public final class ProfileManager: @unchecked Sendable {
 
     public var dataDirs: [URL] {
         [paths.mainDataDir] + profiles.map { paths.dataDir(for: $0.id) }.filter { fm.fileExists(atPath: $0.path) }
+    }
+
+    /// Every window's data directory with its id: `"main"` or the profile id.
+    public var windows: [(id: String, dataDir: URL)] {
+        [("main", paths.mainDataDir)] + profiles.map { ($0.id, paths.dataDir(for: $0.id)) }.filter { fm.fileExists(atPath: $0.1.path) }
+    }
+
+    /// `"MAIN"` or the profile's label.
+    public func label(of windowID: String) -> String {
+        windowID == "main" ? "MAIN" : profiles.first { $0.id == windowID }?.label ?? windowID
     }
 
     // MARK: Status
@@ -228,7 +242,8 @@ public final class ProfileManager: @unchecked Sendable {
     // MARK: Open
 
     /// Brings the profile's window forward, starting it first if needed.
-    public func open(_ id: String) async throws {
+    /// - Parameter link: a `claude://` link for that window to handle, such as a session to open.
+    public func open(_ id: String, link: URL? = nil) async throws {
         lock.withLock { openWarning = nil }
         guard let profile = profiles.first(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         let engine = paths.engine(for: profile.id)
@@ -244,7 +259,7 @@ public final class ProfileManager: @unchecked Sendable {
             guard strays.allSatisfy(\.isTerminated) else { throw ProfileError.windowStillRunning(profile.label) }
         }
         if let window = running.first(where: { window(of: profile.id, is: $0) }) {
-            window.app?.activate()
+            if let link { try await deliver(link, to: engine) } else { window.app?.activate() }
             return
         }
         try lock.withLock {
@@ -255,7 +270,11 @@ public final class ProfileManager: @unchecked Sendable {
             }
             // The app and the CLI may open a profile at the same moment; the merges read and write without Claude's locks.
             _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
+                // A launcher or CLI can start a profile without the manager's background timer.
+                // Claude reads its cards at startup, so share sessions first; a failure must not keep the window closed.
                 var problems: [String] = []
+                do { _ = try prepareSessionsForLaunch() }
+                catch { problems.append("Sessions: \(error.localizedDescription)") }
                 do { _ = try SettingsSync(paths: paths).run(into: paths.dataDir(for: profile.id)) }
                 catch { problems.append("Setup: \(error.localizedDescription)") }
                 do { _ = try InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id) }
@@ -268,11 +287,95 @@ public final class ProfileManager: @unchecked Sendable {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         configuration.arguments = ["--user-data-dir=\(paths.dataDir(for: profile.id).path)"]
-        _ = try await NSWorkspace.shared.openApplication(at: engine, configuration: configuration)
+        if let link {
+            _ = try await NSWorkspace.shared.open([link], withApplicationAt: engine, configuration: configuration)
+        } else {
+            _ = try await NSWorkspace.shared.openApplication(at: engine, configuration: configuration)
+        }
     }
 
-    public func openMain() async throws {
-        _ = try await NSWorkspace.shared.openApplication(at: paths.claudeApp, configuration: NSWorkspace.OpenConfiguration())
+    public func openMain(link: URL? = nil) async throws {
+        lock.withLock { openWarning = nil }
+        if runningClaudes().contains(where: {
+            $0.uses(dataDir: paths.mainDataDir, mainDataDir: paths.mainDataDir, bundle: paths.claudeApp)
+        }) {
+            if let link { try await deliver(link, to: paths.claudeApp) }
+            else { _ = try await NSWorkspace.shared.openApplication(at: paths.claudeApp, configuration: NSWorkspace.OpenConfiguration()) }
+            return
+        }
+        do {
+            _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
+                _ = try prepareSessionsForLaunch()
+            }
+        } catch {
+            lock.withLock { openWarning = "Claude opened, but sessions could not be shared first: \(error.localizedDescription)" }
+        }
+        // Profile windows run the same app; a new instance keeps this one from reusing theirs.
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        if let link {
+            _ = try await NSWorkspace.shared.open([link], withApplicationAt: paths.claudeApp, configuration: configuration)
+        } else {
+            _ = try await NSWorkspace.shared.openApplication(at: paths.claudeApp, configuration: configuration)
+        }
+    }
+
+    /// Hands a `claude://` link to the running window of the app at `app`. macOS delivers it to that exact copy,
+    /// so no other window sees it and no permission is needed.
+    private func deliver(_ link: URL, to app: URL) async throws {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        _ = try await NSWorkspace.shared.open([link], withApplicationAt: app, configuration: configuration)
+    }
+
+    // MARK: Continue
+
+    public enum ContinueResult: Sendable {
+        /// The same session opened in the destination window.
+        case openedSession
+        /// A new Cowork task is waiting in the destination window with the history and files attached, not sent.
+        case startedCoworkTask(CoworkHandoff)
+    }
+
+    /// Continues `conversation` in `destination` (`"main"` or a profile id), opening that window if needed.
+    /// Code sessions and Project branches open as the same session; Cowork tasks become a new task there.
+    public func continueConversation(_ conversation: Conversation, in destination: String) async throws -> ContinueResult {
+        let label = label(of: destination)
+        guard destination == "main" || profiles.contains(where: { $0.id == destination }) else { throw ProfileError.notFound(destination) }
+        let dataDir = destination == "main" ? paths.mainDataDir : paths.dataDir(for: destination)
+        guard DesktopData.accountID(in: dataDir) != nil else { throw ProfileError.notSignedIn(label) }
+        if conversation.kind != .code, conversation.ownerID == destination { throw ProfileError.sameWindow(label) }
+
+        let link: URL
+        let result: ContinueResult
+        switch conversation.kind {
+        case .code, .projectBranch:
+            link = ClaudeLink.resume(conversation.sessionID)
+            result = .openedSession
+        case .cowork:
+            let handoff = try CoworkHandoff.prepare(conversation, sourceLabel: self.label(of: conversation.ownerID ?? "main"), paths: paths)
+            link = handoff.link
+            result = .startedCoworkTask(handoff)
+        }
+        if destination == "main" { try await openMain(link: link) } else { try await open(destination, link: link) }
+        return result
+    }
+
+    /// Local conversations of every window, most recent first.
+    public func conversations() -> [Conversation] {
+        ConversationIndex.scan(paths: paths, windows: windows)
+    }
+
+    /// Refreshes session cards before a cold launch, even when the manager is not running.
+    /// Opening a window never propagates deletions or migrates account-owned Project/Cowork workers.
+    /// Errors abort the launch instead of silently presenting stale history as successfully shared.
+    @discardableResult
+    func prepareSessionsForLaunch() throws -> SessionSync.Report {
+        guard let report = try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: true, {
+            createSessionFolders()
+            return try SessionSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: false)
+        }) else { throw POSIXError(.EWOULDBLOCK) }
+        return report
     }
 
     // MARK: Remove
@@ -387,12 +490,7 @@ public final class ProfileManager: @unchecked Sendable {
 
     private func cloneEngine(for profile: Profile) throws {
         let engine = paths.engine(for: profile.id)
-        try fm.createDirectory(at: paths.enginesDir, withIntermediateDirectories: true)
-        if fm.fileExists(atPath: engine.path) { try fm.removeItem(at: engine) }
-        if clonefile(paths.claudeApp.path, engine.path, 0) != 0 {
-            let reason = String(cString: strerror(errno))
-            do { try fm.copyItem(at: paths.claudeApp, to: engine) } catch { throw ProfileError.cloneFailed("\(reason); \(error.localizedDescription)") }
-        }
+        try EngineInstall.install(from: paths.claudeApp, to: engine)
         NSWorkspace.shared.setIcon(icon(for: profile), forFile: engine.path, options: [])
     }
 
@@ -475,7 +573,10 @@ enum FileLock {
         let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR, 0o644)
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { close(descriptor) }
-        guard flock(descriptor, LOCK_EX | (blocking ? 0 : LOCK_NB)) == 0 else { return nil }
+        guard flock(descriptor, LOCK_EX | (blocking ? 0 : LOCK_NB)) == 0 else {
+            if !blocking && (errno == EWOULDBLOCK || errno == EAGAIN) { return nil }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         defer { flock(descriptor, LOCK_UN) }
         return try body()
     }

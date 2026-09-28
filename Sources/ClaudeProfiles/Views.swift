@@ -192,12 +192,35 @@ struct EmptyHint: View {
     }
 }
 
+struct LimitBanner: View {
+    let tired: ProfileStatus
+    let best: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.orange)
+            Text("\(tired.isMain ? "Claude (main)" : "Claude \(tired.label)") has reached its usage limit.")
+                .font(.callout.weight(.medium))
+            Spacer()
+            Button("Continue in \(best)…", action: action)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.12)))
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let tired = model.limitReached, let best = model.bestDestination(excluding: tired.id) {
+                LimitBanner(tired: tired, best: model.label(of: best)) { model.isContinuing = true }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
+            }
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(model.statuses) { status in
@@ -236,7 +259,7 @@ struct ContentView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Subscriptions").font(.title2.weight(.semibold))
-                Text("Continue local work with another subscription. Cloud projects stay in their account; use a context handoff to continue elsewhere.")
+                Text("When one subscription reaches its limit, continue any local Code session, Project branch or Cowork task in another.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -261,6 +284,9 @@ struct ContentView: View {
             if let message = model.busyMessage {
                 ProgressView().controlSize(.small)
                 Text(message)
+            } else if let notice = model.notice {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(notice).lineLimit(2)
             } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 Text(problem).lineLimit(2).textSelection(.enabled)

@@ -10,19 +10,26 @@ import Foundation
 /// does not grant access to its server project or bridge. Ambiguous copies made by old releases are preserved.
 ///
 /// Cards are copied, not symlinked: Claude Desktop creates these directories with `mkdir` and fails on symlinks.
+///
+/// A window that did not load a card at launch imports the conversation under a new card named after its
+/// transcript (`local_<cliSessionId>.json`) when asked to open it. A folder therefore never gets a second card for a
+/// transcript it already has a card for, the older copy next to such an imported card is retired, and deleting
+/// either card deletes the conversation.
 public struct SessionSync: Sendable {
     public struct Report: Equatable, Sendable {
         public var pairs = 0
         public var cardsWritten = 0
         public var cardsRemoved = 0
         public var tombstonesWritten = 0
+        /// Older copies retired next to the card a window made when it opened the same conversation.
+        public var duplicatesRetired = 0
         public var archiveIndexesWritten = 0
         public var backedUp = 0
         /// Native Project / Remote Control workers shared only within one account and organization.
         public var accountBoundCards = 0
         /// Existing copies in several scopes are preserved without choosing an owner.
         public var ambiguousAccountBoundCards = 0
-        public var changes: Int { cardsWritten + cardsRemoved + tombstonesWritten + archiveIndexesWritten }
+        public var changes: Int { cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten }
     }
 
     static let sessionsFolder = "claude-code-sessions"
@@ -46,7 +53,9 @@ public struct SessionSync: Sendable {
         let pairs = try self.pairs()
         report.pairs = pairs.count
 
-        var cards: [String: (modified: Date, data: Data)] = [:]
+        var cards: [String: (modified: Date, data: Data, transcript: String?)] = [:]
+        var transcriptsByFolder: [String: [String: String]] = [:]   // folder path → card name → transcript
+        var importedByFolder: [String: Set<String>] = [:]           // folder path → cards a window imported
         var tombstones = Set<String>()
         var tombstonesByScope: [String: Set<String>] = [:]
         let scopeFile = paths.stateDir.appending(path: "code-native-session-scopes.json")
@@ -64,12 +73,17 @@ public struct SessionSync: Sendable {
                 let name = url.lastPathComponent
                 if name.hasPrefix("local_"), name.hasSuffix(".json") {
                     let data = try Data(contentsOf: url)
+                    let facts = Self.facts(of: data)
                     observed.insert(name)
                     cardScopes[name, default: []].insert(scope)
-                    if Self.isAccountBound(data) { accountBound.insert(name) }
+                    if facts.accountBound { accountBound.insert(name) }
+                    if let transcript = facts.transcript {
+                        transcriptsByFolder[pair.path, default: [:]][name] = transcript
+                        if facts.imported, Self.cardName(for: transcript) == name { importedByFolder[pair.path, default: []].insert(name) }
+                    }
                     guard let modified = SyncFolders.modificationDate(url) else { continue }
                     if let known = cards[name], known.modified >= modified { continue }
-                    cards[name] = (modified, data)
+                    cards[name] = (modified, data, facts.transcript)
                 } else if name.hasPrefix("deleted_") {
                     tombstones.insert(name)
                     tombstonesByScope[scope, default: []].insert(name)
@@ -110,9 +124,31 @@ public struct SessionSync: Sendable {
                 ?? pair.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             let scope = Self.scope(of: pair)
             let applicableTombstones = markers(in: scope)
-            let deletedNames = Set(applicableTombstones.map { Self.cardName(for: String($0.dropFirst("deleted_".count))) })
-            let present = Set(try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil).map(\.lastPathComponent))
-            for (name, card) in cards where permitted(name, in: scope) && !deletedNames.contains(name) {
+            var deletedNames = Set(applicableTombstones.map { Self.cardName(for: String($0.dropFirst("deleted_".count))) })
+            // Deleting either card of a conversation that a window imported under its transcript deletes both.
+            let deletedTranscripts = Set(deletedNames.compactMap { cards[$0]?.transcript ?? Self.transcript(inCardName: $0) })
+            // Project and Remote Control workers stay with their own card and tombstone.
+            deletedNames.formUnion(cards.filter { !accountBound.contains($0.key) && $0.value.transcript.map(deletedTranscripts.contains) == true }.keys)
+            var present = Set(try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil).map(\.lastPathComponent))
+            var held = transcriptsByFolder[pair.path] ?? [:]
+            // The window here imported this conversation after launch: its older copy is not loaded and would
+            // show the conversation twice at the next launch.
+            for imported in importedByFolder[pair.path] ?? [] {
+                guard let transcript = held[imported] else { continue }
+                for (name, other) in held where other == transcript && name != imported && !accountBound.contains(name) {
+                    let target = pair.appending(path: name)
+                    if try backup.save(target, everyTime: true) { report.backedUp += 1 }
+                    try fm.removeItem(at: target)
+                    held[name] = nil
+                    present.remove(name)
+                    report.duplicatesRetired += 1
+                }
+            }
+            var heldTranscripts = Set(held.values)
+            // Newest first, so a folder that gets one of two cards for a conversation gets the current one.
+            for (name, card) in cards.sorted(by: { $0.value.modified > $1.value.modified })
+            where permitted(name, in: scope) && !deletedNames.contains(name) {
+                if !present.contains(name), let transcript = card.transcript, heldTranscripts.contains(transcript) { continue }
                 let target = pair.appending(path: name)
                 // A native worker's cwd is coupled to remoteControlSpawn.folder and its server bridge.
                 // Even within one account/organization, preserve the complete card byte-for-byte.
@@ -132,6 +168,7 @@ public struct SessionSync: Sendable {
                 }
                 try data.write(to: target, options: .atomic)
                 try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: target.path)
+                if let transcript = card.transcript { heldTranscripts.insert(transcript) }
                 report.cardsWritten += 1
             }
             if propagateDeletions {
@@ -206,9 +243,28 @@ public struct SessionSync: Sendable {
         return name.hasSuffix(".json") ? name : name + ".json"
     }
 
-    static func isAccountBound(_ data: Data) -> Bool {
-        guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
-        return isAccountBoundCard(card)
+    static func isAccountBound(_ data: Data) -> Bool { facts(of: data).accountBound }
+
+    struct CardFacts {
+        var accountBound = false
+        /// The Claude Code conversation the card opens (`cliSessionId`).
+        var transcript: String?
+        /// Created by a window that opened an existing conversation it had no loaded card for.
+        var imported = false
+    }
+
+    static func facts(of data: Data) -> CardFacts {
+        guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return CardFacts() }
+        return CardFacts(accountBound: isAccountBoundCard(card),
+                         transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
+                         imported: card["adoptedFromOtherSurface"] as? Bool == true)
+    }
+
+    /// `local_<uuid>.json` names the transcript it was imported from; any other name gives `nil`.
+    static func transcript(inCardName name: String) -> String? {
+        guard name.hasPrefix("local_"), name.hasSuffix(".json") else { return nil }
+        let id = String(name.dropFirst("local_".count).dropLast(".json".count))
+        return UUID(uuidString: id) == nil ? nil : id.lowercased()
     }
 
     static func isAccountBoundCard(_ card: [String: Any]) -> Bool {

@@ -4,14 +4,13 @@ import SwiftUI
 
 @MainActor
 final class ContinueWorkForm: ObservableObject {
-    @Published var source = "main"
+    @Published var search = ""
+    @Published var selection: String?
     @Published var destination = ""
-    @Published var title = ""
-    @Published var context = ""
-    @Published var folder = ""
-    @Published var sourceURL = ""
-    @Published var message = ""
-    @Published var opening = false
+    @Published var working = false
+    @Published var confirmedActive: String?
+    @Published var problem: String?
+    @Published var copied = false
 }
 
 struct ContinueWorkSheet: View {
@@ -19,71 +18,210 @@ struct ContinueWorkSheet: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var form = ContinueWorkForm()
 
+    private var filtered: [Conversation] {
+        let query = form.search.trimmingCharacters(in: .whitespaces)
+        let all = model.conversations
+        guard !query.isEmpty else { return Array(all.prefix(200)) }
+        return all.filter { c in
+            c.title.localizedCaseInsensitiveContains(query) || c.folders.contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
+
+    private var selected: Conversation? { model.conversations.first { $0.id == form.selection } }
+
+    /// Signed-in windows the selected conversation can move to.
+    private var destinations: [ProfileStatus] {
+        model.statuses.filter { $0.isSignedIn && (selected?.kind == .code || $0.id != selected?.ownerID) }
+    }
+
+    private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.label ?? "" }
+
+    private var needsConfirmation: Bool {
+        guard let selected else { return false }
+        return selected.isActive() && form.confirmedActive != selected.id
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Continue work in another profile").font(.title2.bold())
-            Text("Local Code: stop the current turn, sync, then open the same session in your chosen profile. If it was already open, restart that Claude window after its tasks finish.")
+            Text("Continue work in another subscription").font(.title2.bold())
+            Text("Choose what to continue and where. The other window opens it for you; nothing is sent on your behalf.")
                 .font(.callout).foregroundStyle(.secondary)
-            HStack {
-                Button("Share local sessions now") { model.syncNow() }
-            }
-            Divider()
-            Text("Projects and Cowork: continue with context").font(.headline)
-            Text("Cloud history stays with its account; local Cowork history and runtime stay in their original profile. Continue in a new conversation with reviewed context: ask the source Claude for a handoff, paste it below, and choose the destination. Files and connector access must be available there separately.")
-                .font(.callout).foregroundStyle(.secondary)
-            Button("Copy handoff request for source Claude") {
-                copy(Handoff.request); form.message = "Request copied. Paste it in the original conversation, then review and paste its answer below. If its limit is reached, use your own summary from the visible history and files."
-            }
-            HStack {
-                Picker("From", selection: $form.source) { ForEach(model.statuses) { Text($0.label).tag($0.id) } }
-                Picker("To", selection: $form.destination) {
-                    Text("Choose a profile").tag("")
-                    ForEach(model.statuses.filter { $0.isSignedIn }) { Text($0.label).tag($0.id) }
+
+            TextField("Search conversations", text: $form.search)
+                .textFieldStyle(.roundedBorder)
+
+            List(selection: $form.selection) {
+                ForEach(filtered) { conversation in
+                    ConversationRow(conversation: conversation, owner: conversation.ownerID.map(model.label(of:)))
+                        .tag(conversation.id)
                 }
             }
-            TextField("Task title", text: $form.title)
-            TextField("Original claude.ai conversation or project link (optional)", text: $form.sourceURL)
-            TextField("Existing working folder, absolute path (optional)", text: $form.folder)
-            Text("Reviewed context: objective, decisions, evidence, remaining work and next action").font(.caption)
-            TextEditor(text: $form.context).frame(minHeight: 150).border(.separator)
-            Text("Pause work in the source before continuing. Review what you share with the destination account. Nothing is sent automatically.")
-                .font(.caption).foregroundStyle(.secondary)
-            if !form.message.isEmpty { Text(form.message).font(.callout).textSelection(.enabled) }
-            HStack {
-                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            .listStyle(.bordered(alternatesRowBackgrounds: true))
+            .frame(minHeight: 180)
+            .overlay {
+                if model.isLoadingConversations && model.conversations.isEmpty {
+                    ProgressView("Looking for conversations…")
+                } else if filtered.isEmpty {
+                    Text(form.search.isEmpty ? "No local conversations yet." : "Nothing matches “\(form.search)”.").foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Text("Continue in")
+                Picker("Continue in", selection: $form.destination) {
+                    ForEach(destinations) { status in
+                        Text(destinationTitle(status)).tag(status.id)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 320)
                 Spacer()
-                Button(form.opening ? "Opening…" : "Save handoff & open destination") { saveAndOpen() }
+            }
+
+            if let selected {
+                Text(explanation(selected)).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if selected.isActive() {
+                    Label(selected.kind == .cowork
+                          ? "This task was working less than a minute ago; the attached history may miss its last steps."
+                          : "This session was working less than a minute ago. Stop it in its window first, so two windows don't write to it at once.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.orange)
+                }
+            }
+            if let problem = form.problem { Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+
+            Divider()
+            HStack(spacing: 8) {
+                Button(form.copied ? "Request copied" : "Copy handoff request") { copyRequest() }
+                    .help("For a claude.ai chat or a cloud Project, which are not on this Mac: paste the request in that chat, then paste its answer into a new chat in the other subscription.")
+                Text("for claude.ai chats").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(primaryTitle) { go() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(form.opening || form.title.isEmpty || form.context.isEmpty || form.destination.isEmpty || form.destination == form.source)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(form.working || selected == nil || form.destination.isEmpty || !destinations.contains { $0.id == form.destination })
             }
         }
-        .padding(22).frame(width: 680)
+        .padding(22)
+        .frame(width: 740, height: 500)
+        .onAppear {
+            model.loadConversations()
+            chooseDefaults()
+        }
+        .onChange(of: model.conversations) { chooseDefaults() }
+        .onChange(of: form.selection) {
+            form.problem = nil
+            if !destinations.contains(where: { $0.id == form.destination }) { form.destination = model.bestDestination(excluding: selected?.ownerID) ?? "" }
+        }
     }
 
-    private func copy(_ text: String) {
+    private var primaryTitle: String {
+        if form.working { return "Opening…" }
+        if needsConfirmation && selected?.kind != .cowork { return "Continue Anyway" }
+        return destinationLabel.isEmpty ? "Continue" : "Continue in \(destinationLabel)"
+    }
+
+    private func chooseDefaults() {
+        if form.selection == nil || selected == nil { form.selection = model.preselectedConversation ?? model.conversations.first?.id }
+        if form.destination.isEmpty || !destinations.contains(where: { $0.id == form.destination }) {
+            form.destination = model.bestDestination(excluding: selected?.ownerID) ?? ""
+        }
+    }
+
+    private func destinationTitle(_ status: ProfileStatus) -> String {
+        let name = status.isMain ? "Claude (main)" : "Claude \(status.label)"
+        if model.isAtLimit(status) { return name + " · limit reached" }
+        guard let week = status.usage?.week else { return name }
+        return name + " · \(week)% of week used"
+    }
+
+    private func explanation(_ conversation: Conversation) -> String {
+        let to = "Claude \(destinationLabel.isEmpty ? "…" : destinationLabel)"
+        let from = "Claude \(conversation.ownerID.map(model.label(of:)) ?? "")"
+        switch conversation.kind {
+        case .code:
+            return "Opens this same session in \(to). Its history is shared by all your subscriptions, so nothing is copied."
+        case .projectBranch:
+            return "Opens this branch's history as a regular Code session in \(to). The Project and its other branches stay with \(from)."
+        case .cowork:
+            return "Starts a new Cowork task in \(to) with this task's history and files attached, for you to review and send. The original task, its connectors and schedules stay with \(from)."
+        }
+    }
+
+    private func copyRequest() {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        NSPasteboard.general.setString(Handoff.request, forType: .string)
+        form.copied = true
     }
 
-    private func saveAndOpen() {
-        guard let target = model.statuses.first(where: { $0.id == form.destination && $0.isSignedIn }),
-              let origin = model.statuses.first(where: { $0.id == form.source }) else { return }
-        let handoff = Handoff(title: form.title, source: origin.label, destination: target.label,
-                              context: form.context, folder: form.folder, sourceURL: form.sourceURL)
-        do {
-            let file = try handoff.save(paths: model.manager.paths)
-            copy(handoff.prompt)
-            form.message = "Saved to \(file.path). Continuation prompt copied. Paste it in a new conversation in \(target.label); review it before sending."
-            form.opening = true
-            Task {
-                defer { form.opening = false }
-                do {
-                    if target.isMain { try await model.manager.openMain() }
-                    else { try await model.manager.open(target.id) }
-                    if !target.isMain, let warning = model.manager.lastOpenWarning { form.message += "\n" + warning }
-                } catch { form.message += "\nThe profile could not be opened: \(error.localizedDescription). The handoff is saved." }
+    private func go() {
+        guard let conversation = selected else { return }
+        if needsConfirmation && conversation.kind != .cowork { form.confirmedActive = conversation.id; return }
+        form.working = true
+        form.problem = nil
+        let manager = model.manager
+        let target = form.destination
+        let label = destinationLabel
+        Task {
+            do {
+                let result = try await manager.continueConversation(conversation, in: target)
+                switch result {
+                case .openedSession:
+                    model.show(notice: "Opened “\(conversation.title)” in Claude \(label).")
+                case .startedCoworkTask:
+                    model.show(notice: "A new Cowork task with the history attached is waiting in Claude \(label). Review it and send it there.")
+                }
+                model.preselectedConversation = nil
+                dismiss()
+            } catch {
+                form.problem = error.localizedDescription
             }
-        } catch { form.message = error.localizedDescription }
+            form.working = false
+        }
+    }
+}
+
+struct ConversationRow: View {
+    let conversation: Conversation
+    let owner: String?
+
+    private var icon: String {
+        switch conversation.kind {
+        case .code: "chevron.left.forwardslash.chevron.right"
+        case .projectBranch: "arrow.triangle.branch"
+        case .cowork: "sparkles"
+        }
+    }
+
+    private var details: String {
+        var parts: [String]
+        switch conversation.kind {
+        case .code: parts = ["Code"]
+        case .projectBranch: parts = ["Project branch · \(owner ?? "")"]
+        case .cowork: parts = ["Cowork · \(owner ?? "")"]
+        }
+        if let folder = conversation.folders.first {
+            parts.append((folder as NSString).abbreviatingWithTildeInPath)
+        } else if conversation.kind == .code {
+            parts.append("No folder")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conversation.title).lineLimit(1).truncationMode(.tail)
+                Text(details).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer()
+            Text(conversation.lastActivity, format: .relative(presentation: .named))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
     }
 }
 

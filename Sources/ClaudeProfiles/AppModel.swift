@@ -13,6 +13,12 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isAdding = false
     @Published var isContinuing = false
+    @Published private(set) var conversations: [Conversation] = []
+    @Published private(set) var isLoadingConversations = false
+    /// Selected when the continue sheet opens, if still available.
+    @Published var preselectedConversation: String?
+    @Published private(set) var notice: String?
+    private var noticeTask: Task<Void, Never>?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
     @Published private(set) var setupWarning: String?
@@ -30,9 +36,12 @@ final class AppModel: ObservableObject {
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/claude-profiles")
         manager = ProfileManager(cliPath: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil)
         reload()
-        // Documentation screenshots: CLAUDE_PROFILES_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add".
+        // Documentation screenshots: CLAUDE_PROFILES_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
+        // and …_DEMO_SHEET=continue opens "Continue work…".
         guard !isDemo else {
-            isAdding = ProcessInfo.processInfo.environment["CLAUDE_PROFILES_DEMO_SHEET"] == "1"
+            let sheet = ProcessInfo.processInfo.environment["CLAUDE_PROFILES_DEMO_SHEET"]
+            isAdding = sheet == "1"
+            isContinuing = sheet == "continue"
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 NSApp.windows.first { $0.identifier?.rawValue == "main" }?.setContentSize(NSSize(width: 900, height: 530))
             }
@@ -71,6 +80,47 @@ final class AppModel: ObservableObject {
         }
         guard candidates.count > 1 else { return nil }
         return candidates.min { ($0.usage?.week ?? 100) < ($1.usage?.week ?? 100) }?.id
+    }
+
+    /// Out of five-hour or weekly quota by its latest recorded usage.
+    func isAtLimit(_ status: ProfileStatus, now: Date = Date()) -> Bool {
+        guard status.isSignedIn, let usage = status.usage else { return false }
+        if let five = usage.fiveHour, five >= 100, !usage.isFiveHourStale(now: now) { return true }
+        if let week = usage.week, week >= 100, now.timeIntervalSince(usage.sampledAt) < 7 * 86_400 { return true }
+        return false
+    }
+
+    /// An open subscription that has reached its limit, so its work may need to continue elsewhere.
+    var limitReached: ProfileStatus? { statuses.first { $0.isRunning && isAtLimit($0) } }
+
+    /// Where to continue by default: the signed-in subscription with the most weekly headroom that isn't at its limit.
+    /// Subscriptions without usage data yet come after those with known headroom.
+    func bestDestination(excluding excluded: String?) -> String? {
+        let candidates = statuses.filter { $0.isSignedIn && $0.id != excluded && !isAtLimit($0) }
+        return candidates.min { ($0.usage?.week ?? 101) < ($1.usage?.week ?? 101) }?.id
+    }
+
+    func label(of windowID: String) -> String { statuses.first { $0.id == windowID }?.label ?? manager.label(of: windowID) }
+
+    func loadConversations() {
+        guard !isDemo else { conversations = DemoData.conversations; return }
+        isLoadingConversations = true
+        let manager = manager
+        Task {
+            let found = await Task.detached { manager.conversations() }.value
+            if conversations != found { conversations = found }
+            isLoadingConversations = false
+        }
+    }
+
+    func show(notice text: String) {
+        notice = text
+        noticeTask?.cancel()
+        noticeTask = Task {
+            try? await Task.sleep(for: .seconds(20))
+            if !Task.isCancelled { notice = nil }
+        }
+        reload()
     }
 
     func reload() {
@@ -181,6 +231,22 @@ final class AppModel: ObservableObject {
 }
 
 enum DemoData {
+    static var conversations: [Conversation] {
+        let now = Date(), none = URL(fileURLWithPath: "/nonexistent.jsonl")
+        return [
+            Conversation(kind: .code, sessionID: "1", title: "Migrate billing API to v2", folders: ["/Users/alex/src/billing"],
+                         lastActivity: now.addingTimeInterval(-240), transcript: none),
+            Conversation(kind: .cowork, sessionID: "2", title: "Quarterly report draft", folders: ["/Users/alex/Documents/Reports"],
+                         lastActivity: now.addingTimeInterval(-1_800), transcript: none, ownerID: "main"),
+            Conversation(kind: .projectBranch, sessionID: "3", title: "Fix flaky checkout tests", folders: ["/Users/alex/src/shop"],
+                         lastActivity: now.addingTimeInterval(-5_400), transcript: none, ownerID: "work"),
+            Conversation(kind: .code, sessionID: "4", title: "Explain the retry logic", folders: [],
+                         lastActivity: now.addingTimeInterval(-26_000), transcript: none),
+            Conversation(kind: .cowork, sessionID: "5", title: "Compare three vendors", folders: [],
+                         lastActivity: now.addingTimeInterval(-90_000), transcript: none, ownerID: "work"),
+        ]
+    }
+
     static var statuses: [ProfileStatus] {
         let now = Date()
         return [
