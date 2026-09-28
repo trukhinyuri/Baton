@@ -36,6 +36,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var installWarning: String?
     /// Which accounts may continue work in which folders; `nil` if the rules file can't be read.
     @Published private(set) var folderRules: [FolderRule]? = []
+    /// Local only's optional extra, Mac-wide: off by default. See `CloudMoveLock`.
+    @Published private(set) var cloudMoveLockOn = false
 
     let manager: ProfileManager
     let isDemo = ProcessInfo.processInfo.environment["CLAUDE_PROFILES_DEMO"] == "1"
@@ -67,6 +69,7 @@ final class AppModel: ObservableObject {
         // outside the tested range: information for the footer, never a blocking alert.
         let startUp = manager.startUpChecks()
         if !startUp.isEmpty { setupWarning = startUp.joined(separator: " ") }
+        cloudMoveLockOn = manager.cloudMoveLock.status() == .on
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.reload() }
         }
@@ -217,13 +220,21 @@ final class AppModel: ObservableObject {
             let fresh = manager.statuses()
             let problem = manager.registryError
             let rules = try? FolderRules(paths: manager.paths).load()
+            let cloudLock = manager.cloudMoveLock.status() == .on
             await MainActor.run {
                 if self.statuses != fresh { self.statuses = fresh }
                 if self.registryError != problem { self.registryError = problem }
                 if self.folderRules != rules { self.folderRules = rules }
+                if self.cloudMoveLockOn != cloudLock { self.cloudMoveLockOn = cloudLock }
                 self.restartAfterFirstSignIn(fresh)
             }
         }
+    }
+
+    /// Turns the optional, Mac-wide cloud move lock on or off; off by default.
+    func setCloudMoveLock(_ enabled: Bool) {
+        let manager = manager
+        run(nil) { _ = try manager.setCloudMoveLock(enabled) }
     }
 
     /// Claude reads sessions and per-account settings only at launch, so a window that has just been signed in

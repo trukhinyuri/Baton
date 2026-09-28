@@ -336,6 +336,16 @@ struct ContentView: View {
                 }
             }
             Spacer()
+            Menu {
+                Toggle(
+                    "Also deny moving a session to the cloud",
+                    isOn: Binding(
+                        get: { model.cloudMoveLockOn },
+                        set: { model.setCloudMoveLock($0) }))
+            } label: {
+                Label("Cloud move lock: \(model.cloudMoveLockOn ? "On" : "Off")", systemImage: "lock.shield")
+            }
+            .help("Optional, off by default: adds mcp__ccd_session__move_to_cloud to permissions.deny in ~/.claude/settings.json, Mac-wide.")
             Button("Check sessions…") { model.checkSessions() }
             Button("Report a problem…") { model.isReporting = true }
                 .help("Shows a redacted report to review, then opens a prefilled GitHub issue. Nothing is sent automatically.")
