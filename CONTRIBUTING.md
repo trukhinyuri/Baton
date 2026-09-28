@@ -4,7 +4,8 @@ Thanks for helping. A few ground rules keep the project useful and safe for ever
 
 - **Stay within Anthropic’s terms.** Changes that handle credentials or tokens, proxy requests, pool limits or switch accounts automatically won’t be merged. See [Staying within Anthropic’s terms](README.md#staying-within-anthropics-terms).
 - **Never lose user data.** Anything that overwrites or removes a file must back it up first or move it to the Trash.
-- **Test what you change.** `make test` runs the suite; logic belongs in `ClaudeProfilesKit`, where it can be tested against a sandboxed home directory.
+- **Stay local.** No network calls, and no reading of credentials, tokens, cookies or the Keychain. Claude's data is written only while that window is closed.
+- **Test what you change.** `make test` runs the suite; logic belongs in `ClaudeProfilesKit`, where it can be tested against a sandboxed home directory. Write the failing test first. [docs/TESTING.md](docs/TESTING.md) has the details.
 
 ## Layout
 
@@ -14,7 +15,12 @@ Thanks for helping. A few ground rules keep the project useful and safe for ever
 | `Sources/ClaudeProfiles` | SwiftUI app and menu bar |
 | `Sources/claude-profiles` | Command-line tool |
 | `Tests/ClaudeProfilesKitTests` | Swift Testing suite |
-| `scripts/build-app.sh` | Assembles and signs `Claude Profiles.app` |
+| `scripts/build-app.sh` | Builds the universal `Claude Profiles.app` and signs it with the hardened runtime |
+| `scripts/verify-build.sh`, `notarize.sh`, `package.sh` | Checks, notarizes and zips a build (`make release` runs all of them) |
+| `scripts/check-docs.sh`, `check-repo.sh`, `check-cask.sh` | Checks the docs, the repository files and the Homebrew cask |
+| `scripts/product.env` | The product name, bundle id and repository, in one place for the scripts and workflows |
+| `packaging/homebrew` | The Homebrew cask |
+| `docs/adr` | Design decisions |
 
 To take screenshots without real accounts, launch the app with sample data:
 

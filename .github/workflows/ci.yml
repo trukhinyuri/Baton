@@ -5,20 +5,84 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    runs-on: macos-15
+    name: Test (${{ matrix.os }}, Xcode ${{ matrix.xcode }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            xcode: "16.2"
+          - os: macos-15
+            xcode: "26.3"
     steps:
-      - uses: actions/checkout@v5
-      - name: Toolchain
-        run: swift --version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select Xcode ${{ matrix.xcode }}
+        run: |
+          sudo xcode-select -s "/Applications/Xcode_${{ matrix.xcode }}.app" || { ls -d /Applications/Xcode*.app; exit 1; }
+          swift --version
       - name: Test
         run: swift test
-      - name: Build app
+      # Reported only until the 1.0 integration turns them into failures.
+      - name: Warnings as errors (reported)
+        continue-on-error: true
+        run: swift build -Xswiftc -warnings-as-errors
+      - name: swift format lint (reported)
+        continue-on-error: true
+        run: swift format lint --recursive --parallel Sources Tests
+
+  universal:
+    name: Universal build and Rosetta smoke test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app && swift --version
+      - name: Rosetta
+        run: arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+      - name: Build
         run: scripts/build-app.sh
       - name: Package
-        run: ditto -c -k --keepParent "build/Claude Profiles.app" ClaudeProfiles.zip
-      - uses: actions/upload-artifact@v5
+        run: scripts/package.sh
+      - name: Verify
+        run: scripts/verify-build.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ClaudeProfiles
-          path: ClaudeProfiles.zip
+          name: app
+          path: |
+            build/*.zip
+            build/SHA256SUMS.txt
+
+  leveldb:
+    name: LevelDB compatibility
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app && swift --version
+      - name: Install leveldb
+        run: brew install leveldb
+      # Reads what the project's LevelDB writer appended with the real library's tools.
+      - name: Test
+        env:
+          LEVELDB_COMPAT: "1"
+        run: swift test --filter LevelDBCompat
+
+  repo:
+    name: Docs and repository files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Docs
+        run: scripts/check-docs.sh
+      - name: Repository files
+        run: scripts/check-repo.sh

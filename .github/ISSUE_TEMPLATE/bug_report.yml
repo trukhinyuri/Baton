@@ -1,0 +1,43 @@
+name: Report a problem
+description: Something in Claude Profiles did not work as described.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Report a problem** in Claude Profiles (the footer, the menu bar or Help) or `claude-profiles report`
+        fills in the Diagnostics field below. It replaces your home folder, user name, emails, account ids,
+        profile labels and folder names, and leaves out session titles, transcripts and anything shaped like a
+        token. Your own description is not changed, so leave out anything you would not post in public.
+        Security problems go to a [private advisory](https://github.com/trukhinyuri/ClaudeProfiles/security/advisories/new), not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Continue a Code session from WORK in LAB
+        2. …
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        The report from Report a problem: Environment, Windows, Sessions check, Last sync, Recent errors and Log.
+        If it was too long for the link, it is on your clipboard and in the file you saved; paste it here or
+        attach the file.
+    validations:
+      required: true
+  - type: checkboxes
+    id: reviewed
+    attributes:
+      label: Before you submit
+      options:
+        - label: I reviewed the text above, and it contains nothing I do not want to post publicly.
+          required: true

@@ -5,15 +5,16 @@
 <h1 align="center">Claude Profiles</h1>
 
 <p align="center">
-  <b>All your Claude subscriptions, side by side.</b><br>
-  Each of your Claude subscriptions runs in its own Claude Desktop window with its own Dock icon,<br>
-  and your ordinary local Claude Code sessions follow you from one window to the next.
+  <b>Several Claude Desktop accounts on one Mac, side by side.</b><br>
+  One Claude Desktop window per subscription, each with its own Dock icon,<br>
+  and your local Claude Code sessions and Cowork tasks go with you from one window to the next.
 </p>
 
 <p align="center">
   <a href="https://github.com/trukhinyuri/ClaudeProfiles/actions/workflows/ci.yml"><img src="https://github.com/trukhinyuri/ClaudeProfiles/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/trukhinyuri/ClaudeProfiles/releases/latest"><img src="https://img.shields.io/github/v/release/trukhinyuri/ClaudeProfiles" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14+">
-  <img src="https://img.shields.io/badge/Swift-6-orange" alt="Swift 6">
+  <img src="https://img.shields.io/badge/Apple%20silicon%20%2B%20Intel-universal-black" alt="Universal: Apple silicon and Intel">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
 </p>
 
@@ -21,68 +22,34 @@
   <img src="docs/images/main-window.png" width="820" alt="Claude Profiles window listing four subscriptions with their usage">
 </p>
 
-## Why
+Claude Profiles runs one unmodified Claude Desktop window per subscription on your Mac and shares that Mac's local Claude Code sessions and Cowork tasks between those windows. Work started under one account continues under another with its transcript, sub-agent and Workflow history and tool outputs, and **Continue** also keeps Rewind checkpoints.
 
-Claude Desktop holds one signed-in account at a time. If you pay for more than one subscription (a personal plan and a work plan, or one per client), switching means signing out and in again, losing open windows, and hunting for the session you were in.
+Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Claude Profiles turns Remote Control off in its windows by default (one switch to undo it) and, before you continue, names what will not follow.
 
-Claude Profiles gives every subscription its own Claude window with its own Dock icon, all open at once. Ordinary local Claude Code conversations, local skills and memory follow you between windows. When one subscription reaches its limit, **Continue work…** opens the same Code session in another window, or starts a Cowork task there with the full history and files attached. Cloud Projects, cloud Cowork and their settings stay with their Claude account.
+It never reads credentials, has no network code, backs up Claude's files before changing them, and changes a window's settings only while that window is closed.
 
-## Features
-
-- **One window per subscription.** Each profile is the official Claude Desktop app running with its own sign-in. No code is patched or injected.
-- **Labeled Dock icons.** `WORK`, `LAB` or `TEAM` on a color of your choice tells you which account a window belongs to. The launchers work from Spotlight too.
-- **Local Code continuity.** Ordinary local Claude Code sessions appear across windows. Project workers and cloud Cowork stay with their owning account; legacy local Cowork requires its original profile.
-- **Shared sidebar groups.** A group you make in the Code sidebar of any window, such as one project's sessions, appears in every other window with the same local sessions in it. Cowork, cloud and Project-worker items stay in their own window.
-- **Shared local setup.** Before a profile window starts, it gets supported local tools and display preferences from the main app. Account settings, Remote Control access and cloud project state remain separate. Sign-ins are never copied.
-- **Usage at a glance.** Five-hour and weekly usage for every subscription, from what Claude Desktop itself records. The one with the most headroom is highlighted.
-- **Knows who is signed in.** Every row shows the email of the account in that window and warns if it is not the one you intended.
-- **Easy to add and remove.** Enter an email, sign in inside the new window, done. Removing moves the profile to the Trash, so nothing is lost by accident.
-- **Continue where a limit stopped you.** **Continue work…** lists the local Code sessions, Project branches and Cowork tasks of every window. Pick one and a subscription with headroom: a Code session or Project branch opens as the same session there, and a Cowork task becomes a new task with its history and files attached, waiting for you to send it. When an open subscription reaches its limit, a banner offers this in one click. No macOS permissions are needed.
-- **Session checks.** Use **Check sessions** or `claude-profiles doctor` to inspect local session inventory, account-owned workers, missing working folders or local Cowork history, and each profile's Remote Control configuration without changing anything.
-- **Menu bar and CLI.** Open any subscription from the menu bar, or script it with `claude-profiles`.
-- **Survives Claude updates.** App copies are APFS clones (almost no disk space) and are rebuilt automatically after Claude Desktop updates.
-
-<p align="center">
-  <img src="docs/images/add-subscription.png" width="620" alt="Add a Subscription sheet with a live Dock icon preview">
-</p>
-
-## What follows you between profiles
-
-| Work or setting | Behavior |
-|---|---|
-| Ordinary local Claude Code sessions | Local transcripts stay in `~/.claude`; Claude Profiles shares the sidebar cards. Continue a session in one window at a time. |
-| Code sidebar groups | Shared: a group made, renamed or deleted in one window is made, renamed or deleted in all of them, holding the ordinary local Code sessions. A closed window gets it before it next starts; an open one when it next starts, because Claude reads its groups only at launch. Groups holding only Cowork, cloud or Project-worker items stay in their window. |
-| Local Code settings, skills, hooks and memory | Claude reads the same local configuration. Supported Desktop setup and display preferences are also synchronized before a profile opens. |
-| Local Cowork tasks | Not shared: their history and runtime belong to the original profile, account and organization. **Continue work…** starts a new task in another profile with the history and the task's files attached. |
-| New Claude Code Projects, coordinator, memory, Library and threads | Belong to their Claude account. Open the owning profile and use its native Projects view. Local Project workers also retain their owner; **Continue work…** can open a local branch's conversation in another profile as a regular Code session. |
-| Cloud Cowork tasks and projects | Saved to the Claude account; local card synchronization does not transfer them to a different account. |
-| Remote Control, connected folders and permissions | Configured separately in the profile that will run the work. A folder connected in one account is not automatically exposed to another. |
-| Cloud connectors, account instructions, model access and feature availability | Managed by Claude for each account or organization. Configure them in that account's Claude settings. |
-| Scheduled tasks | Stay with the account that created them; their schedules are never copied. |
-
-To continue a **new Code Project**, open the profile where you created it, then open **Projects**. Its coordinator, memory and threads are preserved by Claude. If you sign into that same Claude account on another supported device, its cloud work is available there too. Separate subscriptions do not gain access by copying local files; the new Code Projects beta does not support sharing a project with another user. Shared Chat/Cowork projects on Team and Enterprise use Claude's own sharing permissions.
-
-For a Project task that needs your Mac, enable Remote Control and connect the required folder in that profile's **Settings → Claude Code**, then request **Work locally** in the Project. Keep that profile open and the Mac awake. These workers receive the Project's instructions, but its memory is not automatically loaded locally; include the needed context in the task brief.
-
-Claude is rolling out new Projects and the combined Chat/Cowork experience account by account. Different windows can legitimately show different features. Claude Profiles does not copy rollout flags to make them match. See Anthropic's [Code Projects reference](https://code.claude.com/docs/en/claude-projects), [Remote Control](https://code.claude.com/docs/en/remote-control), [Cowork architecture](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview), [Cowork projects](https://support.claude.com/en/articles/14116274-organize-your-tasks-with-projects-in-claude-cowork) and [combined Chat/Cowork experience](https://support.claude.com/en/articles/16761823-claude-cowork-and-chat-are-one-claude).
-
-## Staying within Anthropic’s terms
-
-Claude Profiles is built for people who pay for more than one Claude subscription and use each of them themselves. It deliberately does **not** try to get around how Anthropic meters usage:
-
-| Claude Profiles does | Claude Profiles does not |
-|---|---|
-| Run the official Anthropic-signed Claude Desktop app for every subscription (a local copy whose only change is its Finder icon) | Patch Claude, inject code or call private APIs |
-| Let **you** sign in to each window with the official sign-in flow | See, store, copy or forward passwords, email codes or OAuth tokens |
-| Show usage that Claude Desktop already records locally | Proxy, pool, share or combine limits between accounts |
-| Let **you** choose which window to work in | Switch accounts automatically when a limit is reached |
-| Keep every subscription separate, each with its own limits | Help anyone share one subscription among several people |
-
-Each subscription keeps its own limits, applied by Anthropic as usual; Claude Profiles doesn’t raise any of them. Use only subscriptions that are yours and follow Anthropic’s [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) and [Usage Policy](https://www.anthropic.com/legal/aup). If your plans come from an employer, check that their policies allow this setup. This project is not legal advice.
+- [Install](#install) · [Quick start](#quick-start) · [Continue work in another window](#continue-work-in-another-window) · [What follows and what stays](#what-follows-and-what-stays)
+- [Local only](#local-only) · [Command line](#command-line) · [Privacy and safety](#privacy-and-safety) · [Report a problem](#report-a-problem) · [Troubleshooting](#troubleshooting)
 
 ## Install
 
-Requirements: macOS 14 or later, [Claude Desktop](https://claude.ai/download) in `/Applications`, and Xcode or the Command Line Tools (`xcode-select --install`).
+Requirements: macOS 14 Sonoma or later on Apple silicon or Intel, and [Claude Desktop](https://claude.ai/download) in `/Applications` or `~/Applications`.
+
+### Homebrew
+
+```sh
+brew install --cask trukhinyuri/tap/claude-profiles
+```
+
+This installs `Claude Profiles.app` in `/Applications` and links the `claude-profiles` command. Quit Claude Profiles from its menu before you update; your Claude windows can stay open.
+
+```sh
+brew upgrade --cask claude-profiles
+```
+
+### From source
+
+You need Xcode 16 or later, or the Command Line Tools (`xcode-select --install`).
 
 ```sh
 git clone https://github.com/trukhinyuri/ClaudeProfiles.git
@@ -90,75 +57,121 @@ cd ClaudeProfiles
 make install        # builds Claude Profiles.app and copies it to ~/Applications/Claude Profiles
 ```
 
-Quit **Claude Profiles** before updating; the Claude windows themselves can stay open. The installer stages and verifies the new app before replacing it, and saves the old app as a ZIP in `~/Library/Application Support/Claude Profiles/AppBackups` (the three latest are kept). Runnable `.previous-*.app` copies left beside the app by 0.2.0 move to the Trash where macOS has the `trash` command. Profile data is not replaced. If you moved the source checkout and Swift reports stale build paths, choose a fresh build directory with `CLAUDE_PROFILES_BUILD_DIR=/tmp/claudeprofiles-build make install`.
+`make install` stages and verifies the new app before replacing the old one, and keeps the previous app as a ZIP in `~/Library/Application Support/Claude Profiles/AppBackups` (the three latest). Your profiles are not touched. The command-line tool ships inside the app:
 
-Builds are signed ad hoc on your Mac, so Gatekeeper doesn’t get involved. If you download a prebuilt `.zip` from [Releases](https://github.com/trukhinyuri/ClaudeProfiles/releases) instead, macOS will ask you to confirm the first launch in **System Settings → Privacy & Security → Open Anyway**.
+```sh
+ln -s ~/Applications/Claude\ Profiles/Claude\ Profiles.app/Contents/Helpers/claude-profiles /usr/local/bin/
+```
 
-## Use it
+Use one installation, Homebrew or source, not both: two copies would each run their own background sync. The app warns when it finds a second copy.
+
+### Uninstall
+
+1. In Claude Profiles, remove the subscriptions you no longer need (**⋯ → Remove Subscription…**). Their app copies and sign-ins move to the Trash. Keep them if you might reinstall.
+2. Remove the app:
+   ```sh
+   brew uninstall --cask claude-profiles         # or: make uninstall
+   ```
+   `brew uninstall --zap --cask claude-profiles` also removes the app's preferences, caches and old app copies. It never removes your profiles (`Profiles/`), their backups (`Backups/`), the launchers, `~/.claude` or Claude's own data.
+3. Give `claude://` links back to the main Claude app, in case a profile was signing in when you removed it:
+   ```sh
+   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Claude.app
+   ```
+
+To remove everything, including profiles and their sign-ins, move `~/Library/Application Support/Claude Profiles` and `~/Applications/Claude Profiles` to the Trash after step 1.
+
+## Quick start
 
 1. Open **Claude Profiles** and click **Add Subscription**.
-2. Enter the account’s email and, if you like, change the Dock label and color.
+2. Enter the account's email and, if you like, change the Dock label (`WORK`, `LAB`, `TEAM`) and color.
 3. A new Claude window opens. Sign in there with that account, with Google or with email.
-4. To keep a profile in the Dock, drag its launcher from `~/Applications/Claude Profiles` (**⋯ → Show Launcher in Finder**) to the Dock. Spotlight finds launchers too (“Claude WORK”). **Keep in Dock** on a running profile window pins the app copy itself, which opens without the profile’s sign-in. While Claude Profiles is running (it stays in the menu bar), it notices that and reopens the window with its profile; the launcher works even when it isn’t.
-5. To move work to another subscription, for example when one reaches its limit, click **Continue work…** as described below.
-
-> [!IMPORTANT]
-> Don’t work in the same session from two windows at the same time. Close it in one before continuing in another.
-
-To remove a subscription, choose **⋯ → Remove Subscription…**. Its window closes and its app copy and sign-in move to the Trash. Ordinary local Code transcripts remain in `~/.claude`. Legacy Cowork sessions whose files live in that profile move to the Trash with it; old card copies in other profiles are left untouched and do not preserve that history. Cloud projects remain with their Claude account, but this profile can no longer serve their local work.
-
-### Continue work in another profile
+4. To keep a profile in the Dock, drag its launcher from `~/Applications/Claude Profiles` (**⋯ → Show Launcher in Finder**) to the Dock. Spotlight finds launchers too ("Claude WORK").
+5. When one subscription reaches its limit, click **Continue work…** and pick another.
 
 <p align="center">
-  <img src="docs/images/continue-work.png" width="620" alt="Continue work sheet listing Code sessions, a Project branch and Cowork tasks, with the destination subscription">
+  <img src="docs/images/add-subscription.png" width="620" alt="Add a Subscription sheet with a live Dock icon preview">
 </p>
 
-Click **Continue work…**. It lists the local conversations of every window, most recent first: Code sessions, local Project branches and Cowork tasks. Choose one, choose where to continue, and click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet.
+Each row shows the account signed in to that window and its five-hour and weekly usage, as Claude Desktop itself records it; the one with the most headroom is highlighted. Claude Profiles stays in the menu bar, where you can open any subscription. App copies are APFS clones that take almost no disk space and are rebuilt automatically after Claude Desktop updates.
 
-The signed-in subscription with the lowest weekly usage is preselected, and those at their limit are marked. A window's usage is only updated while it is open, so each figure shows its age, and a figure older than 3 hours is marked *may be higher now*; an old figure still counts, because a window that nobody opened has used nothing since. When a folder has a rule (see below), only the windows it allows are offered.
+> [!IMPORTANT]
+> Work in a session from one window at a time. Claude Desktop does not lock sessions across windows.
 
-| Conversation | What happens in the other profile |
+## Continue work in another window
+
+Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet. The signed-in subscription with the lowest weekly usage is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may be higher now*.
+
+| Conversation | What happens in the other window |
 |---|---|
-| Code session | The same session opens there with its whole history, or a copy of it (see below). A closed window opens first. |
-| Project branch | A copy of the branch's history opens as a regular Code session. The Project, its coordinator, memory and other branches stay with their account. |
-| Cowork task | A new Cowork task opens with a prompt to continue, the full history attached as `history.md`, and copies of the files the task was given and made (up to 10 files, 25 MB each, 50 MB in total). Nothing is sent: review it and send it yourself. Claude shows a caution banner above any prompt that arrives through a link; this one is the prompt Claude Profiles prepared. The prompt names the folders the task worked in; connect them when Claude asks. Connectors, scheduled tasks and Project settings of the original account are not carried over, and the original task stays in its profile. |
-| claude.ai chat or cloud Project | Not on this Mac. **Copy handoff request** copies a request to paste into that chat; paste its answer into a new chat in the other subscription. |
+| Code session | The same session opens there with its whole history, or a copy of it (below). Sub-agents, Workflow history and tool outputs come with it. A closed window opens first. |
+| Cowork task | A new Cowork task opens with a prompt to continue, the full history attached as `history.md`, and copies of the files the task was given and made (up to 10 files, 25 MB each, 50 MB in total). Nothing is sent: review it and send it yourself. The original task stays where it was. |
 
-Two windows must not write to one session at the same time. **Automatic** therefore continues as a copy a session that a running Claude Code process still has open, a Project branch, whose coordinator may write to it again, and a session with a message in the last 10 minutes. A copy is a new session with the same history, file history and files. Other sessions continue as themselves. **Same session** and **As a copy** override this; for a session that may still be written to, **Same session** needs **I closed it** and then reads **Continue Anyway**. A Cowork task written to less than a minute ago may miss its last steps; stop it first.
+Before you continue, the sheet lists what will not follow into that account: remote connectors, a Remote Control connection, scheduled tasks and cloud sessions. See [What follows and what stays](#what-follows-and-what-stays).
 
-**Continue All in …** continues the six most recent Code sessions and Project branches of the selected conversation's folder with a message in the last day, in one step, together with the other branches of the same Projects, which often work in other folders; it can also start a new session in the folder. Branches that already belong to the destination are left out. Each one becomes a session in the destination window, so a busy folder moved whole would spend that subscription in minutes; continue older ones one at a time, or use `--max` on the command line. A closed window is started with the first session and receives the others once it is on screen; the new session comes last, after the others are imported, so it is what the window shows. Each continued session is confirmed by the card Claude imports for it, and one that doesn't appear is reported instead of being counted.
+**Same session or a copy.** Two windows must not write to one session at the same time. **Automatic** therefore continues as a copy a session that a running Claude Code process still has open, or one with a message in the last 10 minutes. A copy is a new session with the same history, sub-agents, Workflow history, tool outputs, file history and scratchpad notes; its title ends with " · from WORK". Other sessions continue as themselves. **Same session** and **As a copy** override this; for a session that may still be written to, **Same session** needs **I closed it** first.
 
-Claude imports each continued session itself, with its usual folder trust and permission checks. The session takes its model from its history; when that differs from the model the destination would use, the sheet and `--dry-run` ask you to choose the model in the destination before your first message.
+**Continue All in …** continues the six most recent Code sessions of the selected conversation's folder with a message in the last day, in one step, and can also start a new session there. Each one becomes a session in the destination window, so moving a busy folder at once would spend that subscription quickly; continue older ones one by one, or use `--max` on the command line. Each continued session is confirmed by the card Claude imports for it, and one that does not appear is reported rather than counted.
 
-**Folder rules** keep work where it belongs: `claude-profiles rule ~/Work/acme --only me@acme.com` lets the work in that folder, and inside it, continue only in that account. Continuing it anywhere else, including a new session there, is refused, and the banner offers only allowed windows. The closest folder's rule applies; work that touches folders with different rules continues only in an account they all allow. `claude-profiles rules` lists them, and `--remove` drops one. A rules file that can't be read stops every continuation until it is fixed.
+Claude imports every continued session itself, with its usual folder trust and permission checks. A session takes its model from its history; when that differs from the destination's model, the sheet asks you to choose before your first message.
 
-Continuing needs no macOS permissions: the destination window receives a `claude://` link that only that window handles. Nothing is sent on your behalf. Prepared Cowork handoffs are kept in `~/Library/Application Support/Claude Profiles/Handoffs`, readable only by you, and move to the Trash after 30 days.
+**Folder rules** keep work where it belongs. `claude-profiles rule ~/Work/acme --only me@acme.com` lets the work in that folder, and inside it, continue only in that account; continuing it anywhere else, including a new session there, is refused. The closest folder's rule applies. Session sharing honors the same rules: a session in that folder does not appear in other accounts' windows. A rules file that cannot be read stops continuing and sharing until it is fixed.
 
-### Command line
+Continuing needs no macOS permissions: the destination window receives a `claude://` link that only that window handles.
+
+### When Claude Desktop forks a session itself
+
+When you open a session that another account started, Claude Desktop may fork it into a new session instead of reopening it. Claude Profiles notices the fork at its next sync and brings the sub-agents, Workflow history and tool outputs over to the new session, adding files only; the original session is never changed. **Rewind to a point before such a fork cannot be restored**, because Desktop does not copy the checkpoints into the fork; they remain in the original session. Use **Continue work…**, which keeps them, to move a session yourself.
+
+## What follows and what stays
+
+| | Follows between windows | Stays with the account |
+|---|---|---|
+| Claude Code | Local sessions with their transcript, sub-agents, Workflow history, tool outputs and (with **Continue**) Rewind checkpoints. Local settings, skills, hooks, memory and MCP definitions in `~/.claude` are shared by every window already. | Cloud sessions, Code Projects with their coordinator, memory and threads, and Project or Remote Control workers. |
+| Cowork | Local tasks continue as a new task with their history and files. | The original task and its runtime; cloud Cowork tasks and projects. |
+| Chat | Nothing. | claude.ai chats and chat projects. |
+| Automation | Nothing. | Routines and scheduled tasks. Local task prompts in `~/.claude/scheduled-tasks` are shared by every window, so give tasks in different windows different names. |
+| Connections | MCP servers, extensions and SSH connections defined on this Mac, merged one by one before a window starts. | Connectors, tool approvals, connected folders and Remote Control. |
+| Desktop settings | Theme, zoom, language and selected display preferences from the main app, unless you changed them in that window. | Sign-in, account and permission settings, scheduler switches and anything Claude Profiles does not recognize. |
+
+Claude rolls out features account by account, so different windows can show different features. Claude Profiles does not copy rollout flags to make them match. For the details see Anthropic's [Code Projects](https://code.claude.com/docs/en/claude-projects), [Remote Control](https://code.claude.com/docs/en/remote-control) and [Cowork architecture](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) pages.
+
+## Local only
+
+**Local only** is on by default. In each window Claude Profiles manages, the main one included, it turns off Remote Control's default (`ccRemoteControlDefaultEnabled`), and keeping the Mac reachable for Remote Control where Claude has that setting. It writes these keys only while that window is closed, after a dated backup, and records the previous values so turning Local only off restores them. A window that is running shows *pending* and gets the change at its next start.
+
+It deliberately leaves alone local scheduled tasks, waking the Mac for them, web search in Cowork and your permission mode. It never touches managed preferences set by an organization, sign-in data or any server. If you turn Remote Control back on inside Claude, Local only turns it off again at that window's next start, and the window's badge reads *Remote Control on* until then. To keep Remote Control in one window, turn Local only off for that profile.
+
+Optionally, and only after you turn it on, Local only also stops the agent from moving a session to the cloud, with a `permissions.deny` entry in `~/.claude/settings.json`. That file is shared by every window, so this applies to all of them; it cannot hide Claude's own **Move to cloud** button.
+
+If a Claude Desktop version no longer has one of these settings, the status reads *not supported by this Claude version* and nothing is written.
+
+## Command line
 
 ```text
-claude-profiles list                          Show every profile, its account and plan usage
+claude-profiles list                          Every profile, its account and plan usage
 claude-profiles add <email> [--label TEXT] [--color #RRGGBB]
                                                Create a profile and open it to sign in
 claude-profiles open <profile>                Open a profile's window (id or label)
-claude-profiles remove <profile>              Quit it and move its copy and sign-in to the Trash
-claude-profiles sync                          Share ordinary local Code session cards and sidebar groups across profiles now
-claude-profiles doctor [--json]               Inspect sessions and per-profile setup without changing it
-claude-profiles conversations [--all]         List local conversations that can continue in another profile
+claude-profiles remove <profile>              Move a closed profile's copy and sign-in to the Trash
+claude-profiles sync [--dry-run]              Share local Code sessions across windows now
+claude-profiles carry [--dry-run]             Bring sub-agents and tool outputs over to sessions Claude forked
+claude-profiles conversations [--all]         Local Code sessions and Cowork tasks that can continue elsewhere
 claude-profiles continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
                                                Continue one in another profile, as Continue work… does
 claude-profiles continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
-                         [--folder-only] [--new] [--dry-run]
-                                               Continue the most recent sessions of a folder, as Continue All does
-claude-profiles rules                         Show which accounts may continue the work in which folders
+                         [--new] [--dry-run]
+                                               Continue the recent sessions of a folder, as Continue All does
+claude-profiles rules                         Which accounts may continue the work in which folders
 claude-profiles rule <folder> --only <email>[,<email>…] | --remove
                                                Keep a folder's work in those accounts, or drop its rule
-claude-profiles handoff --from <profile> --to <profile> --title <text> --context <file>
-                       [--folder <absolute-path>] [--source-url <claude.ai-url>] [--open]
+claude-profiles local-only on|off|status      Turn Local only on or off, or show it per window
+claude-profiles doctor [--json]               Check sessions and per-window setup without changing anything
+claude-profiles report [--save PATH] [--open] Prepare a problem report (see below)
 claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
+claude-profiles --version                     Version and commit
 ```
 
-`continue` takes the start of an id from `conversations`, or `last` for the most recent one. It copies as **Automatic** does; `--fork` always copies, and `--same` keeps the same session but refuses one that may still be written to unless you close it there and add `--anyway`. `--anyway` alone changes nothing else. `--folder` continues every session of that folder with a message within `--since` (default `24h`) and the other branches of their Projects, `--folder-only` leaves those out, and `--new` also starts a new session there. `--dry-run` prints what would continue, how, and with which model, without changing anything:
+`continue` takes the start of an id from `conversations`, or `last` for the most recent one. `--fork` always copies; `--same` keeps the same session but refuses one that may still be written to unless you close it there and add `--anyway`. `--dry-run` prints what would happen, how, and with which model, and changes nothing:
 
 ```sh
 claude-profiles conversations
@@ -166,88 +179,100 @@ claude-profiles continue last --to LAB
 claude-profiles continue --folder ~/Projects/api --to LAB --new --dry-run
 ```
 
-For a claude.ai chat, the `handoff` command saves a Markdown file from context you have reviewed and prints its path. Add `--open` to open the destination profile. It does not change the clipboard or fetch a cloud transcript; copy the saved context into a new conversation yourself. For example:
+## Privacy and safety
 
-```sh
-claude-profiles handoff --from WORK --to LAB --title "Continue API migration" --context ./handoff.md --open
-```
+- **No network.** The app has no network code, no telemetry and no update check; Homebrew handles updates. It never calls Anthropic's servers.
+- **No credentials.** It never reads, copies or stores passwords, sign-in tokens, cookies or the Keychain. You sign in to each window yourself with Claude's own sign-in. To show the account it reads the account id from `config.json`, the matching email from Claude's local cache, and the usage Claude records locally.
+- **Backups first.** Every card it replaces or removes is copied to `~/Library/Application Support/Claude Profiles/Backups/<date>/` first, and so is a settings file before Local only or the settings merge replaces it. The one exception is Claude's `config.json`, which holds sign-in data: only its theme, zoom and language keys are edited, in place, and it is never copied. Backup days older than a week move to the Trash; nothing is deleted outright.
+- **Closed windows only.** A window's settings and interface stores are changed only while that window is closed. Sessions are shared with running windows too, but deletions wait until every window is closed.
+- **Claude's own records stay.** It never writes, edits or removes Claude's history-suppression records, which Claude uses to keep one account's history out of another.
 
-The binary ships inside the app: `ln -s ~/Applications/Claude\ Profiles/Claude\ Profiles.app/Contents/Helpers/claude-profiles /usr/local/bin/`.
+Backups can contain MCP definitions and other private setup; keep the application data folder private. Details: [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
+
+## Staying within Anthropic’s terms
+
+Claude Profiles is for people who pay for more than one Claude subscription and use each of them themselves. It does not try to get around how Anthropic meters usage:
+
+| Claude Profiles does | Claude Profiles does not |
+|---|---|
+| Run the official, Anthropic-signed Claude Desktop app for every subscription (a local copy whose only change is its Finder icon) | Patch Claude, inject code or call private APIs |
+| Let **you** sign in to each window with the official sign-in | See, store, copy or forward passwords, email codes or OAuth tokens |
+| Show usage that Claude Desktop already records locally | Proxy, pool, share or combine limits between accounts |
+| Let **you** choose which window to work in | Switch accounts automatically when a limit is reached |
+| Keep every subscription separate, each with its own limits | Help anyone share one subscription among several people |
+
+Each subscription keeps its own limits. Use only subscriptions that are yours, and follow Anthropic's [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) and [Usage Policy](https://www.anthropic.com/legal/aup). If your plans come from an employer, check that their policies allow this setup. This is not legal advice.
+
+## Report a problem
+
+Choose **Report a problem** in the app's footer, the menu bar or the Help menu, or run `claude-profiles report`. You see the exact text before anything leaves the app, and the app never sends it: **Copy** puts it on the clipboard, **Save…** writes it to a file, and **Open GitHub** opens a prefilled issue in your browser for you to review and submit.
+
+The report contains the versions of Claude Profiles, macOS and Claude Desktop, your Mac's architecture, each window's Claude Code version and Local only state, how many windows are open and signed in, the counts from **Check sessions** and the last sync, the last errors shown, and the app's last 200 log entries. Your home folder and user name, emails, account and organization ids, profile labels and folder names are replaced with placeholders. Session titles, transcripts and anything that looks like a token are never included. What you type in the description is yours and is not changed.
+
+A report too long for a link opens GitHub with a short summary; the full text is on your clipboard and in the file you saved, to paste or attach. Security problems go to a [private advisory](https://github.com/trukhinyuri/ClaudeProfiles/security/advisories/new), not an issue; see [SECURITY.md](SECURITY.md).
+
+## Troubleshooting
+
+**macOS says the app can't be opened, or is damaged.** A build that is not notarized needs one confirmation: open **System Settings → Privacy & Security** and click **Open Anyway**. Builds you make yourself with `make install` are not affected.
+
+**A window shows the main account instead of its own.** That window was started without its profile, for example from an icon kept with **Keep in Dock** or reopened by macOS at login. While Claude Profiles runs it reopens such a window with its profile; otherwise open it with its launcher or `claude-profiles open <profile>`. Keep launchers in the Dock, not the running window's icon.
+
+**Google sign-in finishes in the main Claude app.** While a new window signs in, Claude Profiles routes `claude://` links to it and gives them back to the main app once it is signed in, or after 15 minutes. If a link went to the wrong app, close the new window, open it again from Claude Profiles and sign in within 15 minutes, or sign in with email.
+
+**A session from another window is missing.** Claude reads its sessions when a window starts. Restart that window, or use **Continue work…**, which opens a session in a running window right away. A folder rule may also keep the session out of that account (`claude-profiles rules`). **Check sessions** or `claude-profiles doctor` lists what each window has.
+
+**Remote Control came back on.** Local only turns it off again at that window's next start. To keep it on in one window, turn Local only off for that profile.
+
+**After a Claude Desktop update.** App copies are rebuilt the next time each window opens, or now with `claude-profiles refresh`. `doctor` warns when your Claude Desktop version is outside the range Claude Profiles was tested with, and Local only reports a setting it can no longer find instead of writing it.
+
+**Building from source fails with stale paths after moving the checkout.** Use a fresh build directory: `CLAUDE_PROFILES_BUILD_DIR=/tmp/claudeprofiles-build make install`.
+
+Still stuck? [Report a problem](#report-a-problem).
+
+## Known limitations
+
+- Claude Desktop does not lock sessions across windows. Work in a session from one window at a time.
+- Claude reads sessions and interface settings when a window starts, the main window included. New, renamed or archived sessions and changed settings from another window show up after that window restarts.
+- What is live stays in the window doing it: which session is running or waiting for you, the Sessions list on the home screen, open panes, terminal tabs and drafts.
+- Archive lists are merged: a session archived in any window is archived in all of them, and un-archiving it in one window does not stick yet.
+- Rewind to a point before a fork made by Claude Desktop itself cannot be restored ([why](#when-claude-desktop-forks-a-session-itself)).
+- Claude Desktop's local storage formats are not a public API. Run **Check sessions** after updating Claude.
 
 ## How it works
+
+A profile is Claude Desktop started with its own `--user-data-dir`, which is standard Electron behavior, from an APFS clone of `/Applications/Claude.app` whose only change is a Finder icon. Local Claude Code transcripts already live in `~/.claude`, which every window reads; Claude Profiles shares the small sidebar cards that point to them, between the windows whose accounts may see them.
 
 | What | Where |
 |---|---|
 | Main Claude app (untouched) | `/Applications/Claude.app`, data in `~/Library/Application Support/Claude` |
-| Profile app copies (APFS clones with a Finder icon) | `~/Applications/Claude Profiles/.engines` |
+| Profile app copies | `~/Applications/Claude Profiles/.engines` |
 | Launchers you can keep in the Dock | `~/Applications/Claude Profiles/Claude <LABEL>.app` |
-| Each profile’s sign-in and window state | `~/Library/Application Support/Claude Profiles/Profiles/<id>` |
-| Profile list and backups | `~/Library/Application Support/Claude Profiles` |
-| Local Claude Code transcripts, settings, skills, memory | `~/.claude` (already shared by every window) |
-| Cloud Projects, cloud Cowork and account settings | Anthropic services, under their owning Claude account |
+| Each profile's sign-in and window state | `~/Library/Application Support/Claude Profiles/Profiles/<id>` |
+| Profile list, folder rules, backups | `~/Library/Application Support/Claude Profiles` |
+| Local Claude Code transcripts, settings, skills, memory | `~/.claude`, shared by every window |
 
-A profile is Claude Desktop started with its own `--user-data-dir`, which is standard Electron behavior. For ordinary local Code sessions, sharing copies the small sidebar cards between account folders; the conversations themselves already live in `~/.claude`. While any Claude window is open, Code sharing only adds and updates; deletions propagate only when all windows are closed. Replaced and removed Code cards are backed up first.
-
-Legacy local Cowork is inspected only. Claude Profiles does not copy, update or delete its cards, files or old synchronization state. Claude loads its history from the current profile's account and organization directory, so copying a sidebar card can open a blank conversation instead of the original history. Existing copies from earlier versions are preserved. Open the task in its original profile, or use **Continue work…** to start a new task elsewhere with its history and files.
-
-A Code card marked as a native Project or Remote Control worker stays within its account and organization. If an older Claude Profiles version already copied one across account boundaries, the owner is ambiguous: those copies stay untouched and are excluded from synchronization, and **Check sessions** reports them for review. This does not delete the worker, move its files or make its cloud Project available in another account.
-
-Before a profile window starts, Claude Profiles synchronizes local extensions and MCP definitions, SSH setup, downloaded Code builds, selected display preferences and pins for ordinary local Code sessions. Changes made only in that profile are retained for the settings that use three-way merging. Remote Control registrations, tool grants, unknown preferences, cloud project pins, account-specific interface state and scheduler switches stay with each profile. The main window handles waking the Mac for scheduled work. Right after its first sign-in, a profile's window restarts once so Claude can load its account's sessions and settings.
-
-Google sign-in finishes in your browser and comes back to Claude through a `claude://` link, which macOS normally hands to the main Claude app. While a profile window is signing in, Claude Profiles leaves only that window’s app copy registered for those links, and gives them back to the main app as soon as the profile is signed in (or after 15 minutes). The link goes from macOS straight to Claude; Claude Profiles never reads it.
-
-More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-### Privacy
-
-Claude Profiles has no network code and no telemetry. To show the account and usage, it reads the account ID from `config.json`, the matching email from Claude's local IndexedDB cache, and local usage history. It writes eligible local Code session cards, their deletion/archive state, scratch-folder links, and the supported profile settings described above. Cowork session inspection is read-only. Interface synchronization writes only selected records in a closed profile's local stores; it does not copy the database.
-
-In a profile's `config.json`, it changes only theme, zoom and language while preserving sign-in fields and file permissions. Claude sign-in tokens, cookies and passwords are never copied between windows. Setup merge baselines contain hashes, not copies of settings values. Continuing a Cowork task reads its local transcript and files to prepare the handoff, which is created with owner-only access and stays on your Mac until you send it. Backups of local configuration can contain MCP definitions and other private setup; keep the application data directory private.
+More: [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY-MODEL.md), [design decisions](docs/adr/), [testing](docs/TESTING.md) and [why this exists](docs/WHY.md).
 
 ## FAQ
 
 **Does this combine the limits of my subscriptions?**
-No. Each subscription is metered on its own by Anthropic. Claude Profiles only makes it quick to move to another window you are already signed in to.
+No. Anthropic meters each subscription on its own. Claude Profiles only makes it quick to move to another window you are already signed in to.
 
 **Why not switch accounts automatically when a limit is hit?**
-That would amount to automated limit evasion. You decide where to work. The app shows where there is headroom and, when a subscription reaches its limit, offers to continue elsewhere; nothing moves until you click.
-
-**What about scheduled tasks?**
-Schedules stay with their Claude account and are not copied between profiles. Local scheduled tasks need their owning Claude window; cloud schedules run through Claude without that window, unless the work needs access to your Mac. Waking the Mac for local scheduled work is left to the main app.
+That would be automated limit evasion. You decide where to work; the app shows where there is headroom and offers to continue there, and nothing moves until you click.
 
 **Does it work with Team or Enterprise seats?**
-Technically yes, a profile can sign in to any account. Whether you may use a work seat this way is up to your organization.
+Technically yes: a profile can sign in to any account. Whether you may use a work seat this way is up to your organization.
 
-**What happens when Claude Desktop updates?**
-Profile copies are rebuilt from the new version the next time you open them (or right away with `claude-profiles refresh`). Your sign-ins stay.
-
-## Known limitations
-
-- For shared ordinary local Code sessions, archive lists are merged: a session archived in any window is archived in all of them, and un-archiving it in one window doesn’t stick. Undoing the merge safely would need Claude Desktop to tell stale writes from real changes.
-- Claude Desktop doesn’t lock sessions across windows. Work in a session from one window at a time.
-- Claude reads sessions and interface settings when a window starts, the main window included. New, renamed or archived sessions and changed settings from another window show up after this window restarts. **Continue work…** opens a session in a running window right away.
-- What is live stays in the window doing it: which session is running or waiting for you, the Sessions list on the home screen, open side panes, terminal tabs and drafts.
-- Cloud Projects, cloud Cowork, Remote Control session ownership, cloud connectors and feature rollout are account-specific. They cannot be transferred by local settings or sidebar synchronization. Projects and their local workers must be continued through the owning account.
-- The Routines list shows the tasks of that window’s account. Only eligible ordinary local Code result sessions are shared; cloud tasks and Project workers remain with their owner. Local task prompts use `~/.claude/scheduled-tasks`, which all windows share, so give local tasks in different windows different names.
-- Local Cowork tasks require their original profile, account and organization data. Their cards are not shared or removed from other profiles; copies made by old versions may open without history. Continuing one elsewhere starts a new task from its history and files. Removing the original profile moves its files to the Trash.
-- Claude Desktop’s local storage formats are not a public compatibility API. Account-owned workers are handled separately from ordinary local cards; run **Check sessions** after updating Claude.
-- There is no Developer ID signature yet, so prebuilt downloads need a one-time “Open Anyway”.
-
-## Uninstall
-
-Remove your profiles in the app first (this quits them and moves their data to the Trash), then:
-
-```sh
-make uninstall
-rm -rf ~/Library/Application\ Support/Claude\ Profiles ~/Applications/Claude\ Profiles
-```
+**Why is Remote Control off?**
+Remote Control ties a window's sessions to its Anthropic account. With several accounts on one Mac, that is the likely reason Claude forks or hides a session another account opened. Local only keeps work on your Mac; turn it off for a profile that needs Remote Control.
 
 ## Contributing
 
-Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Run `make test` before sending a change.
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). `make test` runs the suite.
 
 ## License
 
 [MIT](LICENSE) © Yuri Trukhin
 
-Claude Profiles is an independent project and is not affiliated with, endorsed by or sponsored by Anthropic. Claude is a trademark of Anthropic, PBC.
+Claude Profiles is an independent project. It is not affiliated with, endorsed by or sponsored by Anthropic. Claude is a trademark of Anthropic, PBC.

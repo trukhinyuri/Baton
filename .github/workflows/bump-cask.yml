@@ -1,0 +1,49 @@
+name: Bump Homebrew cask
+
+# Written out by hand so the tap token is only ever given to git, never to a third-party action.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download and check the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          . scripts/product.env
+          mkdir -p "$RUNNER_TEMP/release" && cd "$RUNNER_TEMP/release"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$ARCHIVE_STEM-$TAG.zip" -p SHA256SUMS.txt
+          shasum -a 256 -c SHA256SUMS.txt
+          ditto -x -k "$ARCHIVE_STEM-$TAG.zip" app
+          # Homebrew disables casks that fail Gatekeeper, so an ad-hoc build never reaches the tap.
+          if ! spctl --assess --type execute -vv "app/$PRODUCT_NAME.app"; then
+            echo "::notice::$TAG is not notarized; the cask is left unchanged."
+            exit 0
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "SHA256=$(cut -d ' ' -f 1 SHA256SUMS.txt)" >> "$GITHUB_ENV"
+      - name: Update the tap
+        if: env.VERSION != ''
+        env:
+          HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
+        run: |
+          . scripts/product.env
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOMEBREW_TAP_PAT" | base64)"
+          git -c http.extraheader="$auth" clone --depth 1 "https://github.com/$TAP_SLUG.git" "$RUNNER_TEMP/tap"
+          cask="$RUNNER_TEMP/tap/Casks/$CASK_TOKEN.rb"
+          mkdir -p "$(dirname "$cask")" && { [ -f "$cask" ] || cp "packaging/homebrew/Casks/$CASK_TOKEN.rb" "$cask"; }
+          sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/; s/^  sha256 \".*\"/  sha256 \"$SHA256\"/" "$cask"
+          cd "$RUNNER_TEMP/tap"
+          if [ -z "$(git status --porcelain)" ]; then echo "The cask already points at $VERSION."; exit 0; fi
+          git add "Casks/$CASK_TOKEN.rb"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "$CASK_TOKEN $VERSION"
+          git -c http.extraheader="$auth" push origin HEAD
