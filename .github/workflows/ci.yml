@@ -32,12 +32,9 @@ jobs:
           swift --version
       - name: Test
         run: swift test
-      # Reported only until the 1.0 integration turns them into failures.
-      - name: Warnings as errors (reported)
-        continue-on-error: true
+      - name: Warnings as errors
         run: swift build -Xswiftc -warnings-as-errors
-      - name: swift format lint (reported)
-        continue-on-error: true
+      - name: swift format lint
         run: swift format lint --recursive --parallel Sources Tests
 
   universal:

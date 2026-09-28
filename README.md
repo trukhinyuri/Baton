@@ -165,6 +165,9 @@ claude-profiles rules                         Which accounts may continue the wo
 claude-profiles rule <folder> --only <email>[,<email>…] | --remove
                                                Keep a folder's work in those accounts, or drop its rule
 claude-profiles local-only on|off|status      Turn Local only on or off, or show it per window
+claude-profiles local-only cloud-lock on|off|status
+                                               Optional, off by default: also deny moving a session to the
+                                               cloud, Mac-wide, in ~/.claude/settings.json
 claude-profiles doctor [--json]               Check sessions and per-window setup without changing anything
 claude-profiles report [--save PATH] [--open] Prepare a problem report (see below)
 claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
@@ -234,7 +237,7 @@ Still stuck? [Report a problem](#report-a-problem).
 - Claude Desktop does not lock sessions across windows. Work in a session from one window at a time.
 - Claude reads sessions and interface settings when a window starts, the main window included. New, renamed or archived sessions and changed settings from another window show up after that window restarts.
 - What is live stays in the window doing it: which session is running or waiting for you, the Sessions list on the home screen, open panes, terminal tabs and drafts.
-- Archive lists are merged: a session archived in any window is archived in all of them, and un-archiving it in one window does not stick yet.
+- Archive lists are merged: a session archived in any window is archived in all of them, and un-archiving it in one window un-archives it everywhere too.
 - Rewind to a point before a fork made by Claude Desktop itself cannot be restored ([why](#when-claude-desktop-forks-a-session-itself)).
 - Claude Desktop's local storage formats are not a public API. Run **Check sessions** after updating Claude.
 
