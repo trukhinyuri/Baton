@@ -38,7 +38,8 @@ public enum LiveSessions {
     static func processName(_ pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: 256)
         guard proc_name(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
-        return String(cString: buffer)
+        let end = buffer.firstIndex(of: 0) ?? buffer.count
+        return String(decoding: buffer[..<end].map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     static func idsFromArguments() -> Set<String> {

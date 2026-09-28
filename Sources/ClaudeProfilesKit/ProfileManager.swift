@@ -645,6 +645,16 @@ public final class ProfileManager: @unchecked Sendable {
         return try localOnly.setEnabled(enabled, window: window, windows: windows.map(\.id))
     }
 
+    /// Local only's optional extra: also denies `mcp__ccd_session__move_to_cloud` in `~/.claude/settings.json`,
+    /// Mac-wide. Off by default; a separate, explicit choice from `setCloudMoveLock`.
+    public var cloudMoveLock: CloudMoveLock { CloudMoveLock(paths: paths) }
+
+    /// Turns the cloud move lock on or off. Safe to call any time: it only edits `permissions.deny`.
+    @discardableResult
+    public func setCloudMoveLock(_ enabled: Bool) throws -> CloudMoveLock.Status {
+        try cloudMoveLock.setEnabled(enabled)
+    }
+
     /// Whether the window of `"main"` or a profile id is running with its own data.
     public func isWindowOpen(_ window: String) -> Bool {
         let running = runningClaudes()

@@ -158,26 +158,35 @@ public struct FeedbackReport: Sendable {
         public var isComplete: Bool
     }
 
-    /// A prefilled "new issue" form. Opening it sends nothing: the user reviews the text on GitHub and submits it.
+    /// A prefilled "new issue" form. GitHub's issue *forms* (this repository's `bug_report.yml`) prefill by field
+    /// id, not by a single `body`: each of `diagnostics` and `what-happened` fills its own textarea. Opening the
+    /// link sends nothing: the user reviews both fields on GitHub and submits it themselves.
     /// - Parameter attachment: the file name to mention when the report is too long for the link.
     public func issueLink(title: String, description: String, attachment: String? = nil) -> IssueLink {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        func link(_ body: String) -> URL {
-            let query = [("template", "bug_report.yml"), ("title", title.isEmpty ? "Problem report" : title), ("body", body)]
+        func link(diagnostics: String, whatHappened: String) -> URL {
+            let query = [("template", "bug_report.yml"), ("title", title.isEmpty ? "Problem report" : title),
+                         ("diagnostics", diagnostics), ("what-happened", whatHappened)]
                 .map { "\($0)=\(Self.encode($1))" }.joined(separator: "&")
             return URL(string: "https://github.com/\(Self.repository)/issues/new?\(query)")!
         }
-        let full = document(description: description)
-        if Self.encode(full).count <= Self.urlBodyLimit { return IssueLink(url: link(full), isComplete: true) }
-        let note = "\n### Full report\nThe full report is too long for this form. It is on the clipboard and saved as "
-            + "\(attachment.map { "“\($0)”" } ?? "a file"): attach that file here or paste it below.\n"
-        var words = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        func short() -> String { summary + note + (words.isEmpty ? "" : "\n### What happened (written by the user, not redacted)\n" + words + "\n") }
-        while Self.encode(short()).count > Self.urlBodyLimit && !words.isEmpty {
-            words = String(words.prefix(max(0, words.count - max(50, words.count / 4)))) + (words.count > 50 ? "…" : "")
-            if words == "…" { words = "" }
+        func encodedLength(_ diagnostics: String, _ whatHappened: String) -> Int {
+            Self.encode(diagnostics).count + Self.encode(whatHappened).count
         }
-        return IssueLink(url: link(short()), isComplete: false)
+        let words = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let whatHappened = words.isEmpty ? "(not described; see diagnostics below)" : words
+        if encodedLength(markdown, whatHappened) <= Self.urlBodyLimit {
+            return IssueLink(url: link(diagnostics: markdown, whatHappened: whatHappened), isComplete: true)
+        }
+        let note = summary + "\n\nThe full report is too long for this form. It is on the clipboard and saved as "
+            + "\(attachment.map { "“\($0)”" } ?? "a file"): attach that file here or paste it below.\n"
+        var short = whatHappened
+        while encodedLength(note, short) > Self.urlBodyLimit && !short.isEmpty {
+            short = String(short.prefix(max(0, short.count - max(50, short.count / 4)))) + (short.count > 50 ? "…" : "")
+            if short == "…" { short = "" }
+        }
+        if short.isEmpty { short = "(see diagnostics; full report attached separately)" }
+        return IssueLink(url: link(diagnostics: note, whatHappened: short), isComplete: false)
     }
 
     /// Opens the issue form. A report too long for the link is also copied and saved in `folder`, for the user

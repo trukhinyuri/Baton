@@ -49,11 +49,13 @@ public struct SignInRouting: Sendable {
 
     /// Sends `claude://` links to `profileID`'s app copy until `end()`.
     public func begin(profileID: String, allProfileIDs: [String], now: Date = Date()) throws {
-        register(paths.claudeApp, false)
+        // Best-effort: a failure here still lets sign-in continue, and `restoreMainIfIdle`/`end` report and
+        // recover from a stuck registration afterwards.
+        _ = register(paths.claudeApp, false)
         for id in allProfileIDs where id != profileID {
-            register(paths.engine(for: id), false)
+            _ = register(paths.engine(for: id), false)
         }
-        register(paths.engine(for: profileID), true)
+        _ = register(paths.engine(for: profileID), true)
         try FileManager.default.createDirectory(at: paths.stateDir, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

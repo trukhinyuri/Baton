@@ -325,7 +325,7 @@ struct ContentView: View {
             Button("Check sessions…") { model.checkSessions() }
             Button("Report a problem…") { model.isReporting = true }
                 .help("Shows a redacted report to review, then opens a prefilled GitHub issue. Nothing is sent automatically.")
-            Link(destination: URL(string: "https://github.com/trukhinyuri/ClaudeProfiles#staying-within-anthropics-terms")!) {
+            Link(destination: URL(string: "https://github.com/\(FeedbackReport.repository)#staying-within-anthropics-terms")!) {
                 Label("Fair use", systemImage: "checkmark.shield")
             }
             .help("How Claude Profiles stays within Anthropic’s terms")

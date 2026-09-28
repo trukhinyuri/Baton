@@ -24,17 +24,20 @@ struct ReportSharingTests {
         #expect(link.isComplete)
         #expect(link.url.absoluteString.hasPrefix("https://github.com/\(FeedbackReport.repository)/issues/new?template=bug_report.yml&title="))
         #expect(query("title", in: link.url) == "Sync stops")
-        #expect(query("body", in: link.url) == short.document(description: "It stopped after I added LAB & WORK?"))
+        #expect(query("diagnostics", in: link.url) == short.markdown)
+        #expect(query("what-happened", in: link.url) == "It stopped after I added LAB & WORK?")
         #expect(!link.url.absoluteString.contains("+"), "spaces and plus signs are percent-encoded")
 
         let long = FeedbackReport(facts: facts(logLines: 200))
         let longLink = long.issueLink(title: "", description: String(repeating: "Very long description. ", count: 600))
         #expect(!longLink.isComplete)
-        let body = try #require(query("body", in: longLink.url))
-        let encoded = try #require(URLComponents(url: longLink.url, resolvingAgainstBaseURL: false)?.percentEncodedQueryItems?.first { $0.name == "body" }?.value)
-        #expect(encoded.count <= FeedbackReport.urlBodyLimit)
-        #expect(body.hasPrefix("Claude Profiles 1.0.0 (abc1234)"))
-        #expect(body.contains("attach"))
+        let diagnostics = try #require(query("diagnostics", in: longLink.url))
+        let comps = URLComponents(url: longLink.url, resolvingAgainstBaseURL: false)
+        let diagnosticsEncoded = try #require(comps?.percentEncodedQueryItems?.first { $0.name == "diagnostics" }?.value)
+        let whatHappenedEncoded = try #require(comps?.percentEncodedQueryItems?.first { $0.name == "what-happened" }?.value)
+        #expect(diagnosticsEncoded.count + whatHappenedEncoded.count <= FeedbackReport.urlBodyLimit)
+        #expect(diagnostics.hasPrefix("Claude Profiles 1.0.0 (abc1234)"))
+        #expect(diagnostics.contains("attach"))
         #expect(query("title", in: longLink.url) == "Problem report")
     }
 
@@ -53,7 +56,7 @@ struct ReportSharingTests {
         #expect(try String(contentsOf: file, encoding: .utf8) == long.document(description: "Sessions vanish"))
         #expect(copied == [long.document(description: "Sessions vanish")])
         #expect(opened == [shared.link.url])
-        #expect(query("body", in: shared.link.url)?.contains(file.lastPathComponent) == true)
+        #expect(query("diagnostics", in: shared.link.url)?.contains(file.lastPathComponent) == true)
 
         copied = []; opened = []
         let short = FeedbackReport(facts: facts(logLines: 2))

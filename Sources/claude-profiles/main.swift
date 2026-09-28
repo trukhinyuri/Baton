@@ -17,6 +17,10 @@ USAGE
   claude-profiles local-only on|off|status [PROFILE|main] [--json]
                                                  Keep new Claude Code sessions off Remote Control; on by
                                                  default. No profile: every window without its own choice
+  claude-profiles local-only cloud-lock on|off|status
+                                                 Optional, off by default: also deny the one MCP tool that
+                                                 moves a Claude Code session to the cloud, Mac-wide, in
+                                                 ~/.claude/settings.json
   claude-profiles conversations [--all]         Recent local Code sessions and Cowork tasks
   claude-profiles continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
                                                  Continue a conversation in another profile: a Code session
@@ -74,6 +78,13 @@ func describe(_ status: LocalOnly.Status) -> String {
     case .off: "Local only off"
     case .pending: "Local only applies when this window next starts"
     case .notSupported: "Local only not available in this Claude Desktop version"
+    }
+}
+
+func describe(_ status: CloudMoveLock.Status) -> String {
+    switch status {
+    case .on: "Cloud move lock: mcp__ccd_session__move_to_cloud denied in ~/.claude/settings.json"
+    case .off: "Cloud move lock off"
     }
 }
 
@@ -187,7 +198,7 @@ do {
         if carried > 0 { print("\(carried) files carried into \(r.carried.count) sessions Claude Desktop continued as a copy") }
         if dryRun { print("Nothing was changed.") }
     case "local-only":
-        guard args.count >= 2 else { fail("local-only needs on, off or status") }
+        guard args.count >= 2 else { fail("local-only needs on, off, status or cloud-lock") }
         switch args[1] {
         case "on", "off":
             let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
@@ -204,8 +215,15 @@ do {
             } else {
                 for row in rows { print("\(row.label): \(describe(row.status))") }
             }
+        case "cloud-lock":
+            guard args.count >= 3 else { fail("local-only cloud-lock needs on, off or status") }
+            switch args[2] {
+            case "on", "off": print(describe(try manager.setCloudMoveLock(args[2] == "on")))
+            case "status": print(describe(manager.cloudMoveLock.status()))
+            default: fail("local-only cloud-lock needs on, off or status")
+            }
         default:
-            fail("local-only needs on, off or status")
+            fail("local-only needs on, off, status or cloud-lock")
         }
     case "doctor":
         let entries = try Diagnostics.inspect(paths: manager.paths)
@@ -223,6 +241,7 @@ do {
             case let missing?: print("Local only: missing in this Claude Desktop: \(missing.joined(separator: ", "))")
             }
             for row in manager.localOnlyStatus() { print("\(row.label): \(describe(row.status))") }
+            print(describe(manager.cloudMoveLock.status()))
             for entry in entries {
                 print("\(entry.label): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
                 for issue in entry.issues { print("  \(issue)") }

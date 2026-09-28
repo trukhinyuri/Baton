@@ -57,6 +57,8 @@ public struct Paths: Sendable, Equatable {
     public var claudeDir: URL { home.appending(path: ".claude", directoryHint: .isDirectory) }
     /// Claude Code conversations (`<folder>/<session>.jsonl`), shared by every Claude window on this Mac.
     public var claudeProjectsDir: URL { claudeDir.appending(path: "projects", directoryHint: .isDirectory) }
+    /// Claude Code's own settings, one Mac-wide file; see `CloudMoveLock`.
+    public var claudeSettingsFile: URL { claudeDir.appending(path: "settings.json") }
 
     /// Claude Profiles's own state: profile registry and backups.
     public var stateDir: URL { applicationSupport.appending(path: "Claude Profiles", directoryHint: .isDirectory) }
