@@ -10,7 +10,7 @@ USAGE
                                                  Create a profile and open it to sign in
   claude-profiles open <profile>                Open a profile's window (id or label)
   claude-profiles remove <profile>              Quit it and move its copy and sign-in to the Trash
-  claude-profiles sync                          Share local Code sessions; inspect Cowork without copying it
+  claude-profiles sync                          Share local Code sessions and sidebar groups; inspect Cowork without copying it
   claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
   claude-profiles doctor [--json]               Read-only session, folder and Remote Control checks
   claude-profiles conversations [--all]         Recent local Code sessions, Project branches and Cowork tasks
@@ -160,6 +160,8 @@ do {
         print("\(r.sessions.pairs) session folders · \(r.sessions.cardsWritten) cards copied · \(r.sessions.cardsRemoved) removed · \(r.sessions.tombstonesWritten) deletions shared")
         print("\(r.cowork.pairs) Cowork folders checked · kept in their original profiles; use continue to carry one elsewhere")
         print("\(r.sessions.accountBoundCards + r.cowork.accountBoundCards) account-linked cards scoped · \(r.sessions.ambiguousAccountBoundCards + r.cowork.ambiguousAccountBoundCards) ambiguous cards left untouched")
+        print("\(r.groups.groupsShared) sidebar groups shared · \(r.groups.windowsChanged.count) closed windows updated; open ones get them when they next start")
+        for skipped in r.groups.skipped { print("  Groups not shared with \(skipped)") }
     case "doctor":
         let entries = try Diagnostics.inspect(paths: manager.paths)
         if args.contains("--json") {

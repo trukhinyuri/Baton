@@ -9,6 +9,7 @@
 - Claude imports continued sessions itself, with its own trust and permission checks; when the destination's model differs from the session's, the sheet and `--dry-run` ask to choose it before sending
 - Usage shows how old each figure is; figures older than 3 hours are marked. Windows are ordered by weekly usage, lowest first, however old the figure
 - A session whose transcript file is empty is dated by the file instead of being listed last
+- Code sidebar groups are shared by every window, each under its own account: a group made, renamed or deleted in one window, with its ordinary local Code sessions, follows in the others. Closed windows get it right away, open ones when they next start. Groups of Cowork, cloud or Project-worker items stay in their window, and cloud Code Projects stay with their account
 
 ## 0.3.0 — 2026-09-28
 

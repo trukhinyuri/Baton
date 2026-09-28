@@ -79,7 +79,8 @@ public struct ProfileStatus: Identifiable, Equatable, Sendable {
 public struct SyncReport: Equatable, Sendable {
     public var sessions: SessionSync.Report
     public var cowork: CoworkSync.Report
-    public var changes: Int { sessions.changes + cowork.changes }
+    public var groups: GroupSync.Report
+    public var changes: Int { sessions.changes + cowork.changes + groups.windowsChanged.count }
 }
 
 /// Creates, opens and removes profiles. Every operation is local to this Mac.
@@ -300,6 +301,8 @@ public final class ProfileManager: @unchecked Sendable {
                 catch { problems.append("Setup: \(error.localizedDescription)") }
                 do { _ = try InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id) }
                 catch { problems.append("Interface: \(error.localizedDescription)") }
+                do { _ = try shareGroups() }
+                catch { problems.append("Groups: \(error.localizedDescription)") }
                 if !problems.isEmpty {
                     openWarning = "Claude \(profile.label) opened, but some shared settings could not be refreshed. " + problems.joined(separator: " ")
                 }
@@ -361,7 +364,12 @@ public final class ProfileManager: @unchecked Sendable {
         }
         do {
             _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
-                _ = try prepareSessionsForLaunch()
+                var problems: [String] = []
+                do { _ = try prepareSessionsForLaunch() }
+                catch { problems.append("sessions could not be shared first: \(error.localizedDescription)") }
+                do { _ = try shareGroups() }
+                catch { problems.append("sidebar groups could not be shared first: \(error.localizedDescription)") }
+                if !problems.isEmpty { lock.withLock { openWarning = "Claude opened, but " + problems.joined(separator: "; ") } }
             }
         } catch {
             lock.withLock { openWarning = "Claude opened, but sessions could not be shared first: \(error.localizedDescription)" }
@@ -560,6 +568,15 @@ public final class ProfileManager: @unchecked Sendable {
         return report
     }
 
+    /// Shares sidebar groups between every window. Takes `sync.lock`, so call it without holding that lock.
+    @discardableResult
+    func shareGroups() throws -> GroupSync.Report {
+        guard let report = try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: true, {
+            try GroupSync(paths: paths).run(windows: windows)
+        }) else { throw POSIXError(.EWOULDBLOCK) }
+        return report
+    }
+
     // MARK: Remove
 
     /// Quits the profile's window and moves its app copy and data (including its sign-in) to the Trash.
@@ -602,7 +619,8 @@ public final class ProfileManager: @unchecked Sendable {
         }
     }
 
-    /// Shares ordinary local Code sessions; inventories Cowork without cross-profile writes.
+    /// Shares ordinary local Code sessions and the sidebar groups holding them; inventories Cowork without
+    /// cross-profile writes.
     /// - Returns: `nil` if another sync (from the app or the CLI) is already running.
     @discardableResult
     public func syncSessions() throws -> SyncReport? {
@@ -611,7 +629,8 @@ public final class ProfileManager: @unchecked Sendable {
             let propagateDeletions = !isAnyClaudeRunning
             let sessions = try SessionSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
             let cowork = try CoworkSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
-            return SyncReport(sessions: sessions, cowork: cowork)
+            let groups = try GroupSync(paths: paths).run(windows: windows)
+            return SyncReport(sessions: sessions, cowork: cowork, groups: groups)
         }
     }
 

@@ -32,6 +32,7 @@ Claude Profiles gives every subscription its own Claude window with its own Dock
 - **One window per subscription.** Each profile is the official Claude Desktop app running with its own sign-in. No code is patched or injected.
 - **Labeled Dock icons.** `WORK`, `LAB` or `TEAM` on a color of your choice tells you which account a window belongs to. The launchers work from Spotlight too.
 - **Local Code continuity.** Ordinary local Claude Code sessions appear across windows. Project workers and cloud Cowork stay with their owning account; legacy local Cowork requires its original profile.
+- **Shared sidebar groups.** A group you make in the Code sidebar of any window, such as one project's sessions, appears in every other window with the same local sessions in it. Cowork, cloud and Project-worker items stay in their own window.
 - **Shared local setup.** Before a profile window starts, it gets supported local tools and display preferences from the main app. Account settings, Remote Control access and cloud project state remain separate. Sign-ins are never copied.
 - **Usage at a glance.** Five-hour and weekly usage for every subscription, from what Claude Desktop itself records. The one with the most headroom is highlighted.
 - **Knows who is signed in.** Every row shows the email of the account in that window and warns if it is not the one you intended.
@@ -50,6 +51,7 @@ Claude Profiles gives every subscription its own Claude window with its own Dock
 | Work or setting | Behavior |
 |---|---|
 | Ordinary local Claude Code sessions | Local transcripts stay in `~/.claude`; Claude Profiles shares the sidebar cards. Continue a session in one window at a time. |
+| Code sidebar groups | Shared: a group made, renamed or deleted in one window is made, renamed or deleted in all of them, holding the ordinary local Code sessions. A closed window gets it before it next starts; an open one when it next starts, because Claude reads its groups only at launch. Groups holding only Cowork, cloud or Project-worker items stay in their window. |
 | Local Code settings, skills, hooks and memory | Claude reads the same local configuration. Supported Desktop setup and display preferences are also synchronized before a profile opens. |
 | Local Cowork tasks | Not shared: their history and runtime belong to the original profile, account and organization. **Continue work…** starts a new task in another profile with the history and the task's files attached. |
 | New Claude Code Projects, coordinator, memory, Library and threads | Belong to their Claude account. Open the owning profile and use its native Projects view. Local Project workers also retain their owner; **Continue work…** can open a local branch's conversation in another profile as a regular Code session. |
@@ -140,7 +142,7 @@ claude-profiles add <email> [--label TEXT] [--color #RRGGBB]
                                                Create a profile and open it to sign in
 claude-profiles open <profile>                Open a profile's window (id or label)
 claude-profiles remove <profile>              Quit it and move its copy and sign-in to the Trash
-claude-profiles sync                          Share ordinary local Code session cards across profiles now
+claude-profiles sync                          Share ordinary local Code session cards and sidebar groups across profiles now
 claude-profiles doctor [--json]               Inspect sessions and per-profile setup without changing it
 claude-profiles conversations [--all]         List local conversations that can continue in another profile
 claude-profiles continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
