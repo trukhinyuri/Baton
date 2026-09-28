@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Continue All in …** continues every Code session and Project branch of a folder with a message in the last day in one step, and can start a new session there; `claude-profiles continue --folder <path> --to <profile> [--since 24h] [--new] [--dry-run]` does the same
+- Project branches and sessions with a message in the last 10 minutes continue as a copy by default, so two windows never write to one session; **Same session** / `--same` needs confirmation that the original was stopped, **As a copy** / `--fork` always copies
+- The session's model carries over when the destination has used it; a closed destination is prepared with the source's model and a safe permission mode. Otherwise the sheet and `--dry-run` say which model it will use
+- Usage shows how old each figure is; figures older than 3 hours are marked, and **Most headroom** is only given to a subscription measured in the last 3 hours
+- A session whose transcript file is empty is dated by the file instead of being listed last
+
 ## 0.3.0 — 2026-09-28
 
 - **Continue work…** lists the local Code sessions, Project branches and Cowork tasks of every window, most recent first, with search. Pick one and a subscription to continue in; the one with the most weekly headroom is preselected and those at their limit are marked
