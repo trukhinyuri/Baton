@@ -453,9 +453,21 @@ public final class ProfileManager: @unchecked Sendable {
                             newSessionIn folder: String? = nil, now: Date = Date()) async throws -> [ContinuePlan] {
         var plans = try plan(conversations, in: destination, mode: mode, newSessionIn: folder, now: now)
         var links: [URL] = []
-        for i in plans.indices {
-            try prepare(&plans[i])
-            links.append(ClaudeLink.resume(plans[i].sessionID))
+        var madeThisRun: [(id: String, folder: URL)] = []
+        do {
+            for i in plans.indices {
+                if let made = try prepare(&plans[i]) { madeThisRun.append(made) }
+                links.append(ClaudeLink.resume(plans[i].sessionID))
+            }
+        } catch {
+            // A later conversation in the same batch failed: undo every copy this run made, so a partial
+            // "Continue All" never leaves an orphan transcript behind.
+            let copies = ContinueCopies(paths: paths)
+            for made in madeThisRun {
+                TranscriptFork.removeCopy(made.id, in: made.folder, claudeDir: paths.claudeDir)
+                try? copies.forget(copy: made.id)
+            }
+            throw error
         }
         let newSession = folder.map { ClaudeLink.newCodeSession(folder: $0) }
         guard !links.isEmpty else {
@@ -491,9 +503,26 @@ public final class ProfileManager: @unchecked Sendable {
         for i in awaited { plans[i].opened = seen.contains(plans[i].sessionID) }
     }
 
-    /// Makes the copy a plan calls for.
-    func prepare(_ plan: inout ContinuePlan) throws {
-        if plan.forks { plan.sessionID = try TranscriptFork.fork(plan.conversation, claudeDir: paths.claudeDir) }
+    /// Makes the copy a plan calls for. A second call for the same source session and destination reuses the
+    /// copy already made there instead of forking another (see `ContinueCopies`), and the copy's title is marked
+    /// with the source window's label when that window is known (a Project branch's owner).
+    /// - Returns: the new copy's id and the folder it's in, if this call forked one; `nil` if the plan doesn't
+    ///   fork or reused an existing copy. Used by `continueAll` to roll a copy back if a later one in the same
+    ///   run fails.
+    @discardableResult
+    func prepare(_ plan: inout ContinuePlan) throws -> (id: String, folder: URL)? {
+        guard plan.forks else { return nil }
+        if let owner = plan.conversation.ownerID { plan.conversation.title += " · from \(label(of: owner))" }
+        let copies = ContinueCopies(paths: paths)
+        let folder = plan.conversation.transcript.deletingLastPathComponent()
+        if let reused = copies.existingCopy(of: plan.conversation.sessionID, in: plan.destination, folder: folder) {
+            plan.sessionID = reused
+            return nil
+        }
+        let new = try TranscriptFork.fork(plan.conversation, claudeDir: paths.claudeDir)
+        plan.sessionID = new
+        try? copies.record(source: plan.conversation.sessionID, destination: plan.destination, copy: new)
+        return (new, folder)
     }
 
     /// The accounts that may continue work touching `folders` (see `FolderRules`); `nil` when no rule applies.

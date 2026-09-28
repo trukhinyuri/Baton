@@ -119,9 +119,23 @@ public enum TranscriptFork {
         return data[data.startIndex..<start]
     }
 
-    /// Every occurrence of `old` (as written, and lowercased) becomes `new`: each record's `sessionId` and the
-    /// paths of the session's own files.
+    /// Every occurrence of `old` (as written, and lowercased) becomes `new`, except inside a record's own
+    /// `message` field: each record's `sessionId` and the paths of the session's own files are rewritten, but
+    /// what the record's `message` says is left exactly as it was, so a message that quotes or pastes the old
+    /// id keeps it.
     static func replacing(_ old: String, with new: String, in data: Data) -> Data {
+        var output = Data(capacity: data.count)
+        var from = data.startIndex
+        for range in messageValueRanges(in: data) {
+            output.append(replacingEverywhere(old, with: new, in: data[from..<range.lowerBound]))
+            output.append(data[range])
+            from = range.upperBound
+        }
+        output.append(replacingEverywhere(old, with: new, in: data[from...]))
+        return output
+    }
+
+    private static func replacingEverywhere(_ old: String, with new: String, in data: Data) -> Data {
         var result = data
         for variant in Set([old, old.lowercased()]) {
             let needle = Data(variant.utf8), replacement = Data(new.utf8)
@@ -138,6 +152,77 @@ public enum TranscriptFork {
         return result
     }
 
+    /// The byte ranges of every top-level `"message":` field's value in `data`, one JSONL record at a time. A
+    /// value already found is skipped whole before searching for the next `"message":`, so text inside it (such
+    /// as a pasted `"message":"…"` fragment) is never mistaken for another record's field.
+    private static func messageValueRanges(in data: Data) -> [Range<Data.Index>] {
+        let marker = Data(#""message":"#.utf8)
+        var ranges: [Range<Data.Index>] = []
+        var from = data.startIndex
+        while let found = data.range(of: marker, in: from..<data.endIndex) {
+            var valueStart = found.upperBound
+            while valueStart < data.endIndex, isJSONWhitespace(data[valueStart]) { valueStart = data.index(after: valueStart) }
+            let valueEnd = endOfJSONValue(in: data, start: valueStart)
+            ranges.append(valueStart..<valueEnd)
+            from = valueEnd
+        }
+        return ranges
+    }
+
+    /// Where the JSON value starting at `start` ends: past the matching quote, brace or bracket, or at the next
+    /// `,`, `}` or `]` for a number, boolean or null. A lightweight stand-in for a full JSON parse, used only to
+    /// find one field's value.
+    private static func endOfJSONValue(in data: Data, start: Data.Index) -> Data.Index {
+        guard start < data.endIndex else { return start }
+        switch data[start] {
+        case UInt8(ascii: "\""):
+            return endOfJSONString(in: data, quote: start)
+        case UInt8(ascii: "{"), UInt8(ascii: "["):
+            var i = start, depth = 0
+            while i < data.endIndex {
+                switch data[i] {
+                case UInt8(ascii: "\""): i = endOfJSONString(in: data, quote: i); continue
+                case UInt8(ascii: "{"), UInt8(ascii: "["): depth += 1
+                case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                    depth -= 1
+                    if depth == 0 { return data.index(after: i) }
+                default: break
+                }
+                i = data.index(after: i)
+            }
+            return i
+        default:
+            var i = start
+            while i < data.endIndex, !",}]".utf8.contains(data[i]) { i = data.index(after: i) }
+            return i
+        }
+    }
+
+    /// Where the JSON string that opens at `quote` ends, honoring `\"` escapes.
+    private static func endOfJSONString(in data: Data, quote: Data.Index) -> Data.Index {
+        var i = data.index(after: quote)
+        while i < data.endIndex {
+            if data[i] == UInt8(ascii: "\\") { i = data.index(i, offsetBy: 2, limitedBy: data.endIndex) ?? data.endIndex; continue }
+            if data[i] == UInt8(ascii: "\"") { return data.index(after: i) }
+            i = data.index(after: i)
+        }
+        return i
+    }
+
+    private static func isJSONWhitespace(_ byte: UInt8) -> Bool { byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D }
+
+    /// Removes everything `fork(_:claudeDir:newID:)` made for `id`: its transcript, its own tool-results and
+    /// sub-agent folder, and its file-history and session-env copies. Used to undo a copy from a run that failed
+    /// partway through, so a `prepare` failure never leaves an orphan behind.
+    static func removeCopy(_ id: String, in folder: URL, claudeDir: URL) {
+        let fm = FileManager.default
+        try? fm.removeItem(at: folder.appending(path: "\(id).jsonl"))
+        try? fm.removeItem(at: folder.appending(path: id, directoryHint: .isDirectory))
+        for kind in ["file-history", "session-env"] {
+            try? fm.removeItem(at: claudeDir.appending(path: "\(kind)/\(id)", directoryHint: .isDirectory))
+        }
+    }
+
     /// Written under a temporary name readable only by you, then moved into place.
     static func write(_ data: Data, to url: URL) throws {
         let fm = FileManager.default
@@ -152,6 +237,50 @@ public enum TranscriptFork {
             try? fm.removeItem(at: temporary)
             throw error
         }
+    }
+}
+
+/// Which copy a source session already has in a destination, so a second "Continue All" to the same destination
+/// reuses it instead of forking another. Kept in `continue-copies.json`, one entry per (source, destination); the
+/// copy's own transcript is the real record, so a stale entry whose copy is gone (removed by hand, or rolled
+/// back after a failed run) is simply overwritten by a fresh fork the next time.
+struct ContinueCopies: Sendable {
+    let file: URL
+
+    init(paths: Paths) { file = paths.stateDir.appending(path: "continue-copies.json") }
+
+    private struct Entry: Codable, Equatable { var source: String; var destination: String; var copy: String }
+    private struct Stored: Codable { var version = 1; var copies: [Entry] }
+
+    private func load() -> [Entry] {
+        guard let data = try? Data(contentsOf: file), let stored = try? JSONDecoder().decode(Stored.self, from: data) else { return [] }
+        return stored.copies
+    }
+
+    private func save(_ entries: [Entry]) throws {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(Stored(copies: entries)).write(to: file, options: .atomic)
+    }
+
+    /// The copy already made of `source` in `destination`, if its transcript is still in `folder`.
+    func existingCopy(of source: String, in destination: String, folder: URL) -> String? {
+        guard let entry = load().first(where: { $0.source == source && $0.destination == destination }),
+              FileManager.default.fileExists(atPath: folder.appending(path: "\(entry.copy).jsonl").path) else { return nil }
+        return entry.copy
+    }
+
+    /// Records that `source` now has `copy` in `destination`, replacing any earlier entry for the same pair.
+    func record(source: String, destination: String, copy: String) throws {
+        var entries = load().filter { !($0.source == source && $0.destination == destination) }
+        entries.append(Entry(source: source, destination: destination, copy: copy))
+        try save(entries)
+    }
+
+    /// Drops every entry naming `copy`, so a copy rolled back after a failed run is never offered for reuse.
+    func forget(copy: String) throws {
+        try save(load().filter { $0.copy != copy })
     }
 }
 

@@ -78,6 +78,22 @@ struct TranscriptForkTests {
         #expect(box.read(transcript.deletingLastPathComponent().appending(path: "\(taken).jsonl")) == "keep")
     }
 
+    @Test func copyKeepsOldIdInsideMessageText() throws {
+        let box = try Sandbox()
+        let old = Sandbox.cli
+        let line = #"{"type":"user","sessionId":"\#(old)","message":{"role":"user","content":"copy \#(old) into the ticket"}}"#
+        let transcript = try box.transcript(lines: [line])
+        let conversation = Conversation(kind: .code, sessionID: old, title: "t", folders: ["/repo"],
+                                        lastActivity: Date(), transcript: transcript)
+
+        let new = try TranscriptFork.fork(conversation)
+
+        let copy = try String(contentsOf: transcript.deletingLastPathComponent().appending(path: "\(new).jsonl"), encoding: .utf8)
+        #expect(copy.contains(#""sessionId":"\#(new)""#), "the record's own id is rewritten")
+        #expect(!copy.contains(#""sessionId":"\#(old)""#))
+        #expect(copy.contains("copy \(old) into the ticket"), "what the message said is left exactly as it was")
+    }
+
     @Test func aFailedCopyLeavesNothingBehind() throws {
         let box = try Sandbox()
         let transcript = try box.transcript(lines: [record(Sandbox.cli, at: Date())])
@@ -293,6 +309,16 @@ struct ModelCarryTests {
         ])
         #expect(ConversationIndex.lastModel(of: transcript) == "claude-opus-5-5")
     }
+
+    @Test func lastModelIgnoresSidechainModel() throws {
+        let box = try Sandbox()
+        let transcript = try box.transcript(lines: [
+            record(Sandbox.cli, at: Date(), model: "claude-opus-5-5"),
+            #"{"type":"assistant","sessionId":"\#(Sandbox.cli)","isSidechain":true,"message":{"model":"claude-haiku-4-5","content":[]}}"#,
+            #"{"type":"assistant","sessionId":"\#(Sandbox.cli)","isMeta":true,"message":{"model":"claude-fable-5","content":[]}}"#,
+        ])
+        #expect(ConversationIndex.lastModel(of: transcript) == "claude-opus-5-5", "a sub-agent's or Claude Code's own model isn't what the person was talking to")
+    }
 }
 
 @Suite("Preparing the destination")
@@ -334,6 +360,51 @@ struct ContinuePlanTests {
         #expect(box.exists(box.paths.claudeProjectsDir.appending(path: "-repo/\(plan.sessionID).jsonl")))
         #expect(try FileManager.default.contentsOfDirectory(atPath: b.path) == ["local_rc.json"],
                 "no card is made by hand: Claude imports the session with its own trust and permission checks")
+    }
+
+    @Test func copyTitleNamesSourceWindow() throws {
+        let (_, manager, conversation, _) = try setUp()
+        #expect(conversation.kind == .projectBranch && conversation.ownerID == "main")
+
+        var plan = try #require(try manager.plan([conversation], in: "work").first)
+        try manager.prepare(&plan)
+
+        #expect(plan.conversation.title == "Duties · from MAIN")
+    }
+
+    @Test func continueAllTwiceMakesNoSecondCopy() throws {
+        let (box, manager, conversation, _) = try setUp()
+        var first = try #require(try manager.plan([conversation], in: "work").first)
+        try manager.prepare(&first)
+
+        var second = try #require(try manager.plan([conversation], in: "work").first)
+        try manager.prepare(&second)
+
+        #expect(second.sessionID == first.sessionID, "the same copy is reused, not a second one")
+        let folder = box.paths.claudeProjectsDir.appending(path: "-repo")
+        let extras = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0 != "\(Sandbox.cli).jsonl" }
+        #expect(extras == ["\(first.sessionID).jsonl"], "only one copy on disk")
+    }
+
+    @Test func prepareFailureLeavesNoPartialCopies() async throws {
+        let box = try Sandbox()
+        try ProfileRegistry(paths: box.paths).save([Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")])
+        try box.signIn(box.main, account: Sandbox.accountA)
+        try box.signIn(box.work, account: Sandbox.accountB)
+        let okID = "aaaaaaaa-0000-0000-0000-000000000001", badID = "bbbbbbbb-0000-0000-0000-000000000002"
+        let okTranscript = try box.transcript(okID, lines: [record(okID, at: Date())])
+        let badTranscript = try box.transcript(badID, lines: [record(badID, at: Date())])
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: badTranscript.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: badTranscript.path) }
+        let ok = Conversation(kind: .code, sessionID: okID, title: "ok", folders: ["/repo"], lastActivity: Date(), transcript: okTranscript)
+        let bad = Conversation(kind: .code, sessionID: badID, title: "bad", folders: ["/repo"], lastActivity: Date(), transcript: badTranscript)
+        let manager = ProfileManager(paths: box.paths)
+
+        await #expect(throws: (any Error).self) { try await manager.continueAll([ok, bad], in: "work", mode: .fork) }
+
+        let folder = okTranscript.deletingLastPathComponent()
+        let leftover = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0 != "\(okID).jsonl" && $0 != "\(badID).jsonl" }
+        #expect(leftover.isEmpty, "the copy made for the first conversation before the second one failed is rolled back")
     }
 
     @Test func aRegularSessionKeepsItsSharedCardInAClosedWindow() throws {

@@ -153,21 +153,33 @@ public enum ConversationIndex {
     }
 
     /// The model of the last assistant message near the end of a transcript: what Claude Desktop picks when it
-    /// imports the session without a card.
+    /// imports the session without a card. A sub-agent's run (`isSidechain`) and Claude Code's own bookkeeping
+    /// (`isMeta`) don't reflect what the person was talking to, so their records are skipped.
     static func lastModel(of transcript: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: transcript) else { return nil }
         defer { try? handle.close() }
         let tail: UInt64 = 256 << 10
         guard let size = try? handle.seekToEnd(), (try? handle.seek(toOffset: size > tail ? size - tail : 0)) != nil,
               let data = try? handle.readToEnd() else { return nil }
-        let key = Data(#""model":""#.utf8)
+        let modelKey = Data(#""model":""#.utf8)
+        let sidechainKey = Data(#""isSidechain":true"#.utf8), metaKey = Data(#""isMeta":true"#.utf8)
+        let newline = UInt8(ascii: "\n")
         var last: String?
-        var from = data.startIndex
-        while let found = data.range(of: key, in: from..<data.endIndex) {
-            from = found.upperBound
-            guard let end = data[from...].firstIndex(of: UInt8(ascii: "\"")), end - from < 80,
-                  let text = String(data: data[from..<end], encoding: .utf8), text.hasPrefix("claude-") else { continue }
-            last = text
+        var lineStart = data.startIndex
+        while lineStart <= data.endIndex {
+            let lineEnd = data[lineStart...].firstIndex(of: newline) ?? data.endIndex
+            let line = data[lineStart..<lineEnd]
+            if line.range(of: sidechainKey) == nil, line.range(of: metaKey) == nil {
+                var from = line.startIndex
+                while let found = line.range(of: modelKey, in: from..<line.endIndex) {
+                    from = found.upperBound
+                    guard let end = line[from...].firstIndex(of: UInt8(ascii: "\"")), end - from < 80,
+                          let text = String(data: line[from..<end], encoding: .utf8), text.hasPrefix("claude-") else { continue }
+                    last = text
+                }
+            }
+            guard lineEnd < data.endIndex else { break }
+            lineStart = data.index(after: lineEnd)
         }
         return last
     }
