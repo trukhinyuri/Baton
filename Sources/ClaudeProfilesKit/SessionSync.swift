@@ -158,6 +158,14 @@ public struct SessionSync: Sendable {
             return allowed.accounts.contains(known)
         }
 
+        // What each window's archive list was after the last run. A session missing from a list now that was
+        // in it then was unarchived there, and that wins over every other window's older list.
+        let baselineFile = paths.stateDir.appending(path: "archive-baselines.json")
+        let baselines = ArchiveBaselines.load(from: baselineFile)
+        var nextBaselines = ArchiveBaselines()
+        let unarchived = archiveLists.reduce(into: Set<String>()) { result, entry in
+            result.formUnion(baselines.lists[entry.key].map { Set($0).subtracting(entry.value) } ?? [])
+        }
         let carriers = carriesPermissionMode == nil ? permissionModeCarriers() : []
         var live: Set<String>?
         func isLive(_ transcript: String) -> Bool {
@@ -266,7 +274,7 @@ public struct SessionSync: Sendable {
                 }
             }
             // Keep own archive entries; import native worker entries only within their known scope.
-            // Union still protects against a running window writing a stale archive list.
+            // Additions from every window are combined; an unarchive since the last run removes the entry everywhere.
             var archived = archiveLists[pair.path] ?? []
             for (path, ids) in archiveLists {
                 let sourceScope = Self.scope(of: URL(fileURLWithPath: path))
@@ -275,8 +283,10 @@ public struct SessionSync: Sendable {
                     return !accountBound.contains(name) || (sourceScope == scope && permitted(name, in: scope))
                 })
             }
+            archived.subtract(unarchived)
             let url = pair.appending(path: Self.archiveIndex)
-            if !archived.isEmpty {
+            if !archived.isEmpty || archiveLists[pair.path] != nil {
+                nextBaselines.lists[pair.path] = archived.sorted()
                 if archiveLists[pair.path] != archived {
                     if !dryRun {
                         if fm.fileExists(atPath: url.path), try backup.save(url) { report.backedUp += 1 }
@@ -288,10 +298,31 @@ public struct SessionSync: Sendable {
             }
         }
         if !dryRun {
+            if nextBaselines.lists != baselines.lists { try nextBaselines.save(to: baselineFile) }
             removeDeadScratchLinks()
             backup.prune()
         }
         return report
+    }
+
+    /// Each session folder's archive list as the last run left it, keyed by the folder's path. Only session IDs.
+    struct ArchiveBaselines: Codable {
+        var version = 1
+        var lists: [String: [String]] = [:]
+
+        /// Missing or unreadable means no baseline: lists are then only combined, as before there was one.
+        static func load(from url: URL) -> ArchiveBaselines {
+            guard let data = try? Data(contentsOf: url), let state = try? JSONDecoder().decode(ArchiveBaselines.self, from: data),
+                  state.version == 1 else { return ArchiveBaselines() }
+            return state
+        }
+
+        func save(to url: URL) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(self).write(to: url, options: .atomic)
+        }
     }
 
     /// The newest copy of a card found so far, and what it says.
