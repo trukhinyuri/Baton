@@ -133,8 +133,18 @@ public enum DesktopData {
     /// Email of the signed-in account, taken from the claude.ai profile that Claude Desktop caches in IndexedDB.
     /// The cache stores the account UUID shortly before `email_address`; requiring both avoids picking up
     /// unrelated addresses (for example, teammates listed in an organization).
+    ///
+    /// Each IndexedDB database is read record by record first: LevelDB usually Snappy-compresses its tables,
+    /// which hides the profile from a scan of the files' bytes. The byte scan remains for what can't be parsed.
     public static func email(in dataDir: URL, accountID: String) -> String? {
         let root = dataDir.appending(path: "IndexedDB", directoryHint: .isDirectory)
+        for database in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        where database.lastPathComponent.hasSuffix(".leveldb") {
+            guard let entries = try? LevelDBStore(dir: database).liveEntries() else { continue }
+            for value in entries.values {
+                if let found = email(inBlob: Data(value), accountID: accountID) { return found }
+            }
+        }
         guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]) else { return nil }
         var files: [(Date, URL)] = []
         for case let url as URL in walker {
