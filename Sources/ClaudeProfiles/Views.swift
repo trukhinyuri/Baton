@@ -69,10 +69,11 @@ struct UsageColumn: View {
             VStack(alignment: .leading, spacing: 5) {
                 UsageMeter(title: "5-hour", percent: usage.fiveHour, isStale: usage.isFiveHourStale())
                 UsageMeter(title: "Weekly", percent: usage.week)
-                Text("Updated \(usage.sampledAt, format: .relative(presentation: .named))")
+                (Text("Updated \(usage.sampledAt, format: .relative(presentation: .named))") + Text(usage.isFresh() ? "" : " · may be higher now"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 56)
+                    .help(usage.isFresh() ? "" : "Claude records usage only while this window is open and in use, so this sample can be behind.")
             }
         } else {
             Text(status.isSignedIn ? "Usage appears after the first message" : "Usage appears after sign-in")
@@ -113,7 +114,7 @@ struct ProfileRow: View {
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(Capsule().fill(Color.green.opacity(0.18)))
                             .foregroundStyle(.green)
-                            .help("Lowest weekly usage among your signed-in subscriptions")
+                            .help("Lowest weekly usage among your signed-in subscriptions with usage recorded in the last 3 hours")
                     }
                 }
                 HStack(spacing: 6) {
@@ -195,6 +196,7 @@ struct EmptyHint: View {
 struct LimitBanner: View {
     let tired: ProfileStatus
     let best: String
+    var note = ""
     let action: () -> Void
 
     var body: some View {
@@ -203,6 +205,7 @@ struct LimitBanner: View {
             Text("\(tired.isMain ? "Claude (main)" : "Claude \(tired.label)") has reached its usage limit.")
                 .font(.callout.weight(.medium))
             Spacer()
+            if !note.isEmpty { Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(.secondary) }
             Button("Continue in \(best)…", action: action)
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -217,7 +220,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             header
             if let tired = model.limitReached, let best = model.bestDestination(excluding: tired.id) {
-                LimitBanner(tired: tired, best: model.label(of: best)) { model.isContinuing = true }
+                LimitBanner(tired: tired, best: model.label(of: best), note: model.staleNote(best)) { model.isContinuing = true }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
             }

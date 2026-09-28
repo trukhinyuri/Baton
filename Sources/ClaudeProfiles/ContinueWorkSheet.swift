@@ -7,16 +7,23 @@ final class ContinueWorkForm: ObservableObject {
     @Published var search = ""
     @Published var selection: String?
     @Published var destination = ""
+    @Published var mode: ContinueMode = .auto
     @Published var working = false
-    @Published var confirmedActive: String?
+    /// The session you confirmed you stopped in its window, so the same session may continue elsewhere.
+    @Published var stopped: String?
+    @Published var alsoNewSession = true
     @Published var problem: String?
     @Published var copied = false
+    @Published var plan: ContinuePlan?
 }
 
 struct ContinueWorkSheet: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @StateObject private var form = ContinueWorkForm()
+
+    /// How far back “Continue All” looks for sessions in the selected session's folder.
+    static let folderWindow: TimeInterval = 24 * 3600
 
     private var filtered: [Conversation] {
         let query = form.search.trimmingCharacters(in: .whitespaces)
@@ -36,9 +43,21 @@ struct ContinueWorkSheet: View {
 
     private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.label ?? "" }
 
-    private var needsConfirmation: Bool {
-        guard let selected else { return false }
-        return selected.isActive() && form.confirmedActive != selected.id
+    private var forks: Bool { selected.map { form.mode.forks($0) } ?? false }
+
+    /// The same session is about to continue elsewhere although it may still be running in its window.
+    private func needsStop(_ conversation: Conversation) -> Bool {
+        conversation.kind != .cowork && !form.mode.forks(conversation)
+            && conversation.isActive(within: ContinueMode.forkWindow) && form.stopped != conversation.id
+    }
+
+    private var folder: String? { selected?.kind == .cowork ? nil : selected?.folders.first }
+
+    /// Code sessions and Project branches in the selected session's folder from the last day.
+    private var folderBatch: [Conversation] {
+        guard let folder else { return [] }
+        return ConversationIndex.recent(in: folder, since: Date().addingTimeInterval(-Self.folderWindow), from: model.conversations)
+            .filter { !($0.kind == .projectBranch && $0.ownerID == form.destination) }
     }
 
     var body: some View {
@@ -57,7 +76,7 @@ struct ContinueWorkSheet: View {
                 }
             }
             .listStyle(.bordered(alternatesRowBackgrounds: true))
-            .frame(minHeight: 180)
+            .frame(minHeight: 170)
             .overlay {
                 if model.isLoadingConversations && model.conversations.isEmpty {
                     ProgressView("Looking for conversations…")
@@ -74,22 +93,63 @@ struct ContinueWorkSheet: View {
                     }
                 }
                 .labelsHidden()
-                .frame(maxWidth: 320)
+                .frame(maxWidth: 360)
                 Spacer()
+                if let selected, selected.kind != .cowork {
+                    Picker("How", selection: $form.mode) {
+                        Text("Automatic").tag(ContinueMode.auto)
+                        Text("Same session").tag(ContinueMode.same)
+                        Text("As a copy").tag(ContinueMode.fork)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 280)
+                    .help("Automatic continues Project branches and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session.")
+                }
             }
 
             if let selected {
                 Text(explanation(selected)).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if selected.isActive() {
-                    Label(selected.kind == .cowork
-                          ? "This task was working less than a minute ago; the attached history may miss its last steps."
-                          : "This session was working less than a minute ago. Stop it in its window first, so two windows don't write to it at once.",
+                if let note = form.plan?.model, form.plan?.conversation.id == selected.id, form.plan?.destination == form.destination {
+                    Label(note.message(destination: destinationLabel), systemImage: note.isWarning ? "exclamationmark.triangle" : "cpu")
+                        .font(.callout).foregroundStyle(note.isWarning ? Color.orange : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if selected.kind == .cowork && selected.isActive() {
+                    Label("This task was working less than a minute ago; the attached history may miss its last steps.",
                           systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.orange)
+                } else if selected.kind != .cowork && !forks && selected.isActive(within: ContinueMode.forkWindow) {
+                    HStack(spacing: 8) {
+                        Label("It had a message \(relativeAge(since: selected.lastActivity)). Stop it in its window first, so two windows don't write to one session, or continue as a copy.",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.callout).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Toggle("I stopped it", isOn: Binding(get: { form.stopped == selected.id },
+                                                             set: { form.stopped = $0 ? selected.id : nil }))
+                            .toggleStyle(.checkbox)
+                    }
                 }
             }
             if let problem = form.problem { Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+
+            if let folder, !folderBatch.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    Text("\(folderBatch.count) in \((folder as NSString).lastPathComponent) from the last day")
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(folderBatch.map(\.title).joined(separator: "\n"))
+                    Toggle("Also start a new session there", isOn: $form.alsoNewSession).toggleStyle(.checkbox)
+                    Spacer()
+                    Button("Continue All in \(destinationLabel.isEmpty ? "…" : destinationLabel)") { goAll() }
+                        .disabled(form.working || form.destination.isEmpty || batchNeedsStop)
+                        .help(batchNeedsStop
+                              ? "Some of them had a message in the last 10 minutes. Choose Automatic or As a copy, or stop them first."
+                              : "Opens every Code session and Project branch of this folder with a message in the last day in one go.")
+                }
+                .font(.callout)
+            }
 
             Divider()
             HStack(spacing: 8) {
@@ -101,26 +161,36 @@ struct ContinueWorkSheet: View {
                 Button(primaryTitle) { go() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(form.working || selected == nil || form.destination.isEmpty || !destinations.contains { $0.id == form.destination })
+                    .disabled(form.working || selected == nil || form.destination.isEmpty
+                              || !destinations.contains { $0.id == form.destination } || selected.map(needsStop) == true)
             }
         }
         .padding(22)
-        .frame(width: 740, height: 500)
+        .frame(width: 780, height: 590)
         .onAppear {
             model.loadConversations()
             chooseDefaults()
+            refreshPlan()
         }
-        .onChange(of: model.conversations) { chooseDefaults() }
+        .onChange(of: model.conversations) { chooseDefaults(); refreshPlan() }
         .onChange(of: form.selection) {
             form.problem = nil
             if !destinations.contains(where: { $0.id == form.destination }) { form.destination = model.bestDestination(excluding: selected?.ownerID) ?? "" }
+            refreshPlan()
         }
+        .onChange(of: form.destination) { refreshPlan() }
+        .onChange(of: form.mode) { refreshPlan() }
     }
+
+    private var batchNeedsStop: Bool { form.mode == .same && folderBatch.contains { $0.isActive(within: ContinueMode.forkWindow) } }
 
     private var primaryTitle: String {
         if form.working { return "Opening…" }
-        if needsConfirmation && selected?.kind != .cowork { return "Continue Anyway" }
-        return destinationLabel.isEmpty ? "Continue" : "Continue in \(destinationLabel)"
+        let to = destinationLabel.isEmpty ? "" : " in \(destinationLabel)"
+        guard let selected, selected.kind != .cowork else { return "Continue" + to }
+        if forks { return "Continue as a Copy" + to }
+        if selected.isActive(within: ContinueMode.forkWindow) { return "Continue Anyway" }
+        return "Continue" + to
     }
 
     private func chooseDefaults() {
@@ -130,22 +200,37 @@ struct ContinueWorkSheet: View {
         }
     }
 
+    /// Model and card details depend on the destination window's own files, so they are read off the main thread.
+    private func refreshPlan() {
+        guard let selected, selected.kind != .cowork, !form.destination.isEmpty, !model.isDemo else { form.plan = nil; return }
+        let manager = model.manager, destination = form.destination, mode = form.mode
+        Task {
+            let plan = await Task.detached { try? manager.plan([selected], in: destination, mode: mode).first }.value
+            if form.selection == selected.id, form.destination == destination, form.mode == mode { form.plan = plan }
+        }
+    }
+
     private func destinationTitle(_ status: ProfileStatus) -> String {
         let name = status.isMain ? "Claude (main)" : "Claude \(status.label)"
         if model.isAtLimit(status) { return name + " · limit reached" }
-        guard let week = status.usage?.week else { return name }
-        return name + " · \(week)% of week used"
+        guard let usage = status.usage, let week = usage.week else { return name }
+        return name + " · \(week)% of week · as of \(relativeAge(since: usage.sampledAt))" + (usage.isFresh() ? "" : ", may be higher")
     }
 
     private func explanation(_ conversation: Conversation) -> String {
         let to = "Claude \(destinationLabel.isEmpty ? "…" : destinationLabel)"
         let from = "Claude \(conversation.ownerID.map(model.label(of:)) ?? "")"
-        switch conversation.kind {
-        case .code:
+        let why = form.mode == .auto && conversation.kind == .code ? " It had a message in the last 10 minutes." : ""
+        switch (conversation.kind, forks) {
+        case (.code, false):
             return "Opens this same session in \(to). Its history is shared by all your subscriptions, so nothing is copied."
-        case .projectBranch:
-            return "Opens this branch's history as a regular Code session in \(to). The Project and its other branches stay with \(from)."
-        case .cowork:
+        case (.code, true):
+            return "Opens a copy of this session with its whole history in \(to). The original stays as it is, so its window can keep working on it.\(why)"
+        case (.projectBranch, false):
+            return "Opens this branch's history as a regular Code session in \(to). The Project stays with \(from); stop the branch there first, because its coordinator may write to it again."
+        case (.projectBranch, true):
+            return "Opens a copy of this branch's history as a regular Code session in \(to). The Project, its coordinator and this branch stay with \(from) and can keep working."
+        case (.cowork, _):
             return "Starts a new Cowork task in \(to) with this task's history and files attached, for you to review and send. The original task, its connectors and schedules stay with \(from)."
         }
     }
@@ -157,22 +242,50 @@ struct ContinueWorkSheet: View {
     }
 
     private func go() {
-        guard let conversation = selected else { return }
-        if needsConfirmation && conversation.kind != .cowork { form.confirmedActive = conversation.id; return }
+        guard let conversation = selected, !needsStop(conversation) else { return }
         form.working = true
         form.problem = nil
         let manager = model.manager
         let target = form.destination
         let label = destinationLabel
+        let mode = form.mode
         Task {
             do {
-                let result = try await manager.continueConversation(conversation, in: target)
-                switch result {
-                case .openedSession:
-                    model.show(notice: "Opened “\(conversation.title)” in Claude \(label).")
+                switch try await manager.continueConversation(conversation, in: target, mode: mode) {
+                case .openedSession(let plan):
+                    var text = plan.forks ? "Opened a copy of “\(conversation.title)” in Claude \(label)." : "Opened “\(conversation.title)” in Claude \(label)."
+                    if let note = plan.model, note.isWarning { text += " " + note.message(destination: label) }
+                    model.show(notice: text)
                 case .startedCoworkTask:
                     model.show(notice: "A new Cowork task with the history attached is waiting in Claude \(label). Review it and send it there.")
                 }
+                model.preselectedConversation = nil
+                dismiss()
+            } catch {
+                form.problem = error.localizedDescription
+            }
+            form.working = false
+        }
+    }
+
+    private func goAll() {
+        guard let folder, !batchNeedsStop else { return }
+        let batch = folderBatch
+        form.working = true
+        form.problem = nil
+        let manager = model.manager
+        let target = form.destination
+        let label = destinationLabel
+        let mode = form.mode
+        let newSession = form.alsoNewSession ? folder : nil
+        Task {
+            do {
+                let plans = try await manager.continueAll(batch, in: target, mode: mode, newSessionIn: newSession)
+                let copies = plans.filter(\.forks).count
+                var text = "Opened \(plans.count) in Claude \(label)" + (copies > 0 ? ", \(copies) as copies" : "")
+                    + (newSession == nil ? "." : " and started a new session there.")
+                if let warning = plans.compactMap(\.model).first(where: \.isWarning) { text += " " + warning.message(destination: label) }
+                model.show(notice: text)
                 model.preselectedConversation = nil
                 dismiss()
             } catch {

@@ -69,35 +69,24 @@ final class AppModel: ObservableObject {
     var profiles: [ProfileStatus] { statuses }
     var existingLabels: Set<String> { Set(statuses.compactMap { $0.profile?.label }) }
 
-    /// The signed-in profile with the most weekly headroom, if there is a meaningful choice to make.
-    /// Profiles out of five-hour quota or with usage data older than a week are not suggested.
-    var suggestedID: String? {
-        let now = Date()
-        let candidates = statuses.filter { status in
-            guard status.isSignedIn, let usage = status.usage, let week = usage.week, week < 100,
-                  now.timeIntervalSince(usage.sampledAt) < 7 * 86_400 else { return false }
-            return usage.isFiveHourStale(now: now) || (usage.fiveHour ?? 0) < 100
-        }
-        guard candidates.count > 1 else { return nil }
-        return candidates.min { ($0.usage?.week ?? 100) < ($1.usage?.week ?? 100) }?.id
-    }
+    /// The signed-in profile with the most weekly headroom by a sample from the last three hours, if at least two
+    /// have such a sample. An older sample can be far too low: Claude records usage only while its window is used.
+    var suggestedID: String? { DestinationRanking.mostHeadroom(statuses) }
 
     /// Out of five-hour or weekly quota by its latest recorded usage.
-    func isAtLimit(_ status: ProfileStatus, now: Date = Date()) -> Bool {
-        guard status.isSignedIn, let usage = status.usage else { return false }
-        if let five = usage.fiveHour, five >= 100, !usage.isFiveHourStale(now: now) { return true }
-        if let week = usage.week, week >= 100, now.timeIntervalSince(usage.sampledAt) < 7 * 86_400 { return true }
-        return false
-    }
+    func isAtLimit(_ status: ProfileStatus, now: Date = Date()) -> Bool { DestinationRanking.isAtLimit(status, now: now) }
 
     /// An open subscription that has reached its limit, so its work may need to continue elsewhere.
     var limitReached: ProfileStatus? { statuses.first { $0.isRunning && isAtLimit($0) } }
 
-    /// Where to continue by default: the signed-in subscription with the most weekly headroom that isn't at its limit.
-    /// Subscriptions without usage data yet come after those with known headroom.
-    func bestDestination(excluding excluded: String?) -> String? {
-        let candidates = statuses.filter { $0.isSignedIn && $0.id != excluded && !isAtLimit($0) }
-        return candidates.min { ($0.usage?.week ?? 101) < ($1.usage?.week ?? 101) }?.id
+    /// Where to continue by default: the signed-in subscription not at its limit with the most weekly headroom,
+    /// preferring recent samples (see `DestinationRanking.ranked`).
+    func bestDestination(excluding excluded: String?) -> String? { DestinationRanking.best(statuses, excluding: excluded) }
+
+    /// “ · usage as of 5h ago” when a subscription's sample is too old to compare by; empty otherwise.
+    func staleNote(_ id: String) -> String {
+        guard let usage = statuses.first(where: { $0.id == id })?.usage, !usage.isFresh() else { return "" }
+        return " · usage as of \(relativeAge(since: usage.sampledAt))"
     }
 
     func label(of windowID: String) -> String { statuses.first { $0.id == windowID }?.label ?? manager.label(of: windowID) }

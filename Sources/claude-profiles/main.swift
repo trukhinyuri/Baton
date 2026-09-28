@@ -14,9 +14,16 @@ USAGE
   claude-profiles refresh                       Rebuild app copies after a Claude Desktop update
   claude-profiles doctor [--json]               Read-only session, folder and Remote Control checks
   claude-profiles conversations [--all]         Recent local Code sessions, Project branches and Cowork tasks
-  claude-profiles continue <session|last> --to <profile> [--anyway]
-                                                 Continue a conversation in another profile: the same Code
-                                                 session, or a new Cowork task with its history attached
+  claude-profiles continue <session|last> --to <profile> [--same|--fork] [--anyway] [--dry-run]
+                                                 Continue a conversation in another profile: a Code session
+                                                 as itself or as a copy, or a new Cowork task with its history
+  claude-profiles continue --folder <path> --to <profile> [--since 24h] [--same|--fork] [--new] [--dry-run]
+                                                 Continue every Code session and Project branch of a folder
+                                                 with a message since --since, in one go; --new also starts
+                                                 a new session there
+                                                 By default Project branches and sessions with a message in
+                                                 the last 10 minutes continue as a copy; --same keeps the same
+                                                 session (add --anyway if it is still running), --fork copies
   claude-profiles handoff --from PROFILE --to PROFILE --title TEXT --context FILE
                          [--folder PATH] [--source-url URL] [--open]
                                                  Save reviewed context for a new conversation; never sends it
@@ -46,15 +53,7 @@ func profileLabel(_ name: String) -> String {
     ["main", "claude"].contains(name.lowercased()) ? "MAIN" : resolve(name).label
 }
 
-func age(_ date: Date) -> String {
-    let seconds = max(0, Int(Date().timeIntervalSince(date)))
-    switch seconds {
-    case ..<60: return "now"
-    case ..<3600: return "\(seconds / 60)m ago"
-    case ..<86_400: return "\(seconds / 3600)h ago"
-    default: return "\(seconds / 86_400)d ago"
-    }
-}
+func age(_ date: Date) -> String { relativeAge(since: date) }
 
 func kindName(_ conversation: Conversation) -> String {
     switch conversation.kind {
@@ -68,7 +67,42 @@ func describe(_ usage: Usage?) -> String {
     guard let usage else { return "usage unknown" }
     let five = usage.isFiveHourStale() ? "reset" : usage.fiveHour.map { "\($0)%" } ?? "?"
     let week = usage.week.map { "\($0)%" } ?? "?"
-    return "5h \(five) · week \(week) · as of \(usage.sampledAt.formatted(date: .abbreviated, time: .shortened))"
+    return "5h \(five) · week \(week) · as of \(age(usage.sampledAt))" + (usage.isFresh() ? "" : " (stale: may be higher now)")
+}
+
+/// `24h`, `90m`, `2d`, or hours as a plain number.
+func duration(_ text: String) -> TimeInterval? {
+    let units: [Character: TimeInterval] = ["m": 60, "h": 3600, "d": 86_400]
+    if let unit = text.last.flatMap({ units[$0] }), let n = Double(text.dropLast()), n > 0 { return n * unit }
+    return Double(text).flatMap { $0 > 0 ? $0 * 3600 : nil }
+}
+
+func continueMode() -> ContinueMode {
+    if args.contains("--same") && args.contains("--fork") { fail("use either --same or --fork") }
+    if args.contains("--fork") { return .fork }
+    return args.contains("--same") || args.contains("--anyway") ? .same : .auto
+}
+
+func destinationID(_ name: String) -> String {
+    ["main", "claude"].contains(name.lowercased()) ? "main" : resolve(name).id
+}
+
+/// Refuses to write to a session that may still be running in its window unless --anyway says it was stopped.
+func refuseRunning(_ conversations: [Conversation], mode: ContinueMode) {
+    guard mode == .same, !args.contains("--anyway") else { return }
+    let running = conversations.filter { $0.kind != .cowork && $0.isActive(within: ContinueMode.forkWindow) }
+    guard !running.isEmpty else { return }
+    let names = running.map { "“\($0.title)” (\(age($0.lastActivity)))" }.joined(separator: ", ")
+    fail("\(names) had a message in the last 10 minutes. Continue as a copy (drop --same), or stop it in its window first and add --anyway.")
+}
+
+func printPlan(_ plans: [ContinuePlan], to destination: String) {
+    let label = manager.label(of: destination)
+    for plan in plans {
+        let how = plan.forks ? "copy" : "same"
+        print("\(how)  \(plan.conversation.sessionID.prefix(8))  \(plan.conversation.title) — \(kindName(plan.conversation))")
+        if let note = plan.model { print("      \(note.isWarning ? "⚠︎ " : "")\(note.message(destination: label))") }
+    }
 }
 
 do {
@@ -144,6 +178,31 @@ do {
             print("\(c.sessionID.prefix(8))  \(age(c.lastActivity).padding(toLength: 8, withPad: " ", startingAt: 0)) \(c.title) — \(kindName(c))\(folder)")
         }
         if all.isEmpty { print("No local conversations found.") }
+    case "continue" where args.count >= 2 && args[1] == "--folder":
+        guard let folder = value(of: "--folder", in: args), let to = value(of: "--to", in: args) else {
+            fail("continue --folder needs a folder and --to PROFILE")
+        }
+        let path = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path
+        let destination = destinationID(to)
+        guard let since = duration(value(of: "--since", in: args) ?? "24h") else { fail("--since takes a duration such as 24h, 90m or 2d") }
+        let mode = continueMode()
+        let found = ConversationIndex.recent(in: path, since: Date().addingTimeInterval(-since), from: manager.conversations())
+            .filter { !($0.kind == .projectBranch && $0.ownerID == destination) }
+        let newSession = args.contains("--new") ? path : nil
+        guard !found.isEmpty || newSession != nil else {
+            fail("no Code sessions or Project branches in \(path) with a message in the last \(value(of: "--since", in: args) ?? "24h"). Widen --since or add --new.")
+        }
+        refuseRunning(found, mode: mode)
+        let label = manager.label(of: destination)
+        if args.contains("--dry-run") {
+            printPlan(try manager.plan(found, in: destination, mode: mode), to: destination)
+            print("Would open \(found.count) in Claude \(label)" + (newSession.map { " and start a new session in \($0)" } ?? "") + ". Nothing was changed.")
+            break
+        }
+        let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession)
+        printPlan(plans, to: destination)
+        print("Opened \(plans.count) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "") + ". Nothing was sent.")
+        if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
     case "continue":
         guard args.count >= 2, let to = value(of: "--to", in: args) else { fail("continue needs a session (or “last”) and --to PROFILE") }
         let all = manager.conversations()
@@ -152,13 +211,25 @@ do {
         guard matches.count == 1, let conversation = matches.first else {
             fail(matches.isEmpty ? "no conversation “\(args[1])”. Run `claude-profiles conversations`." : "“\(args[1])” matches several conversations; use more of its id")
         }
-        let destination = ["main", "claude"].contains(to.lowercased()) ? "main" : resolve(to).id
-        if conversation.isActive(), !args.contains("--anyway") {
-            fail("“\(conversation.title)” was written to less than a minute ago. Stop it in its window first, or add --anyway.")
+        let destination = destinationID(to)
+        let mode = continueMode()
+        refuseRunning([conversation], mode: mode)
+        if conversation.kind == .cowork, conversation.isActive(), !args.contains("--anyway") {
+            fail("“\(conversation.title)” was working less than a minute ago, so its history may miss the last steps. Stop it in its window first, or add --anyway.")
         }
-        switch try await manager.continueConversation(conversation, in: destination) {
-        case .openedSession:
-            print("Opened “\(conversation.title)” in Claude \(manager.label(of: destination)).")
+        if args.contains("--dry-run") {
+            if conversation.kind == .cowork {
+                print("Would start a new Cowork task in Claude \(manager.label(of: destination)) with “\(conversation.title)”'s history and files attached. Nothing was changed.")
+            } else {
+                printPlan(try manager.plan([conversation], in: destination, mode: mode), to: destination)
+                print("Nothing was changed.")
+            }
+            break
+        }
+        switch try await manager.continueConversation(conversation, in: destination, mode: mode) {
+        case .openedSession(let plan):
+            printPlan([plan], to: destination)
+            print("Opened “\(conversation.title)”\(plan.forks ? " as a copy" : "") in Claude \(manager.label(of: destination)).")
         case .startedCoworkTask(let handoff):
             print("Started a new Cowork task in Claude \(manager.label(of: destination)) with the history attached. Review it and send it there.")
             print("Prepared files: \(handoff.folder.path)")

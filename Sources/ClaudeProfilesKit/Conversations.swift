@@ -27,18 +27,35 @@ public struct Conversation: Identifiable, Equatable, Sendable {
     public var ownerID: String?
     /// A Cowork task's own folder, with the files it was given (`uploads`) and made (`outputs`).
     public var taskFolder: URL?
+    /// The session card the conversation was found by: for a Project branch, the one in its owner's window.
+    public var card: URL?
+    /// The model and effort the conversation last ran with, from its card. Claude Desktop keeps a long-context
+    /// choice such as `claude-opus-5-5[1m]` only there, not in the transcript.
+    public var model: String?
+    public var effort: String?
 
     public var id: String { sessionID }
 
     public init(kind: Kind, sessionID: String, title: String, folders: [String], lastActivity: Date,
-                transcript: URL, ownerID: String? = nil, taskFolder: URL? = nil) {
+                transcript: URL, ownerID: String? = nil, taskFolder: URL? = nil,
+                card: URL? = nil, model: String? = nil, effort: String? = nil) {
         self.kind = kind; self.sessionID = sessionID; self.title = title; self.folders = folders
         self.lastActivity = lastActivity; self.transcript = transcript; self.ownerID = ownerID; self.taskFolder = taskFolder
+        self.card = card; self.model = model; self.effort = effort
     }
 
     /// Had a message within `seconds`: probably still running, so stop it before continuing elsewhere.
     public func isActive(now: Date = Date(), within seconds: TimeInterval = 60) -> Bool {
         now.timeIntervalSince(ConversationIndex.lastActivity(of: transcript) ?? lastActivity) < seconds
+    }
+
+    /// Whether the conversation works in `folder` or a folder inside it. Links and `..` are resolved first.
+    public func works(in folder: String) -> Bool {
+        let root = ConversationIndex.canonical(folder)
+        return folders.contains { own in
+            let path = ConversationIndex.canonical(own)
+            return path == root || path.hasPrefix(root == "/" ? "/" : root + "/")
+        }
     }
 }
 
@@ -68,7 +85,8 @@ public enum ConversationIndex {
                         kind: branch ? .projectBranch : .code, sessionID: session, title: title(of: card),
                         folders: folder.map { $0.contains(SessionSync.scratchFolder) ? [] : [$0] } ?? [],
                         lastActivity: lastActivity(of: transcript) ?? .distantPast,
-                        transcript: transcript, ownerID: branch ? id : nil)
+                        transcript: transcript, ownerID: branch ? id : nil,
+                        card: pair.appending(path: name), model: nonEmpty(card["model"]), effort: nonEmpty(card["effort"]))
                 }
             }
             for pair in (try? SessionSync.sessionPairs(dataDirs: [dataDir], folder: CoworkSync.sessionsFolder)) ?? [] {
@@ -87,6 +105,43 @@ public enum ConversationIndex {
             }
         }
         return found.values.sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    /// Code sessions and Project branches working in `folder` (or inside it) with a message since `since`,
+    /// most recent first. Cowork tasks are left out: they continue one at a time with their files attached.
+    public static func recent(in folder: String, since: Date, from conversations: [Conversation]) -> [Conversation] {
+        conversations.filter { $0.kind != .cowork && $0.lastActivity >= since && $0.works(in: folder) }
+    }
+
+    /// An absolute path with `~`, `.`, `..` and symbolic links resolved, without a trailing slash.
+    static func canonical(_ path: String) -> String {
+        let expanded = (path as NSString).expandingTildeInPath
+        let resolved = URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
+        return resolved.count > 1 && resolved.hasSuffix("/") ? String(resolved.dropLast()) : resolved
+    }
+
+    /// The model of the last assistant message near the end of a transcript: what Claude Desktop picks when it
+    /// imports the session without a card.
+    static func lastModel(of transcript: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: transcript) else { return nil }
+        defer { try? handle.close() }
+        let tail: UInt64 = 256 << 10
+        guard let size = try? handle.seekToEnd(), (try? handle.seek(toOffset: size > tail ? size - tail : 0)) != nil,
+              let data = try? handle.readToEnd() else { return nil }
+        let key = Data(#""model":""#.utf8)
+        var last: String?
+        var from = data.startIndex
+        while let found = data.range(of: key, in: from..<data.endIndex) {
+            from = found.upperBound
+            guard let end = data[from...].firstIndex(of: UInt8(ascii: "\"")), end - from < 80,
+                  let text = String(data: data[from..<end], encoding: .utf8), text.hasPrefix("claude-") else { continue }
+            last = text
+        }
+        return last
+    }
+
+    private static func nonEmpty(_ value: Any?) -> String? {
+        (value as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// `<session id>` → `<projects>/<folder>/<session id>.jsonl`; the newest file wins if several share an id.
@@ -110,8 +165,9 @@ public enum ConversationIndex {
         guard let handle = try? FileHandle(forReadingFrom: transcript) else { return nil }
         defer { try? handle.close() }
         let tail: UInt64 = 256 << 10
-        guard let size = try? handle.seekToEnd(), (try? handle.seek(toOffset: size > tail ? size - tail : 0)) != nil,
-              let data = try? handle.readToEnd() else { return nil }
+        guard let size = try? handle.seekToEnd(), (try? handle.seek(toOffset: size > tail ? size - tail : 0)) != nil else { return nil }
+        // An empty file reads as nil; it still has a modification date.
+        let data = (try? handle.readToEnd()) ?? Data()
         let key = Data(#""timestamp":""#.utf8)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -143,6 +199,11 @@ public enum ClaudeLink {
     /// Opens a Claude Code session by id, importing it into that window's list if the window doesn't know it yet.
     public static func resume(_ sessionID: String) -> URL {
         make("resume", [("session", sessionID)])
+    }
+
+    /// Starts a new Claude Code session in `folder`, with `prompt` typed in if given. Nothing is sent.
+    public static func newCodeSession(folder: String, prompt: String? = nil) -> URL {
+        make("code/new", [("folder", folder)] + (prompt.map { [("q", $0)] } ?? []))
     }
 
     /// Starts a new Cowork task with `prompt` typed in and `files` attached. Nothing is sent until you send it.

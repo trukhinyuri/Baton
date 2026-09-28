@@ -18,6 +18,15 @@ public struct Usage: Equatable, Sendable {
     public func isFiveHourStale(now: Date = Date()) -> Bool {
         now.timeIntervalSince(sampledAt) > 5 * 3600
     }
+
+    /// Claude records usage only while its window is open and in use, so a closed window's sample can be hours old.
+    public static let staleAfter: TimeInterval = 3 * 3600
+
+    /// How long ago this sample was taken.
+    public func age(now: Date = Date()) -> TimeInterval { max(0, now.timeIntervalSince(sampledAt)) }
+
+    /// Recent enough to compare subscriptions by.
+    public func isFresh(now: Date = Date()) -> Bool { age(now: now) <= Self.staleAfter }
 }
 
 /// Read-only access to the few non-secret facts Claude Profiles needs from a Claude Desktop data directory.
