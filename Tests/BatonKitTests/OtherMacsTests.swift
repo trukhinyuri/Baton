@@ -106,9 +106,14 @@ struct OtherMacsTests {
 
     @Test func warnsOutsideTestedRange() throws {
         #expect(ClaudeVersion.warning(for: "2.9939.2") == nil)
-        #expect(ClaudeVersion.tested.lowerBound == "2.9939.2")
+        // Patch builds of a tested minor are tested too: the app was 2.9939.4 while the list said 2.9939.2.
+        #expect(ClaudeVersion.warning(for: "2.9939.4") == nil)
+        #expect(ClaudeVersion.warning(for: "2.9939.0") == nil)
+        #expect(ClaudeVersion.warning(for: "2.9939.12") == nil)
+        #expect(ClaudeVersion.Version("2.9939.4").minor == "2.9939")
+        #expect(ClaudeVersion.tested.upperBound == "2.9939")
         let newer = try #require(ClaudeVersion.warning(for: "2.9940.0"))
-        #expect(newer.contains("2.9940.0") && newer.contains("newer") && newer.contains("2.9939.2"))
+        #expect(newer.contains("2.9940.0") && newer.contains("newer") && newer.contains("2.9939.x"))
         #expect(ClaudeVersion.warning(for: "2.10000.0")?.contains("newer") == true, "compared as numbers, not text")
         #expect(ClaudeVersion.warning(for: "2.998.1")?.contains("older") == true)
         #expect(ClaudeVersion.warning(for: nil) != nil)

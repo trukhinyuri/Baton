@@ -133,11 +133,52 @@ struct LegacyMigrationTests {
         try makeLegacyInstall(launchers: false)
         try fm.createDirectory(at: newState, withIntermediateDirectories: true)
         #expect(paths().stateDir == newState)
-        // A link at the old name that leads nowhere counts as nothing.
-        try fm.removeItem(at: newState)
+        #expect(Paths.unreachableFolder(home: home) == nil)
+    }
+
+    /// Both data folders, and the old one still has profiles: doctor and the status panel say which one Baton uses.
+    @Test func bothDataFoldersAreNamed() throws {
+        defer { cleanUp() }
+        try fm.createDirectory(at: newState, withIntermediateDirectories: true)
+        try fm.createDirectory(at: legacyState, withIntermediateDirectories: true)
+        #expect(LegacyMigration.dataFolderNote(home: home).isEmpty, "no profiles in the old one")
+        try Data("[]".utf8).write(to: legacyState.appending(path: "profiles.json"))
+        #expect(
+            LegacyMigration.dataFolderNote(home: home) == [
+                "Both ~/Library/Application Support/Baton and ~/Library/Application Support/Claude Profiles exist, and ~/Library/Application Support/Claude Profiles still has profiles. Baton uses ~/Library/Application Support/Baton and leaves the other alone; with Baton quit, move whichever you don't need to the Trash."
+            ])
+        #expect(LegacyMigration.notes(paths: paths(), environment: environment()).last == LegacyMigration.dataFolderNote(home: home).first)
+    }
+
+    /// A link at the old name that leads nowhere right now (a disk not connected) is still Baton's folder: no new,
+    /// empty Baton folder takes its place, and the CLI and the app stop with a plain line instead.
+    @Test func aLegacyLinkThatLeadsNowhereStopsBaton() throws {
+        defer { cleanUp() }
+        try fm.createDirectory(at: support, withIntermediateDirectories: true)
+        let disk = "/Volumes/Missing-\(UUID().uuidString)/Claude Profiles"
+        try fm.createSymbolicLink(atPath: legacyState.path, withDestinationPath: disk)
+        #expect(paths().stateDir == legacyState)
+        #expect(
+            Paths.unreachableFolder(home: home)
+                == "Baton's data folder ~/Library/Application Support/Claude Profiles links to \(disk), which isn't there right now. Connect it and try again; Baton doesn't start a new folder in its place."
+        )
+        // Nothing that could run before the check creates a Baton folder either.
+        _ = LegacyMigration.holdShared(home: home, wait: 0)
+        #expect(!LegacyMigration.exists(newState), "no new, empty Baton folder")
+
+        // The same for the launchers folder.
         try fm.removeItem(at: legacyState)
-        try fm.createSymbolicLink(atPath: legacyState.path, withDestinationPath: "Missing")
-        #expect(paths().stateDir == newState)
+        try fm.createDirectory(at: home.appending(path: "Applications"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: legacyLaunchers.path, withDestinationPath: disk)
+        #expect(paths().launchersDir == legacyLaunchers)
+        #expect(Paths.unreachableFolder(home: home)?.hasPrefix("Baton's folder of launchers ~/Applications/Claude Profiles links to \(disk)") == true)
+
+        // A live link, or a real Baton folder, is used as before.
+        try fm.removeItem(at: legacyLaunchers)
+        try fm.createDirectory(at: newLaunchers, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: legacyLaunchers.path, withDestinationPath: disk)
+        #expect(paths().launchersDir == newLaunchers)
+        #expect(Paths.unreachableFolder(home: home) == nil)
     }
 
     // MARK: Renaming the launchers folder
@@ -153,7 +194,8 @@ struct LegacyMigrationTests {
         #expect(fm.fileExists(atPath: newLaunchers.appending(path: ".engines/Claude work.app").path))
         #expect(LegacyMigration.run(home: home, environment: environment()) == .nothingToDo, "a second run has nothing to do")
         #expect(
-            LegacyMigration.message(for: outcome, home: home) == "Renamed ~/Applications/Claude Profiles to ~/Applications/Baton.")
+            LegacyMigration.message(for: outcome, home: home)
+                == "Renamed ~/Applications/Claude Profiles to ~/Applications/Baton. Relink any command link you made into ~/Applications/Claude Profiles.")
     }
 
     @Test func anythingRunningFromTheOldFolderKeepsIt() throws {
@@ -300,7 +342,7 @@ struct LegacyMigrationTests {
         #expect(paths().launchersDir == newLaunchers)
         #expect(LegacyMigration.isRealDirectory(legacyLaunchers), "left alone")
         let expected =
-            "Both ~/Applications/Baton and ~/Applications/Claude Profiles exist. Baton uses ~/Applications/Baton and leaves the other alone: move anything you still need out of ~/Applications/Claude Profiles, then move that folder to the Trash."
+            "Both ~/Applications/Baton and ~/Applications/Claude Profiles exist. Baton uses ~/Applications/Baton and leaves the other alone: with every Claude window closed, move anything you still need out of ~/Applications/Claude Profiles, then move that folder to the Trash."
         #expect(LegacyMigration.notes(paths: paths(), environment: environment()) == [expected])
         #expect(LegacyMigration.message(for: outcome, home: home) == expected)
     }
@@ -334,7 +376,8 @@ struct LegacyMigrationTests {
         #expect(!script.contains(legacyLaunchers.path), "nothing points into the old launchers folder")
         #expect(
             LegacyMigration.message(for: outcome, home: home)
-                == "Renamed ~/Applications/Claude Profiles to ~/Applications/Baton and updated its 1 launcher in place, so Dock items keep working.")
+                == "Renamed ~/Applications/Claude Profiles to ~/Applications/Baton and updated its 1 launcher in place, so Dock items keep working. Relink any command link you made into ~/Applications/Claude Profiles."
+        )
     }
 
     @Test func aCLIOutsideTheFolderKeepsItsPath() {
@@ -379,7 +422,10 @@ struct LegacyMigrationTests {
         #expect(moved.trashedOldApp)
         #expect(!fm.fileExists(atPath: newLaunchers.appending(path: "Claude Profiles.app").path))
         #expect(fm.fileExists(atPath: trashFolder.appending(path: "Claude Profiles.app").path))
-        #expect(LegacyMigration.message(for: outcome, home: home).hasSuffix("The old Claude Profiles.app went to the Trash: Baton.app replaces it."))
+        #expect(
+            LegacyMigration.message(for: outcome, home: home).hasSuffix(
+                "The old Claude Profiles.app went to the Trash: Baton.app replaces it. If Claude Profiles is in your Dock, remove it and add Baton. Relink any command link you made into ~/Applications/Claude Profiles."
+            ))
     }
 
     @Test func anotherAppOfThatNameStays() throws {
@@ -563,6 +609,19 @@ struct LegacyMigrationTests {
             LegacyMigration.line(for: nil, home: home)
                 == "Baton's folder in ~/Applications still has the Claude Profiles name. Baton renames it the next time it starts with every Claude window closed, or now with `baton migrate`."
         )
+    }
+
+    /// Inside the app `baton migrate` always refuses, since the app itself is a running Baton: the status panel says
+    /// to quit and open Baton again instead.
+    @Test func theAppNeverOffersBatonMigrate() throws {
+        defer { cleanUp() }
+        try makeLegacyInstall()
+        let notes = LegacyMigration.notes(paths: paths(), app: URL(fileURLWithPath: "/Applications/Baton.app"), environment: environment())
+        #expect(
+            notes == [
+                "Baton's folder in ~/Applications still has the Claude Profiles name. Quit Baton and open it again: with every Claude window closed it renames the folder as it starts."
+            ])
+        #expect(LegacyMigration.notes(paths: paths(), environment: environment()).first?.hasSuffix("or now with `baton migrate`.") == true, "the CLI's doctor")
     }
 
     @Test func readsPaths() {

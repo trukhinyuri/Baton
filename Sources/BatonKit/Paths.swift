@@ -80,17 +80,49 @@ public struct Paths: Sendable, Equatable {
     public static func legacyLaunchersDir(home: URL) -> URL { home.appending(path: "Applications/\(legacyFolderName)", directoryHint: .isDirectory) }
 
     /// Baton's data folder: the Baton one if it exists; else, for someone upgrading from Claude Profiles, the folder of
-    /// that name if it leads to a folder, a link included (say to another disk); else the Baton one, for a fresh install.
+    /// that name if anything is there, a link included (say to another disk), even one that leads nowhere right now;
+    /// else the Baton one, for a fresh install. A link that leads nowhere is never replaced by a new, empty Baton
+    /// folder: `unreachableFolder(home:)` says so, and Baton stops until it leads somewhere again.
     /// Never renamed: absolute paths inside it live in Claude's own data, session cards and Claude Code's project keys.
     public static func stateRoot(home: URL) -> URL { resolve(new: newStateDir(home: home), legacy: legacyStateDir(home: home)) }
 
-    /// The launchers folder: the Baton one if it exists; else the Claude Profiles one if it is a folder, until
+    /// The launchers folder: the Baton one if it exists; else the Claude Profiles one if anything is there, until
     /// `LegacyMigration` renames it; else the Baton one.
     public static func launchersRoot(home: URL) -> URL { resolve(new: newLaunchersDir(home: home), legacy: legacyLaunchersDir(home: home)) }
 
     static func resolve(new: URL, legacy: URL) -> URL {
         if isDirectory(new) { return new }
-        return isDirectory(legacy) ? legacy : new
+        return exists(legacy) ? legacy : new
+    }
+
+    /// A plain line when Baton's data or launchers folder is a link of the earlier name that leads nowhere right now
+    /// (a disk that isn't connected, say), `nil` otherwise. The CLI stops with it and the app shows it instead of
+    /// starting a new, empty folder that would then win for good.
+    public static func unreachableFolder(home: URL) -> String? {
+        let folders = [
+            ("Baton's data folder", newStateDir(home: home), legacyStateDir(home: home)),
+            ("Baton's folder of launchers", newLaunchersDir(home: home), legacyLaunchersDir(home: home)),
+        ]
+        for (name, new, legacy) in folders where !isDirectory(new) && exists(legacy) && !isDirectory(legacy) {
+            let shown = display(legacy, home: home)
+            guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: legacy.path) else {
+                return "\(name) \(shown) isn't a folder. Move it aside and try again."
+            }
+            return "\(name) \(shown) links to \(target), which isn't there right now. Connect it and try again; Baton doesn't start a new folder in its place."
+        }
+        return nil
+    }
+
+    /// Anything at `url`, a link that leads nowhere included.
+    static func exists(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0
+    }
+
+    /// `~/…` for a path inside `home`.
+    static func display(_ url: URL, home: URL) -> String {
+        let path = url.standardizedFileURL.path, root = home.standardizedFileURL.path
+        return path.hasPrefix(root + "/") ? "~" + path.dropFirst(root.count) : path
     }
 
     /// A folder, or a link that leads to one.

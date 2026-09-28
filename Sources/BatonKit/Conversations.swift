@@ -74,8 +74,12 @@ public struct Conversation: Identifiable, Equatable, Sendable {
 public enum ConversationIndex {
     /// - Parameter windows: every Claude data directory with the id the app uses for it (`"main"` or a profile id).
     /// - Returns: conversations with a transcript on disk, most recent first. Archived ones are left out.
-    public static func scan(paths: Paths, windows: [(id: String, dataDir: URL)]) -> [Conversation] {
+    /// - Parameter cache: cards and transcript ends already read, kept while each file stays the same, so an idle
+    ///   refresh reads none of them again.
+    public static func scan(paths: Paths, windows: [(id: String, dataDir: URL)], cache: ScanCache = .shared) -> [Conversation] {
         let fm = FileManager.default
+        func readCard(_ url: URL) -> [String: Any]? { cache.value("card-json", of: url) { Self.readCard($0) } }
+        func lastActivity(of transcript: URL) -> Date? { cache.value("last-activity", of: transcript) { Self.lastActivity(of: $0) } }
         let transcripts = transcriptFiles(in: paths.claudeProjectsDir)
         var found: [String: Conversation] = [:]
         var readCards = Set<String>()

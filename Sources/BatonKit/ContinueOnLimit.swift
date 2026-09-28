@@ -310,8 +310,8 @@ public enum TranscriptFork {
 
 /// Which copy a source session already has in a destination, so a second "Continue All" to the same destination
 /// reuses it instead of forking another. Kept in `continue-copies.json`, one entry per (source, destination); the
-/// copy's own transcript is the real record, so a stale entry whose copy is gone (removed by hand, or rolled
-/// back after a failed run) is simply overwritten by a fresh fork the next time.
+/// copy's own transcript is the real record, so an entry whose copy is gone (removed by hand, or rolled back after a
+/// failed run) is dropped at the next sync (`dropMissing`) and never offered again.
 ///
 /// A copy is reused only while it is current: the source's length and last line are what they were when it was
 /// made (version 2 records them), or the copy changed after the source did, so the user already works in it.
@@ -333,6 +333,21 @@ struct ContinueCopies: Sendable {
         guard let data = try? Data(contentsOf: file), let stored = try? JSONDecoder().decode(Stored.self, from: data) else { return [] }
         return stored.copies
     }
+
+    /// Drops every entry whose copy has no transcript among `transcripts` (session id → file, as
+    /// `ConversationIndex.transcriptFiles` finds them). Returns how many went.
+    @discardableResult
+    func dropMissing(transcripts: [String: URL]) throws -> Int {
+        try FileLock.withLock(lockFile, blocking: true) {
+            let entries = load()
+            let kept = entries.filter { transcripts[$0.copy.lowercased()] != nil }
+            if kept.count < entries.count { try save(kept) }
+            return entries.count - kept.count
+        } ?? 0
+    }
+
+    /// Held while the file is read and written again, so a sync's clean-up and a Continue never lose each other's entry.
+    private var lockFile: URL { file.deletingLastPathComponent().appending(path: "continue-copies.lock") }
 
     private func save(_ entries: [Entry]) throws {
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -360,14 +375,16 @@ struct ContinueCopies: Sendable {
 
     /// Records that `source` now has `copy` in `destination`, replacing any earlier entry for the same pair.
     func record(source: String, destination: String, copy: String, sourceLength: Int? = nil, sourceTail: String? = nil) throws {
-        var entries = load().filter { !($0.source == source && $0.destination == destination) }
-        entries.append(Entry(source: source, destination: destination, copy: copy, sourceLength: sourceLength, sourceTail: sourceTail))
-        try save(entries)
+        _ = try FileLock.withLock(lockFile, blocking: true) {
+            var entries = load().filter { !($0.source == source && $0.destination == destination) }
+            entries.append(Entry(source: source, destination: destination, copy: copy, sourceLength: sourceLength, sourceTail: sourceTail))
+            try save(entries)
+        }
     }
 
     /// Drops every entry naming `copy`, so a copy rolled back after a failed run is never offered for reuse.
     func forget(copy: String) throws {
-        try save(load().filter { $0.copy != copy })
+        _ = try FileLock.withLock(lockFile, blocking: true) { try save(load().filter { $0.copy != copy }) }
     }
 
     static let tailWindow = 65_536

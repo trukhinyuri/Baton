@@ -1,7 +1,8 @@
 cask "baton" do
-  # The release workflow (.github/workflows/bump-cask.yml) rewrites version and sha256 in the tap.
+  # The release workflow (its tap job, .github/workflows/bump-cask.yml) writes version and sha256 in the tap. The
+  # sha256 here is a placeholder, never a real hash.
   version "1.0.0"
-  sha256 "9afdb3fe0b2fac0877930532a197dbedad9568995b20a40d668392c5890bdb35"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
   url "https://github.com/trukhinyuri/Baton/releases/download/v#{version}/Baton-v#{version}.zip"
   name "Baton"

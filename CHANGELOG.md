@@ -2,7 +2,7 @@
 
 ## 1.0.0 — unreleased
 
-**Baton takes the track.** Claude Profiles is now Baton: same app, same windows, a name it can keep in public (Anthropic's terms don't allow "Claude" in a product name). Your profiles and sessions carry over; what changes for you is listed under "Upgrading from Claude Profiles" just below.
+**Baton takes the track.** Claude Profiles is now Baton: same app, same windows, a name that keeps "Claude", Anthropic's trademark, out of the product's own name. Your profiles and sessions carry over; what changes for you is listed under "Upgrading from Claude Profiles" just below.
 
 Baton now covers local work only: local Claude Code sessions and Cowork tasks follow between windows, and everything kept in an Anthropic account stays with that account. 0.3.0 was never published; its changes are part of this release.
 
@@ -13,9 +13,9 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - `baton migrate` exits with 0 once the folder is renamed or there is nothing to do, 3 when it keeps its old name for now (the printed line says why) and 1 on an error. When Baton runs from inside the old folder, quit it, close every Claude window and run the `baton` inside the app: `"$HOME/Applications/Claude Profiles/Baton.app/Contents/Helpers/baton" migrate`
 - `make install` installs into the folder you already have, renames it when no Claude window is open or prints the exact command to finish later, points the launchers at the new app, and prints the exact `ln -sf` for every old `claude-profiles` or `baton` link it finds in `/usr/local/bin` or `/opt/homebrew/bin`
 - The command is now `baton`, and `baton pass` works too. Homebrew links it; a link you made yourself to the old `claude-profiles` stops working once the old app is gone: `ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton`. Scripts that still call `claude-profiles` can link `Contents/Helpers/claude-profiles`, which 1.x keeps
-- Installed Claude Profiles from the ZIP? Quit it, move `Claude Profiles.app` to the Trash and put `Baton.app` where it was. If Claude Profiles opens at login, replace it with Baton in System Settings → General → Login Items
+- Installed Claude Profiles from the ZIP? Quit it and move `Claude Profiles.app` to the Trash. If it was inside `~/Applications/Claude Profiles`, put `Baton.app` in `/Applications` (or run `make install`); otherwise put it where the old app was. If Claude Profiles is in your Dock, remove it and add Baton. If Claude Profiles opens at login, replace it with Baton in System Settings → General → Login Items
 - An older copy that still starts (from a Login Item, the ZIP or the Trash) is asked to quit when Baton starts, instead of Baton handing over to it
-- The app keeps its bundle id, `io.github.trukhinyuri.claudeprofiles`, so macOS keeps treating it as the same app. The Homebrew cask is `baton`; if you had the `claude-profiles` cask, `brew upgrade` moves you to it
+- The app keeps its bundle id, `io.github.trukhinyuri.claudeprofiles`, so macOS keeps treating it as the same app. The Homebrew cask is `baton`; if you had the `claude-profiles` cask, `brew update && brew upgrade` moves you to it (the tap's `cask_renames.json`); don't install `baton` next to it
 
 ### Continue work
 
@@ -30,7 +30,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - Links reach a closed window one by one: the first starts it, the rest follow once its window is on screen, and each continued session is confirmed by the card Claude imports; one that doesn't appear is reported
 - Claude imports continued sessions itself, with its own trust and permission checks; when the destination's model differs from the session's, the sheet and `--dry-run` ask you to choose it first
 - `baton conversations [--all]` and `baton continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]` (or `baton pass`, the same command) do the same as **Continue work…** from the command line. Continuing needs no macOS permissions
-- Usage shows how old each figure is; figures older than 3 hours are marked. Windows are ordered by weekly usage, lowest first
+- Usage shows how old each figure is; figures older than 3 hours are marked. The signed-in subscription with the lowest weekly usage is preselected
 
 ### Sharing between accounts
 
@@ -50,11 +50,12 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 
 ### Report a problem and diagnostics
 
-- **Report a problem** in the footer, the menu bar and the Help menu, and `baton report [--save PATH] [--open]`, prepare a redacted report you review first: versions, window states, session check and sync counts, recent errors and the last 200 log entries. Copy it, save it, or open a prefilled GitHub issue in your browser; nothing is sent automatically
+- **Report a problem** in the footer, the menu bar and the Help menu, and `baton report [--save PATH] [--open]`, prepare a redacted report you review first: versions, window states, session check and sync counts, recent errors and the last 200 lines of Baton's own log. Copy it, save it, or open a prefilled GitHub issue in your browser; nothing is sent automatically
 - Errors say what failed and what to do; a per-window status panel shows its account, Local only state, pending changes and why sessions were skipped
 - `doctor` shows where Claude Desktop was found and its version, whether this Claude version has each Local only setting, and which sessions Claude has marked as moved between accounts
 - `baton --version` prints the version and commit
-- Claude Desktop is found wherever Launch Services knows it, then in `/Applications` and `~/Applications`, and the app warns when its version is outside the tested range
+- Claude Desktop is found wherever Launch Services knows it, then in `/Applications` and `~/Applications`, and the app warns only when its version is newer than the newest tested major.minor (or known not to work): every 2.9939.x build counts as tested
+- Baton keeps its own text log, `Logs/baton.log` in its data folder (up to 1 MB, three files), written by the app and `baton` next to the macOS log; a problem report attaches its last lines after the same redaction as the rest
 - The main Claude app gets its `claude://` links back at every start if a profile sign-in was interrupted
 
 ### Safety
@@ -62,7 +63,10 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - Creating profiles at the same time from the app and the CLI keeps both, and removing a profile refuses while its window is running instead of quitting it
 - Only the current and the previous downloaded Claude Code build are kept in each profile
 - The app warns when a second copy of it is installed, since two copies would each run their own sync
-- App copies are rebuilt in a staging bundle, verified and swapped in atomically; the previous copy is restored if the new one fails verification
+- App copies are rebuilt in a staging bundle, verified and swapped in atomically; the previous copy is restored if the new one fails verification. They are rebuilt only for a newer Claude Desktop, versions compared part by part as numbers, and never replaced with an older one
+- If Baton's data or launchers folder of the earlier name is a link that leads nowhere right now (a disk not connected), the app and `baton` stop with a line naming the link and where it leads, instead of starting a new, empty folder
+- An idle refresh reads no session card or transcript again; only files that changed are read. A remembered Continue copy whose transcript is gone is forgotten at the next sync
+- The window status and the footer's “in step” count a running window that received sessions from other windows as waiting for a restart
 - Opening a profile no longer fails when sessions can't be shared first; the window opens and the problem is reported
 - A session whose transcript file is empty is dated by the file instead of being listed last
 - The app and `baton` drop every `CLAUDE…` and `ANTHROPIC_…` variable they inherit before starting anything, so a Claude window opened from a terminal or a Claude Code session starts the way a Dock launch starts it, without an API key, proxy or model override from that shell
@@ -71,7 +75,8 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 
 - Universal build for Apple silicon and Intel, signed with the hardened runtime; releases are notarized, stapled, published with `SHA256SUMS.txt` and a build-provenance attestation
 - Homebrew: `brew install --cask trukhinyuri/tap/baton`
-- The installer keeps the previous app as a ZIP in `AppBackups` inside Baton's data folder (the three latest) instead of runnable `.previous-*.app` copies beside the app, and moves those left by 0.2.0 to the Trash
+- The installer keeps the previous app as a ZIP in `AppBackups` inside Baton's data folder (the three latest) instead of runnable `.previous-*.app` copies beside the app, and moves those left by 0.2.0 to the Trash. Each ZIP is named after the app and its folder and never overwrites another; `make uninstall` moves Baton.app to the Trash
+- A release is published only when it can be notarized, and its last job points the Homebrew tap at it
 
 ### Removed
 

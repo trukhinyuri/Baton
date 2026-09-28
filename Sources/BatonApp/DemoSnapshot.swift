@@ -32,8 +32,8 @@ enum DemoSnapshot {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard let window = mainWindow(), window.contentRect(forFrameRect: window.frame).size == contentSize else { continue }
                 guard !withSheet || window.attachedSheet != nil else { continue }
-                await settle(window)
                 do {
+                    try await settle(window)
                     try write(window, to: file)
                     exit(0)
                 } catch {
@@ -48,10 +48,19 @@ enum DemoSnapshot {
 
     /// Active-window colors (traffic lights, the default button), no text field that could take a keystroke into
     /// the picture, room for a sheet taller than the window, and the end of the sheet's animation.
-    private static func settle(_ window: NSWindow) async {
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-        window.attachedSheet?.makeKey()
+    private static func settle(_ window: NSWindow) async throws {
+        // Activation is cooperative on macOS 14 and later, so a copy started from a shell may stay inactive: ask again
+        // until the window (or its sheet) is key, and draw nothing with inactive, grey traffic lights.
+        for _ in 0..<20 {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
+            window.orderFrontRegardless()
+            window.makeKeyAndOrderFront(nil)
+            window.attachedSheet?.makeKey()
+            if window.isKeyWindow || window.attachedSheet?.isKeyWindow == true { break }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard window.isKeyWindow || window.attachedSheet?.isKeyWindow == true else { throw SnapshotError.notActive }
         let windows = [window, window.attachedSheet].compactMap { $0 }
         for shown in windows { shown.makeFirstResponder(nil) }
         try? await Task.sleep(for: .milliseconds(800))
@@ -138,7 +147,12 @@ enum DemoSnapshot {
     private static func radius(of window: NSWindow) -> CGFloat { window.sheetParent == nil ? 10 : 12 }
 
     enum SnapshotError: LocalizedError {
-        case nothingDrawn
-        var errorDescription: String? { "AppKit drew nothing for the window." }
+        case nothingDrawn, notActive
+        var errorDescription: String? {
+            switch self {
+            case .nothingDrawn: "AppKit drew nothing for the window."
+            case .notActive: "The window never became the active one, so it would show grey traffic lights."
+            }
+        }
     }
 }

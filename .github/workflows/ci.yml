@@ -35,7 +35,7 @@ jobs:
       - name: Warnings as errors
         run: swift build -Xswiftc -warnings-as-errors
       - name: swift format lint
-        run: swift format lint --recursive --parallel Sources Tests
+        run: swift format lint --strict --recursive --parallel Sources Tests Package.swift
 
   universal:
     name: Universal build and Rosetta smoke test

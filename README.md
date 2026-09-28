@@ -24,7 +24,7 @@ Baton runs several Claude Desktop accounts on one Mac, each in its own unmodifie
 
 Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Baton turns Remote Control off in its windows by default (one switch to undo it) and, before you continue, names what will not follow.
 
-It never reads credentials, has no network code, backs up Claude's files before changing them, and changes a window's settings only while that window is closed.
+It never reads credentials, has no network code, copies each session card and settings file to a dated backup before it replaces or removes it (Claude's sign-in file `config.json` is the exception: only its theme, zoom and language are edited, in place), and changes a window's settings only while that window is closed.
 
 - [Install](#install) · [Quick start](#quick-start) · [Continue work in another window](#continue-work-in-another-window) · [What follows and what stays](#what-follows-and-what-stays)
 - [Local only](#local-only) · [Command line](#command-line) · [Privacy and safety](#privacy-and-safety) · [Report a problem](#report-a-problem) · [Troubleshooting](#troubleshooting) · [Why Baton?](#why-baton)
@@ -77,7 +77,9 @@ Same app, new name. If you're upgrading from Claude Profiles, your windows, prof
   ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/claude-profiles /usr/local/bin/claude-profiles
   ```
 - **`make install`** installs into the folder you already have, renames it to `~/Applications/Baton` when no Claude window is open (or prints the exact command to finish later), and points your launchers at the new app.
-- **Installed from the ZIP?** Quit Claude Profiles, move `Claude Profiles.app` to the Trash and put `Baton.app` where it was.
+- **Installed with Homebrew?** Run `brew update && brew upgrade`: the tap's `cask_renames.json` moves the `claude-profiles` cask to `baton`, and Homebrew says it was renamed. Don't install `baton` next to it.
+- **Installed from the ZIP?** Quit Claude Profiles and move `Claude Profiles.app` to the Trash. If it was inside `~/Applications/Claude Profiles`, put `Baton.app` in `/Applications` (or run `make install`); otherwise put it where the old app was.
+- **Claude Profiles in your Dock?** Once the old app is in the Trash, remove its Dock item and add Baton: the old item could still start it from the Trash.
 - **Claude Profiles opens at login?** Replace it with Baton in **System Settings → General → Login Items**. If an older copy still starts, Baton asks it to quit rather than handing over to it.
 - **Folder still called Claude Profiles?** Claude windows were open when Baton tried, or Baton runs from inside that folder. Quit Baton, close every Claude window and run `baton migrate`. If `Baton.app` itself is inside that folder, run the copy inside it:
   ```sh
@@ -138,7 +140,7 @@ Before you continue, the sheet lists what will not follow into that account: rem
 
 Claude imports every continued session itself, with its usual folder trust and permission checks. A session takes its model from its history; when that differs from the destination's model, the sheet asks you to choose before your first message.
 
-**Folder rules** keep work where it belongs. `baton rule ~/Work/acme --only me@acme.com` lets the work in that folder, and inside it, continue only in that account; continuing it anywhere else, including a new session there, is refused. The closest folder's rule applies. Session sharing honors the same rules: a session in that folder does not appear in other accounts' windows. A rules file that cannot be read stops continuing and sharing until it is fixed.
+**Folder rules** keep work where it belongs. `baton rule ~/Work/client --only me@example.com` lets the work in that folder, and inside it, continue only in that account; continuing it anywhere else, including a new session there, is refused. The closest folder's rule applies. Session sharing honors the same rules: a session in that folder does not appear in other accounts' windows. A rules file that cannot be read stops continuing and sharing until it is fixed.
 
 Continuing needs no macOS permissions: the destination window receives a `claude://` link that only that window handles.
 
@@ -172,35 +174,51 @@ If a Claude Desktop version no longer has one of these settings, the status read
 ## Command line
 
 ```text
-baton list                          Every profile, its account and plan usage
+baton list                          Show every profile, its account and plan usage
 baton add <email> [--label TEXT] [--color #RRGGBB]
                                     Create a profile and open it to sign in
 baton open <profile>                Open a profile's window (id or label)
 baton remove <profile>              Move a closed profile's copy and sign-in to the Trash
-baton sync [--dry-run]              Share local Code sessions across windows now
-baton carry [--dry-run]             Bring sub-agents and tool outputs over to sessions Claude forked
-baton conversations [--all]         Local Code sessions and Cowork tasks that can continue elsewhere
-baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
-                                    Continue one in another profile, as Continue work… does
-baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
-               [--new] [--dry-run]
-                                    Continue the recent sessions of a folder, as Continue All does
-baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
-                                    Same as `continue`, easier to shout across the track
-baton rules                         Which accounts may continue the work in which folders
-baton rule <folder> --only <email>[,<email>…] | --remove
-                                    Keep a folder's work in those accounts, or drop its rule
-baton local-only on|off|status      Turn Local only on or off, or show it per window
-baton local-only cloud-lock on|off|status
-                                    Optional, off by default: also deny moving a session to the
-                                    cloud, Mac-wide, in ~/.claude/settings.json
-baton doctor [--json]               Check sessions and per-window setup without changing anything
-baton report [--save PATH] [--open] Prepare a problem report (see below)
+baton sync [--dry-run]              Share local Code sessions; inspect Cowork without copying it
 baton refresh                       Rebuild app copies and launchers after a Claude Desktop update
 baton migrate                       Rename ~/Applications/Claude Profiles to Baton, with Baton quit and
                                     every Claude window closed. Exit 3: kept for now; the printed line
                                     says why
-baton --version                     Version and commit
+baton doctor [--json]               Read-only session and folder checks
+baton local-only on|off|status [PROFILE|main] [--json]
+                                    Keep new Claude Code sessions off Remote Control; on by
+                                    default. No profile: every window without its own choice
+baton local-only cloud-lock on|off|status
+                                    Optional, off by default: also deny the one MCP tool that
+                                    moves a Claude Code session to the cloud, Mac-wide, in
+                                    ~/.claude/settings.json
+baton conversations [--all]         Recent local Code sessions and Cowork tasks
+baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
+                                    Continue a conversation in another profile: a Code session
+                                    as itself or as a copy, or a new Cowork task with its history
+baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
+               [--new] [--now] [--dry-run]
+                                    Continue the Code sessions of a folder with a message since
+                                    --since, in one go: the --max most recent (6 unless given);
+                                    --new also starts a new session
+                                    By default sessions still open in a running Claude Code
+                                    process or with a message in the last 10 minutes continue
+                                    as a copy; --same keeps the same session (add --anyway once
+                                    you've closed it there), --fork copies
+                                    If the session's window resets within 15 minutes and
+                                    continues it by itself, nothing happens (exit 3) unless --now
+baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
+                                    Same as `continue`, easier to shout across the track
+baton rules                         Show which accounts may continue the work in which folders
+baton rule <folder> --only <email>[,<email>…] | --remove
+                                    Let only these accounts continue work in the folder and
+                                    inside it, or drop the folder's rule
+baton carry [--dry-run]             Bring sub-agents, Workflow history, tool outputs and the scratchpad
+                                    into sessions Claude Desktop continued as a new copy itself
+baton report [--save PATH] [--open] Print a redacted problem report; --save writes it to a file,
+                                    --open opens a prefilled GitHub issue to review and submit.
+                                    Nothing is sent
+baton --version                     Print the version and commit
 ```
 
 `continue` (or `pass`) takes the start of a session id from `conversations`, or `last` for the most recent one. `--fork` always copies; `--same` keeps the same session but refuses one that may still be written to unless you close it there and add `--anyway`. `--dry-run` prints what would happen, how, and with which model, and changes nothing:
@@ -240,7 +258,7 @@ Each subscription keeps its own limits. Use only subscriptions that are yours, a
 
 Choose **Report a problem** in the app's footer, the menu bar or the Help menu, or run `baton report`. You see the exact text before anything leaves the app, and the app never sends it: **Copy** puts it on the clipboard, **Save…** writes it to a file, and **Open GitHub** opens a prefilled issue in your browser for you to review and submit.
 
-The report contains the versions of Baton, macOS and Claude Desktop, your Mac's architecture, each window's Claude Code version and Local only state, how many windows are open and signed in, the counts from **Check sessions** and the last sync, the last errors shown, and the app's last 200 log entries. Your home folder and user name, emails, account and organization ids, profile labels and folder names are replaced with placeholders. Session titles, transcripts and anything that looks like a token are never included. What you type in the description is yours and is not changed.
+The report contains the versions of Baton, macOS and Claude Desktop, your Mac's architecture, each window's Claude Code version and Local only state, how many windows are open and signed in, the counts from **Check sessions** and the last sync, the last errors shown, and the last 200 lines of Baton's own log (`Logs/baton.log` in its data folder, kept to three files of 1 MB). Your home folder and user name, emails, account and organization ids, profile labels and folder names are replaced with placeholders. Session titles, transcripts and anything that looks like a token are never included. What you type in the description is yours and is not changed.
 
 A report too long for a link opens GitHub with a short summary; the full text is on your clipboard and in the file you saved, to paste or attach. Security problems go to a [private advisory](https://github.com/trukhinyuri/Baton/security/advisories/new), not an issue; see [SECURITY.md](SECURITY.md).
 
@@ -306,7 +324,7 @@ Remote Control ties a window's sessions to its Anthropic account. With several a
 
 ## Why Baton?
 
-In a relay, nobody stops the race to rest: the runner hands the baton to the next one and the race keeps moving. Baton does that between your own Claude windows. It was called Claude Profiles until 1.0; we renamed it because Anthropic's terms don't allow "Claude" inside a product's own name. Descriptive use like "for Claude Desktop" is fine, and that's how we refer to it now.
+In a relay the runner hands the baton to the next one, and the race goes on in good hands. Baton does that between your own Claude windows. It was called Claude Profiles until 1.0; we renamed it to keep "Claude", Anthropic's trademark, out of the product's own name. We say Claude Desktop only to name what Baton works with.
 
 ## Contributing
 

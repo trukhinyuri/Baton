@@ -81,6 +81,11 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
             if !status.isMain, status.isRunning, manager.engineIsOutdated(status.id) {
                 changes.append("Claude Desktop was updated; this window runs the previous version until it restarts.")
             }
+            let started = running.filter { $0.uses(dataDir: dataDir, mainDataDir: paths.mainDataDir, bundle: bundle) }
+                .compactMap { $0.app?.launchDate }.min()
+            if status.isRunning, Self.sessionsWaitForRestart(shared: manager.lastCardShared(into: dataDir), windowStarted: started) {
+                changes.append(Self.newSessionsLine)
+            }
             return WindowStatus(
                 id: status.id, label: status.label, isMain: status.isMain, isRunning: status.isRunning,
                 account: status.email ?? (status.isSignedIn ? "signed in" : nil), scope: scope,
@@ -88,6 +93,15 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
                 skipReasons: skip, localOnly: localOnly[status.id], pendingChanges: changes,
                 liveSessions: liveSessionCount(windowPIDs: pids, claudePIDs: claudes, parent: parentPID), folderNotes: folderNotes)
         }
+    }
+
+    static let newSessionsLine = "New sessions from other windows show after a restart."
+
+    /// Claude reads session cards only as it starts: cards shared into a window after it started wait for a restart.
+    /// An unknown start time counts as before the share.
+    static func sessionsWaitForRestart(shared: Date?, windowStarted: Date?) -> Bool {
+        guard let shared else { return false }
+        return windowStarted.map { $0 < shared } ?? true
     }
 
     /// Claude Code processes that descend from one of `windowPIDs`, walking up through helpers.
@@ -180,14 +194,17 @@ extension ProfileManager {
         for app in apps { app.terminate() }
         for _ in 0..<100 where apps.contains(where: { !$0.isTerminated }) { try await Task.sleep(for: .milliseconds(200)) }
         guard apps.allSatisfy(\.isTerminated) else { throw WindowStatus.RestartError.didNotQuit(label: label) }
-        Log.logger("restart").notice("Restarted window \(id, privacy: .private)")
+        Log.notice("restart", "Restarted window \(id)")
         if id == "main" { try await openMain() } else { try await open(id) }
     }
 }
 
-/// The newest entries this app wrote to the unified log, for a problem report. Reads only its own subsystem.
+/// The newest lines of Baton's own log for a problem report: its text log (`Log.fileTail`) once that is on, else what
+/// this app wrote to the unified log. Reads only Baton's own lines; the report redacts them.
 public enum LogTail {
     public static func read(limit: Int = FeedbackReport.logLimit, since: TimeInterval = 86_400) -> [String] {
+        let file = Log.fileTail(limit: limit)
+        if !file.isEmpty { return file }
         // The whole local store needs admin rights; without them only this process's own entries are readable.
         guard let store = (try? OSLogStore.local()) ?? (try? OSLogStore(scope: .currentProcessIdentifier)) else { return [] }
         let predicate = NSPredicate(format: "subsystem == %@", Log.subsystem)

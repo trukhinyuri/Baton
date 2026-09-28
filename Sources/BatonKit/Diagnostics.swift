@@ -51,7 +51,8 @@ public enum Diagnostics {
                         for file in try fm.contentsOfDirectory(at: org, includingPropertiesForKeys: [.isRegularFileKey])
                         where file.lastPathComponent.hasPrefix("local_") && file.pathExtension == "json" {
                             guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
-                            guard let object = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any] else {
+                            let data = try ScanCache.shared.value("data", of: file) { try Data(contentsOf: $0) }
+                            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                                 entry.issues.append("A session card has an unsupported format."); continue
                             }
                             let key = kind + "/" + file.lastPathComponent

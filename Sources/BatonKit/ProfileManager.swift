@@ -643,8 +643,7 @@ public final class ProfileManager: @unchecked Sendable {
             source: plan.conversation.sessionID, destination: plan.destination, copy: made.id,
             sourceLength: made.sourceLength, sourceTail: made.sourceTail)
         if !made.leftBehind.isEmpty || !made.worktrees.isEmpty {
-            Log.logger("continue").info(
-                "Copy \(made.id, privacy: .private) left \(made.leftBehind.count) scratchpad items and \(made.worktrees.count) worktrees behind")
+            Log.info("continue", "Copy \(made.id) left \(made.leftBehind.count) scratchpad items and \(made.worktrees.count) worktrees behind")
         }
         return (made.id, folder)
     }
@@ -836,16 +835,45 @@ public final class ProfileManager: @unchecked Sendable {
             sync.email = { [weak self] dataDir, account in self?.email(in: dataDir, accountID: account) ?? DesktopData.email(in: dataDir, accountID: account) }
             sync.dryRun = dryRun
             let sessions = try sync.run(propagateDeletions: propagateDeletions)
+            if !dryRun { noteCardsShared(into: sessions.wroteInto) }
             let cowork = try CoworkSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
             // Adds files only, never in Claude's own data, so it runs whether or not windows are open.
             var carried: [NativeForkCarry.Report] = []
             if !dryRun {
+                // A Continue copy whose transcript is gone is never offered for reuse again.
+                let copies = ContinueCopies(paths: paths)
+                if FileManager.default.fileExists(atPath: copies.file.path) {
+                    do { try copies.dropMissing(transcripts: ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)) } catch {
+                        Log.error("sync", "Couldn't tidy continue-copies.json: \(error.localizedDescription)")
+                    }
+                }
                 do { carried = try NativeForkCarry.run(paths: paths, dataDirs: dataDirs) } catch {
-                    Log.logger("carry").error("Carry failed: \(error.localizedDescription, privacy: .private)")
+                    Log.error("carry", "Carry failed: \(error.localizedDescription)")
                 }
             }
-            return SyncReport(sessions: sessions, cowork: cowork, carried: carried)
+            let report = SyncReport(sessions: sessions, cowork: cowork, carried: carried)
+            if !dryRun, report.changes > 0 {
+                Log.info(
+                    "sync",
+                    "\(sessions.pairs) session folders: \(sessions.cardsWritten) cards written, \(sessions.cardsRemoved) removed, "
+                        + "\(sessions.tombstonesWritten) deletions shared, \(report.changes) changes in all")
+            }
+            return report
         }
+    }
+
+    /// When this manager's sync last wrote a session card into each data folder (standardized path). A window that
+    /// was already open by then shows those sessions only after a restart; `WindowStatus` says so.
+    private var cardsShared: [String: Date] = [:]
+    private let cardsSharedLock = NSLock()
+
+    func noteCardsShared(into dataDirs: Set<String>, at date: Date = Date()) {
+        cardsSharedLock.withLock { for dir in dataDirs { cardsShared[dir] = date } }
+    }
+
+    /// When sync last wrote a session card into `dataDir`, if it has in this run of the app.
+    public func lastCardShared(into dataDir: URL) -> Date? {
+        cardsSharedLock.withLock { cardsShared[dataDir.standardizedFileURL.path] }
     }
 
     /// Claude Desktop creates a signed-in account's session folders only when that account starts its first
@@ -893,9 +921,17 @@ public final class ProfileManager: @unchecked Sendable {
         return info["CFBundleVersion"] as? String
     }
 
+    /// Whether Claude Desktop is newer than the profile's engine, compared part by part as numbers (never as text,
+    /// and never just "different": an engine newer than Claude Desktop is kept). An engine without a readable version
+    /// counts as outdated.
     func engineIsOutdated(_ id: String) -> Bool {
-        let installed = Self.version(of: paths.claudeApp)
-        return installed != nil && installed != Self.version(of: paths.engine(for: id))
+        Self.isOutdated(engine: Self.version(of: paths.engine(for: id)), installed: Self.version(of: paths.claudeApp))
+    }
+
+    static func isOutdated(engine: String?, installed: String?) -> Bool {
+        guard let installed else { return false }
+        guard let engine else { return true }
+        return EngineInstall.isOlder(engine, than: installed)
     }
 
     /// Clones Claude.app with APFS copy-on-write (near-zero disk use) and gives the clone a labeled Finder icon.

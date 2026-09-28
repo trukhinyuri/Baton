@@ -40,12 +40,22 @@ package:
 # What the release workflow runs, minus the upload.
 release: app verify notarize package
 
+# The CLI hint names the folder Baton.app stays in: while the old folder keeps its name (a Claude window was open),
+# a link into it would break at the rename, so the hint then names the Baton folder and waits for the rename.
 install: app
 	sh scripts/install-app.sh $(if $(DEST),"$(DEST)")
-	@echo "Optional CLI, if you have no baton link yet: ln -sf \"$$($(WHERE))/Baton.app/Contents/Helpers/baton\" /usr/local/bin/baton"
+	@dir="$$($(WHERE))"; \
+	if [ "$$dir" = "$(HOME)/Applications/Claude Profiles" ]; then \
+		echo "Optional CLI, once that folder is renamed to Baton: ln -sf \"$(HOME)/Applications/Baton/Baton.app/Contents/Helpers/baton\" /usr/local/bin/baton"; \
+	elif [ -x "$$dir/Baton.app/Contents/Helpers/baton" ]; then \
+		echo "Optional CLI, if you have no baton link yet: ln -sf \"$$dir/Baton.app/Contents/Helpers/baton\" /usr/local/bin/baton"; \
+	fi
 
+# To the Trash, never deleted, with the install script's own helper.
 uninstall:
-	rm -rf "$$($(WHERE))/Baton.app"
+	@app="$$($(WHERE))/Baton.app"; \
+	if [ -e "$$app" ]; then sh -c '. scripts/install-lib.sh; to_trash "$$1"' uninstall "$$app" && echo "Moved $$app to the Trash."; \
+	else echo "No Baton.app in $$($(WHERE))."; fi
 	@echo "Profiles, sign-ins and launchers are kept. Remove them from the app first if you no longer need them."
 
 clean:

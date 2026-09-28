@@ -1,9 +1,24 @@
 name: Bump Homebrew cask
 
+# Points the tap's cask at a published release. The Release workflow runs it as its last job; run it by hand
+# (Actions → Bump Homebrew cask → Run workflow, with the tag) only if that job was skipped or failed.
 # Written out by hand so the tap token is only ever given to git, never to a third-party action.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag, such as v1.0.0
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_TAP_PAT:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag, such as v1.0.0
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,12 +26,19 @@ permissions:
 jobs:
   bump:
     runs-on: macos-15
+    env:
+      HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
+      TAG: ${{ inputs.tag }}
     steps:
+      - name: Skip without the tap token
+        if: env.HOMEBREW_TAP_PAT == ''
+        run: echo "::warning::HOMEBREW_TAP_PAT is not set, so the tap was not bumped to $TAG. Set it and run Bump Homebrew cask by hand (docs/RELEASING.md)."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HOMEBREW_TAP_PAT != ''
       - name: Download and check the release
+        if: env.HOMEBREW_TAP_PAT != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
         run: |
           . scripts/product.env
           mkdir -p "$RUNNER_TEMP/release" && cd "$RUNNER_TEMP/release"
@@ -25,25 +47,34 @@ jobs:
           ditto -x -k "$ARCHIVE_STEM-$TAG.zip" app
           # Homebrew disables casks that fail Gatekeeper, so an ad-hoc build never reaches the tap.
           if ! spctl --assess --type execute -vv "app/$PRODUCT_NAME.app"; then
-            echo "::notice::$TAG is not notarized; the cask is left unchanged."
+            echo "::warning::$TAG is not notarized; the cask is left unchanged."
             exit 0
           fi
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
-          echo "SHA256=$(cut -d ' ' -f 1 SHA256SUMS.txt)" >> "$GITHUB_ENV"
+          echo "SHA256=$(shasum -a 256 "$ARCHIVE_STEM-$TAG.zip" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
       - name: Update the tap
-        if: env.VERSION != ''
-        env:
-          HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
+        if: env.HOMEBREW_TAP_PAT != '' && env.VERSION != ''
         run: |
           . scripts/product.env
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOMEBREW_TAP_PAT" | base64)"
           git -c http.extraheader="$auth" clone --depth 1 "https://github.com/$TAP_SLUG.git" "$RUNNER_TEMP/tap"
-          cask="$RUNNER_TEMP/tap/Casks/$CASK_TOKEN.rb"
-          mkdir -p "$(dirname "$cask")" && { [ -f "$cask" ] || cp "packaging/homebrew/Casks/$CASK_TOKEN.rb" "$cask"; }
-          sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/; s/^  sha256 \".*\"/  sha256 \"$SHA256\"/" "$cask"
           cd "$RUNNER_TEMP/tap"
+          # Without these, everyone who installed the cask as claude-profiles silently stays on 0.x.
+          if ! grep -q '"claude-profiles": *"baton"' cask_renames.json 2>/dev/null; then
+            echo "::error::The tap's cask_renames.json doesn't send claude-profiles to baton (packaging/homebrew/README.md)."
+            exit 1
+          fi
+          if [ -e Casks/claude-profiles.rb ]; then
+            echo "::error::The tap still has Casks/claude-profiles.rb; Homebrew follows cask_renames.json only once it is gone."
+            exit 1
+          fi
+          cask="Casks/$CASK_TOKEN.rb"
+          # The first release adds the cask: its source carries a placeholder sha256 that this step replaces.
+          mkdir -p Casks && { [ -f "$cask" ] || cp "$GITHUB_WORKSPACE/packaging/homebrew/Casks/$CASK_TOKEN.rb" "$cask"; }
+          sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/; s/^  sha256 \".*\"/  sha256 \"$SHA256\"/" "$cask"
+          grep -q "^  sha256 \"$SHA256\"" "$cask" || { echo "::error::Couldn't write the sha256 into $cask."; exit 1; }
           if [ -z "$(git status --porcelain)" ]; then echo "The cask already points at $VERSION."; exit 0; fi
-          git add "Casks/$CASK_TOKEN.rb"
+          git add "$cask"
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "$CASK_TOKEN $VERSION"
           git -c http.extraheader="$auth" push origin HEAD

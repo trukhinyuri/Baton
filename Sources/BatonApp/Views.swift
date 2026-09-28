@@ -125,8 +125,9 @@ struct ProfileRow: View {
                         Text("Most headroom")
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(Color.green.opacity(0.18)))
-                            .foregroundStyle(.green)
+                            .background(Capsule().fill(Color.green.opacity(0.25)))
+                            .foregroundStyle(.primary)
+                            .accessibilityLabel("Most headroom")
                             .help(
                                 "Most room left among your signed-in subscriptions with usage recorded in the last 3 hours, by the higher of five-hour and weekly usage"
                             )
@@ -445,7 +446,7 @@ struct WindowStatusSheet: View {
                 }
                 section("Not shared, and why", status.skipReasons, empty: "Everything local is shared.")
                 section("Waiting for a restart", status.pendingChanges, empty: "No changes waiting.")
-                if !status.folderNotes.isEmpty { section("Baton's folders", status.folderNotes, empty: "") }
+                if !status.folderNotes.isEmpty { section("Baton’s folders", status.folderNotes, empty: "") }
             } else {
                 ProgressView("Checking…")
             }

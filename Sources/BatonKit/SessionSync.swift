@@ -41,6 +41,9 @@ public struct SessionSync: Sendable {
         public var keptLive = 0
         /// "Session deleted" markers removed after every window had them for 90 days.
         public var tombstonesExpired = 0
+        /// The data folders (standardized paths) that got a session card in this run. A window that was already open
+        /// shows those sessions only after a restart.
+        public var wroteInto: Set<String> = []
         public var changes: Int {
             cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten + retiredByRule + tombstonesExpired
         }
@@ -66,6 +69,8 @@ public struct SessionSync: Sendable {
     /// Whether copies from other accounts keep `permissionMode` in a data directory's cards: the profile's
     /// “carry permission mode” choice. `nil` reads `carryPermissionMode` from each profile in the registry.
     public var carriesPermissionMode: (@Sendable (URL) -> Bool)?
+    /// Cards already read, kept while each file stays the same, so an idle run reads none of them again.
+    public var cache: ScanCache = .shared
 
     /// - Parameter dataDirs: every Claude Desktop data directory to keep in sync, main one included.
     public init(paths: Paths, dataDirs: [URL]) {
@@ -108,8 +113,10 @@ public struct SessionSync: Sendable {
             for url in try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil) {
                 let name = url.lastPathComponent
                 if name.hasPrefix("local_"), name.hasSuffix(".json") {
-                    let data = try Data(contentsOf: url)
-                    let facts = Self.facts(of: data)
+                    let (data, facts) = try cache.value("card", of: url) { url in
+                        let data = try Data(contentsOf: url)
+                        return (data, Self.facts(of: data))
+                    }
                     observed.insert(name)
                     holders[name, default: []].append(pair)
                     cardScopes[name, default: []].insert(scope)
@@ -269,6 +276,7 @@ public struct SessionSync: Sendable {
                 }
                 if let transcript = card.facts.transcript { heldTranscripts.insert(transcript) }
                 report.cardsWritten += 1
+                if !dryRun { report.wroteInto.insert(dataDir.standardizedFileURL.path) }
             }
             if propagateDeletions {
                 for tombstone in applicableTombstones where !present.contains(tombstone) {

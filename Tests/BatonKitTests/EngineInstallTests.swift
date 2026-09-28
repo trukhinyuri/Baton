@@ -73,6 +73,31 @@ struct EngineInstallTests {
         #expect(try staging(in: box.root).map(\.lastPathComponent) == [unrelated.lastPathComponent])
     }
 
+    /// Versions are compared part by part as numbers, and an engine is never replaced with an older Claude.
+    @Test func comparesVersionsAsNumbersAndNeverDowngrades() throws {
+        #expect(EngineInstall.isOlder("2.9939.9", than: "2.9939.10"), "not as text")
+        #expect(!EngineInstall.isOlder("2.9939.10", than: "2.9939.9"))
+        #expect(!EngineInstall.isOlder("2.9939.10", than: "2.9939.10"))
+        #expect(ProfileManager.isOutdated(engine: "2.9939.9", installed: "2.9939.10"), "an update")
+        #expect(!ProfileManager.isOutdated(engine: "2.9939.10", installed: "2.9939.10"), "equal")
+        #expect(!ProfileManager.isOutdated(engine: "2.9939.10", installed: "2.9939.9"), "a downgrade isn't an update")
+        #expect(ProfileManager.isOutdated(engine: nil, installed: "2.9939.9"), "an engine without a version")
+        #expect(!ProfileManager.isOutdated(engine: "2.9939.9", installed: nil), "Claude Desktop unreadable")
+
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let older = try app(in: box.root, name: "source.app", version: "2.9939.9")
+        let destination = try app(in: box.root, name: "engine.app", version: "2.9939.10")
+        #expect(throws: (any Error).self) { try EngineInstall.install(from: older, to: destination, validate: { _ in }) }
+        #expect(try version(destination) == "2.9939.10", "kept")
+        #expect(try staging(in: box.root).isEmpty)
+        let same = try app(in: box.root, name: "same.app", version: "2.9939.10")
+        try EngineInstall.install(from: same, to: destination, validate: { _ in })
+        let newer = try app(in: box.root, name: "newer.app", version: "2.9940.0")
+        try EngineInstall.install(from: newer, to: destination, validate: { _ in })
+        #expect(try version(destination) == "2.9940.0")
+    }
+
     @Test func invalidStagingOrChangedVersionNeverReplacesOldEngine() throws {
         let box = try Sandbox()
         defer { try? fm.removeItem(at: box.root) }
