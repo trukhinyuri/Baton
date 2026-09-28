@@ -29,7 +29,11 @@ public struct SessionSync: Sendable {
         public var accountBoundCards = 0
         /// Existing copies in several scopes are preserved without choosing an owner.
         public var ambiguousAccountBoundCards = 0
-        public var changes: Int { cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten }
+        /// Cards a folder rule keeps out of an account, not copied there.
+        public var withheldByRule = 0
+        /// Copies removed from a closed window whose account a folder rule does not allow.
+        public var retiredByRule = 0
+        public var changes: Int { cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten + retiredByRule }
     }
 
     static let sessionsFolder = "claude-code-sessions"
@@ -39,6 +43,16 @@ public struct SessionSync: Sendable {
     public let dataDirs: [URL]
     private var fm: FileManager { .default }
 
+    /// Counts what a run would do and writes, moves and removes nothing.
+    public var dryRun = false
+    /// Whether the window of a data directory is open. `nil`: every window counts as open, unless the run
+    /// propagates deletions, which callers do only while no Claude Desktop window is running.
+    public var isWindowOpen: (@Sendable (URL) -> Bool)?
+    /// Sessions a running `claude` process has open; `nil` reads them as `LiveSessions` does.
+    public var liveSessionIDs: Set<String>?
+    /// Email of an account signed in to a data directory, for folder rules.
+    public var email: @Sendable (URL, String) -> String? = { DesktopData.email(in: $0, accountID: $1) }
+
     /// - Parameter dataDirs: every Claude Desktop data directory to keep in sync, main one included.
     public init(paths: Paths, dataDirs: [URL]) {
         self.paths = paths
@@ -47,13 +61,20 @@ public struct SessionSync: Sendable {
 
     /// - Parameter propagateDeletions: also spread "session deleted" markers and drop the deleted cards.
     ///   Do this only while no Claude Desktop window is open; otherwise sync only adds and updates.
+    ///
+    /// A card of a folder that a folder rule covers goes only to windows whose account the rule allows; an
+    /// account whose email can't be read counts as not allowed. Copies made before the rule are retired from
+    /// closed windows, with a backup and without a tombstone, once an allowed window has the card.
     @discardableResult
     public func run(propagateDeletions: Bool, now: Date = Date()) throws -> Report {
         var report = Report()
+        let rules: [FolderRule]
+        do { rules = try FolderRules(paths: paths).load() } catch { throw ProfileError.rulesUnreadable(error.localizedDescription) }
         let pairs = try self.pairs()
         report.pairs = pairs.count
 
-        var cards: [String: (modified: Date, data: Data, transcript: String?)] = [:]
+        var cards: [String: Card] = [:]
+        var holders: [String: [URL]] = [:]                          // card name → folders that have a copy
         var transcriptsByFolder: [String: [String: String]] = [:]   // folder path → card name → transcript
         var importedByFolder: [String: Set<String>] = [:]           // folder path → cards a window imported
         var tombstones = Set<String>()
@@ -75,6 +96,7 @@ public struct SessionSync: Sendable {
                     let data = try Data(contentsOf: url)
                     let facts = Self.facts(of: data)
                     observed.insert(name)
+                    holders[name, default: []].append(pair)
                     cardScopes[name, default: []].insert(scope)
                     if facts.accountBound { accountBound.insert(name) }
                     if let transcript = facts.transcript {
@@ -83,7 +105,7 @@ public struct SessionSync: Sendable {
                     }
                     guard let modified = SyncFolders.modificationDate(url) else { continue }
                     if let known = cards[name], known.modified >= modified { continue }
-                    cards[name] = (modified, data, facts.transcript)
+                    cards[name] = Card(modified: modified, data: data, facts: facts)
                 } else if name.hasPrefix("deleted_") {
                     tombstones.insert(name)
                     tombstonesByScope[scope, default: []].insert(name)
@@ -99,7 +121,7 @@ public struct SessionSync: Sendable {
         // Remember native IDs before any deletion. Their later tombstones must never become global just
         // because the last card disappeared, and an ambiguous owner cannot be guessed on the next run.
         let nextScopes = cardScopes.filter { accountBound.contains($0.key) }.mapValues { $0.sorted() }
-        if nextScopes != remembered.scopes { try NativeScopeState(scopes: nextScopes).save(to: scopeFile) }
+        if nextScopes != remembered.scopes, !dryRun { try NativeScopeState(scopes: nextScopes).save(to: scopeFile) }
 
         // A native worker is tied to its server-side account/organization and CCR bridge. Old versions may
         // already have copied it elsewhere; timestamps cannot establish which copy owns that bridge.
@@ -115,20 +137,28 @@ public struct SessionSync: Sendable {
                     || (permitted(name, in: scope) && tombstonesByScope[scope]?.contains(marker) == true)
             })
         }
+        // Each window's email is read once, and only when a rule covers a card.
+        var emails: [String: String?] = [:]
+        func allows(_ card: Card, in pair: URL) -> Bool {
+            guard let allowed = FolderRules.allowedAccounts(for: card.facts.folders, in: rules) else { return true }
+            let dataDir = dataDir(of: pair), account = pair.deletingLastPathComponent().lastPathComponent
+            let key = dataDir.path + "\n" + account
+            if emails[key] == nil { emails[key] = .some(email(dataDir, account)?.lowercased()) }
+            guard let known = emails[key] ?? nil else { return false }
+            return allowed.accounts.contains(known)
+        }
 
         let backup = Backup(paths: paths, now: now)
         for pair in pairs {
-            // As given, not as listed: Claude writes paths with the data directory it was started with.
-            let listed = pair.resolvingSymlinksInPath().path
-            let dataDir = dataDirs.first { listed.hasPrefix($0.resolvingSymlinksInPath().path + "/") }
-                ?? pair.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            let dataDir = dataDir(of: pair)
             let scope = Self.scope(of: pair)
+            let windowOpen = isWindowOpen?(dataDir) ?? !propagateDeletions
             let applicableTombstones = markers(in: scope)
             var deletedNames = Set(applicableTombstones.map { Self.cardName(for: String($0.dropFirst("deleted_".count))) })
             // Deleting either card of a conversation that a window imported under its transcript deletes both.
-            let deletedTranscripts = Set(deletedNames.compactMap { cards[$0]?.transcript ?? Self.transcript(inCardName: $0) })
+            let deletedTranscripts = Set(deletedNames.compactMap { cards[$0]?.facts.transcript ?? Self.transcript(inCardName: $0) })
             // Project and Remote Control workers stay with their own card and tombstone.
-            deletedNames.formUnion(cards.filter { !accountBound.contains($0.key) && $0.value.transcript.map(deletedTranscripts.contains) == true }.keys)
+            deletedNames.formUnion(cards.filter { !accountBound.contains($0.key) && $0.value.facts.transcript.map(deletedTranscripts.contains) == true }.keys)
             var present = Set(try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil).map(\.lastPathComponent))
             var held = transcriptsByFolder[pair.path] ?? [:]
             // The window here imported this conversation after launch: its older copy is not loaded and would
@@ -137,8 +167,10 @@ public struct SessionSync: Sendable {
                 guard let transcript = held[imported] else { continue }
                 for (name, other) in held where other == transcript && name != imported && !accountBound.contains(name) {
                     let target = pair.appending(path: name)
-                    if try backup.save(target, everyTime: true) { report.backedUp += 1 }
-                    try fm.removeItem(at: target)
+                    if !dryRun {
+                        if try backup.save(target, everyTime: true) { report.backedUp += 1 }
+                        try fm.removeItem(at: target)
+                    }
                     held[name] = nil
                     present.remove(name)
                     report.duplicatesRetired += 1
@@ -148,38 +180,56 @@ public struct SessionSync: Sendable {
             // Newest first, so a folder that gets one of two cards for a conversation gets the current one.
             for (name, card) in cards.sorted(by: { $0.value.modified > $1.value.modified })
             where permitted(name, in: scope) && !deletedNames.contains(name) {
-                if !present.contains(name), let transcript = card.transcript, heldTranscripts.contains(transcript) { continue }
                 let target = pair.appending(path: name)
+                let native = accountBound.contains(name)
+                if !native, !allows(card, in: pair) {
+                    guard present.contains(name) else { report.withheldByRule += 1; continue }
+                    // Retire a copy only where Claude can't be holding it, and only once it is safe elsewhere.
+                    guard !windowOpen, holders[name, default: []].contains(where: { $0 != pair && allows(card, in: $0) }) else { continue }
+                    if !dryRun {
+                        if try backup.save(target, everyTime: true) { report.backedUp += 1 }
+                        try fm.removeItem(at: target)
+                    }
+                    present.remove(name)
+                    report.retiredByRule += 1
+                    continue
+                }
+                if !present.contains(name), let transcript = card.facts.transcript, heldTranscripts.contains(transcript) { continue }
                 // A native worker's cwd is coupled to remoteControlSpawn.folder and its server bridge.
                 // Even within one account/organization, preserve the complete card byte-for-byte.
-                let native = accountBound.contains(name)
-                var data = native ? card.data : localized(card.data, for: dataDir), modified = card.modified
+                var data = native ? card.data : localized(card.data, for: dataDir, linking: !dryRun), modified = card.modified
                 if present.contains(name) {
                     guard let current = SyncFolders.modificationDate(target), let own = try? Data(contentsOf: target) else { continue }
                     if current >= card.modified.addingTimeInterval(-1) {
                         // This copy is as new as any; it may still need this window's scratch folder path.
-                        data = native ? own : localized(own, for: dataDir)
+                        data = native ? own : localized(own, for: dataDir, linking: !dryRun)
                         modified = current
                     }
                     guard own != data else { continue }
-                    if try backup.save(target) { report.backedUp += 1 }
-                    // Claude may have just updated this copy; never replace a newer card with an older one.
-                    guard SyncFolders.modificationDate(target) == current, (try? Data(contentsOf: target)) == own else { continue }
+                    if !dryRun {
+                        if try backup.save(target) { report.backedUp += 1 }
+                        // Claude may have just updated this copy; never replace a newer card with an older one.
+                        guard SyncFolders.modificationDate(target) == current, (try? Data(contentsOf: target)) == own else { continue }
+                    }
                 }
-                try data.write(to: target, options: .atomic)
-                try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: target.path)
-                if let transcript = card.transcript { heldTranscripts.insert(transcript) }
+                if !dryRun {
+                    try data.write(to: target, options: .atomic)
+                    try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: target.path)
+                }
+                if let transcript = card.facts.transcript { heldTranscripts.insert(transcript) }
                 report.cardsWritten += 1
             }
             if propagateDeletions {
                 for tombstone in applicableTombstones where !present.contains(tombstone) {
-                    fm.createFile(atPath: pair.appending(path: tombstone).path, contents: Data())
+                    if !dryRun { fm.createFile(atPath: pair.appending(path: tombstone).path, contents: Data()) }
                     report.tombstonesWritten += 1
                 }
                 for name in present where deletedNames.contains(name) && permitted(name, in: scope) {
                     let target = pair.appending(path: name)
-                    if try backup.save(target, everyTime: true) { report.backedUp += 1 }
-                    try fm.removeItem(at: target)
+                    if !dryRun {
+                        if try backup.save(target, everyTime: true) { report.backedUp += 1 }
+                        try fm.removeItem(at: target)
+                    }
                     report.cardsRemoved += 1
                 }
             }
@@ -196,16 +246,35 @@ public struct SessionSync: Sendable {
             let url = pair.appending(path: Self.archiveIndex)
             if !archived.isEmpty {
                 if archiveLists[pair.path] != archived {
-                    if fm.fileExists(atPath: url.path), try backup.save(url) { report.backedUp += 1 }
-                    let object: [String: Any] = ["v": archiveVersion, "archived": archived.sorted()]
-                    try JSONSerialization.data(withJSONObject: object).write(to: url, options: .atomic)
+                    if !dryRun {
+                        if fm.fileExists(atPath: url.path), try backup.save(url) { report.backedUp += 1 }
+                        let object: [String: Any] = ["v": archiveVersion, "archived": archived.sorted()]
+                        try JSONSerialization.data(withJSONObject: object).write(to: url, options: .atomic)
+                    }
                     report.archiveIndexesWritten += 1
                 }
             }
         }
-        removeDeadScratchLinks()
-        backup.prune()
+        if !dryRun {
+            removeDeadScratchLinks()
+            backup.prune()
+        }
         return report
+    }
+
+    /// The newest copy of a card found so far, and what it says.
+    struct Card {
+        var modified: Date
+        var data: Data
+        var facts: CardFacts
+    }
+
+    /// The data directory a session folder belongs to, as given rather than as listed: Claude writes paths with
+    /// the data directory it was started with.
+    func dataDir(of pair: URL) -> URL {
+        let listed = pair.resolvingSymlinksInPath().path
+        return dataDirs.first { listed.hasPrefix($0.resolvingSymlinksInPath().path + "/") }
+            ?? pair.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
 
     /// A second organization on the same account is not authorization for the native worker.
@@ -251,13 +320,18 @@ public struct SessionSync: Sendable {
         var transcript: String?
         /// Created by a window that opened an existing conversation it had no loaded card for.
         var imported = false
+        /// `cwd` and `originCwd`, except "No folder" scratch workspaces, for folder rules.
+        var folders: [String] = []
     }
 
     static func facts(of data: Data) -> CardFacts {
         guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return CardFacts() }
+        let folders = ["cwd", "originCwd"].compactMap { card[$0] as? String }
+            .filter { !$0.isEmpty && !$0.contains(scratchFolder) }
         return CardFacts(accountBound: isAccountBoundCard(card),
                          transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
-                         imported: card["adoptedFromOtherSurface"] as? Bool == true)
+                         imported: card["adoptedFromOtherSurface"] as? Bool == true,
+                         folders: Array(Set(folders)).sorted())
     }
 
     /// `local_<uuid>.json` names the transcript it was imported from; any other name gives `nil`.
@@ -304,7 +378,8 @@ public struct SessionSync: Sendable {
     ///
     /// When the folder is gone, or the link can't be made, only `originCwd` is changed, which keeps the session
     /// under "No folder" without side questions.
-    func localized(_ card: Data, for dataDir: URL) -> Data {
+    /// - Parameter linking: make the link when it's missing; without it, only a link already there is used.
+    func localized(_ card: Data, for dataDir: URL, linking: Bool = true) -> Data {
         let strings = Self.topLevelStrings(in: card)
         guard let originRange = strings["originCwd"], let origin = String(data: card[originRange], encoding: .utf8),
               let workspace = scratchWorkspace(origin) else { return card }
@@ -313,7 +388,7 @@ public struct SessionSync: Sendable {
         if let cwdRange = strings["cwd"], let cwd = String(data: card[cwdRange], encoding: .utf8),
            scratchWorkspace(cwd) == workspace, workspace.split(separator: "/").count == 3,
            let owner = owner(of: cwd, workspace: workspace),
-           owner.path == dataDir.path || linkScratchFolder(at: here, to: owner.path + Self.scratchFolder + workspace) {
+           owner.path == dataDir.path || linkScratchFolder(at: here, to: owner.path + Self.scratchFolder + workspace, creating: linking) {
             changes.append((cwdRange, cwd))
         }
         var result = card
@@ -346,8 +421,8 @@ public struct SessionSync: Sendable {
     }
 
     /// Makes `path` a link to `folder`, or checks that it already is one. Anything else at `path` is left alone.
-    private func linkScratchFolder(at path: String, to folder: String) -> Bool {
-        if (try? fm.attributesOfItem(atPath: path)) == nil {
+    private func linkScratchFolder(at path: String, to folder: String, creating: Bool = true) -> Bool {
+        if creating, (try? fm.attributesOfItem(atPath: path)) == nil {
             try? fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
             try? fm.createSymbolicLink(atPath: path, withDestinationPath: folder)
         }
