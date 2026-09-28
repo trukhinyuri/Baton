@@ -198,9 +198,9 @@ struct EmptyHint: View {
                 .frame(minWidth: 40)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Add your next subscription").font(.body.weight(.semibold))
+                Text("Ready for the next leg").font(.body.weight(.semibold))
                 Text(
-                    "Each one gets its own Claude window and a labeled Dock icon, so you always know which account you are in. Your Claude Code sessions show up in every window, so you can pick up any of them in whichever subscription you choose."
+                    "Add another subscription: it gets its own Claude window and a labeled Dock icon, so you always know which account you’re in. Your Claude Code sessions show up in every window, ready to be handed over."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -262,6 +262,12 @@ struct ContentView: View {
             }
             Divider()
             footer
+            Text("Several Claude Desktop accounts, one Mac, one baton. Not affiliated with Anthropic.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
         }
         .frame(minWidth: 760, idealWidth: 900, minHeight: 380, idealHeight: 580)
         .sheet(isPresented: $model.isAdding) { AddProfileSheet(model: model) }
@@ -328,9 +334,9 @@ struct ContentView: View {
             } else {
                 Image(systemName: "arrow.triangle.2.circlepath")
                 if model.statuses.count < 2 {
-                    Text("Local Code sessions will be shared when you add a subscription")
+                    Text("Add a subscription and your local Code sessions start relaying between windows.")
                 } else if let last = model.lastSync {
-                    Text("Local Code synced · \(last, format: .relative(presentation: .named))")
+                    Text("Local Code synced · \(last, format: .relative(presentation: .named)) — everyone’s in step.")
                 } else {
                     Text("Sharing local Code sessions…")
                 }
@@ -371,13 +377,18 @@ struct WindowStatusSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let status {
-                Text("\(status.isMain ? "Claude" : "Claude \(status.label)") status").font(.title2.bold())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(status.isMain ? "Claude" : "Claude \(status.label)") status").font(.title2.bold())
+                    Text("What this window shares, what it doesn’t, and why.").font(.callout).foregroundStyle(.secondary)
+                }
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
                     row("Window", status.isRunning ? "Open" : "Closed")
                     row("Account", status.account ?? "Not signed in")
                     row("Sharing scope", status.scope ?? "None until you sign in")
                     row("Scope from", status.scopeSource)
-                    row("Local only", status.localOnly.map { $0 ? "On" : "Off" } ?? "Not available in this version")
+                    row(
+                        "Local only", status.localOnly.map { $0 ? "On" : "Off" } ?? "Not available in this version",
+                        help: "Turns off Remote Control for this window’s new sessions, so they can’t be driven from claude.ai or your phone.")
                     row(
                         "Claude Code running", status.liveSessions == 0 ? "No sessions" : "\(status.liveSessions) session\(status.liveSessions == 1 ? "" : "s")"
                     )
@@ -404,11 +415,12 @@ struct WindowStatusSheet: View {
         .frame(minWidth: 480, idealWidth: 560, minHeight: 360, idealHeight: 440)
     }
 
-    private func row(_ title: String, _ value: String) -> some View {
+    private func row(_ title: String, _ value: String, help: String = "") -> some View {
         GridRow {
             Text(title).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
             Text(value).textSelection(.enabled)
         }
+        .help(help)
     }
 
     private func section(_ title: String, _ items: [String], empty: String) -> some View {

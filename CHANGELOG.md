@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.0.0 — unreleased
+## 1.0.0 — Baton takes the track
+
+Unreleased.
+
+Claude Profiles is now Baton: same app, same windows, a name it can keep in public (Anthropic's terms don't allow "Claude" in a product name). Your profiles and sessions carry over.
 
 Baton now covers local work only: local Claude Code sessions and Cowork tasks follow between windows, and everything kept in an Anthropic account stays with that account. 0.3.0 was never published; its changes are part of this release.
 

@@ -5,6 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
+        Tell us where the baton got dropped: what you did, what you expected, and what happened instead.
+
         **Report a problem** in Baton (the footer, the menu bar or Help) or `baton report`
         fills in the Diagnostics field below. It replaces your home folder, user name, emails, account ids,
         profile labels and folder names, and leaves out session titles, transcripts and anything shaped like a

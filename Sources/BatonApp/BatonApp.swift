@@ -13,6 +13,12 @@ struct BatonApp: App {
         .defaultSize(width: 900, height: 560)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Baton") {
+                    NSApp.orderFrontStandardAboutPanel(options: [.credits: About.credits])
+                    NSApp.activate()
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Add Subscription…") { model.isAdding = true }.keyboardShortcut("n")
             }
@@ -29,9 +35,29 @@ struct BatonApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            Image(systemName: "square.stack.3d.up.fill")
+            Image(systemName: About.menuBarSymbol)
                 .accessibilityLabel("Baton")
         }
+    }
+}
+
+/// What the About box and the menu bar show.
+enum About {
+    /// A runner with the baton; the stack of windows where this macOS can't draw it.
+    static let menuBarSymbol =
+        NSImage(systemSymbolName: "figure.run", accessibilityDescription: nil) != nil ? "figure.run" : "square.stack.3d.up.fill"
+
+    /// The About box credits, in the panel's own small, centered, theme-aware text.
+    static var credits: NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        return NSAttributedString(
+            string: "Baton, formerly Claude Profiles. Built by Yuri Trukhin for his own relay of Claude windows. Not affiliated with Anthropic.",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ])
     }
 }
 

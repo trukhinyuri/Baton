@@ -60,7 +60,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSHumanReadableCopyright</key><string>MIT License. Not affiliated with Anthropic.</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Yuri Trukhin. MIT License.</string>
 </dict>
 </plist>
 PLIST
