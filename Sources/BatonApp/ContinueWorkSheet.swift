@@ -85,7 +85,7 @@ struct ContinueWorkSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Continue work").font(.title2.bold())
-            Text("Choose what to continue and where. The other window opens it for you; nothing is sent on your behalf.")
+            Text("Pick a session and the window that runs the next leg. That window opens it for you; nothing is sent on your behalf.")
                 .font(.callout).foregroundStyle(.secondary)
 
             TextField("Search conversations", text: $form.search)
@@ -103,7 +103,8 @@ struct ContinueWorkSheet: View {
                 if model.isLoadingConversations && model.conversations.isEmpty {
                     ProgressView("Looking for conversations…")
                 } else if filtered.isEmpty {
-                    Text(form.search.isEmpty ? "No local conversations yet." : "Nothing matches “\(form.search)”.").foregroundStyle(.secondary)
+                    Text(form.search.isEmpty ? "Nothing to hand off yet: there are no local conversations." : "Nothing matches “\(form.search)”.")
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -187,7 +188,7 @@ struct ContinueWorkSheet: View {
                                 ? "A folder rule doesn't let Claude \(destinationLabel) take all of them."
                                 : batchNeedsStop
                                     ? "Some of them may still be written to in their window. Choose Automatic or As a copy, or close them there first."
-                                    : "Opens the \(ConversationIndex.continueAllLimit) most recent Code sessions of this folder with a message in the last day, in one go. Continue older ones one at a time."
+                                    : "Hands the \(ConversationIndex.continueAllLimit) most recent Code sessions of this folder (with a message in the last day) to that window in one go: the whole relay team, not just one runner. Older ones continue one at a time."
                         )
                 }
                 .font(.callout)
@@ -298,8 +299,15 @@ struct ContinueWorkSheet: View {
                         return
                     }
                     var text =
-                        plan.forks ? "Opened a copy of “\(conversation.title)” in Claude \(label)." : "Opened “\(conversation.title)” in Claude \(label)."
-                    if let note = plan.model, note.isWarning { text += " " + note.message(destination: label) }
+                        plan.forks
+                        ? "Baton passed to Claude \(label): a copy of “\(conversation.title)” is open there."
+                        : "Baton passed to Claude \(label): “\(conversation.title)” is open there."
+                    // The footer shows two lines: a model warning goes before the light touch, never after it.
+                    if let note = plan.model, note.isWarning {
+                        text += " " + note.message(destination: label)
+                    } else {
+                        text += plan.forks ? " Same history, next runner." : " Same conversation, next runner."
+                    }
                     model.show(notice: text)
                 case .startedCoworkTask:
                     model.show(notice: "A new Cowork task with the history attached is waiting in Claude \(label). Review it and send it there.")
@@ -338,8 +346,8 @@ struct ContinueWorkSheet: View {
                 }
                 let copies = plans.filter(\.forks).count
                 var text =
-                    "Opened \(plans.count) in Claude \(label)" + (copies > 0 ? ", \(copies) as copies" : "")
-                    + (newSession == nil ? "." : " and started a new session there.")
+                    "Baton passed to Claude \(label): opened \(plans.count) there" + (copies > 0 ? ", \(copies) as copies" : "")
+                    + (newSession == nil ? "." : ", and started a new session.")
                 if let warning = plans.compactMap(\.model).first(where: \.isWarning) { text += " " + warning.message(destination: label) }
                 model.show(notice: text)
                 model.preselectedConversation = nil

@@ -5,9 +5,7 @@
 <h1 align="center">Baton</h1>
 
 <p align="center">
-  <b>Several Claude Desktop accounts on one Mac, side by side.</b><br>
-  One Claude Desktop window per subscription, each with its own Dock icon,<br>
-  and your local Claude Code sessions and Cowork tasks go with you from one window to the next.
+  <b>One Mac, several Claude Desktop accounts, and one baton you pass between your own windows.</b>
 </p>
 
 <p align="center">
@@ -22,14 +20,14 @@
   <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their usage">
 </p>
 
-Baton runs one unmodified Claude Desktop window per subscription on your Mac and shares that Mac's local Claude Code sessions and Cowork tasks between those windows. Work started under one account continues under another with its transcript, sub-agent and Workflow history and tool outputs, and **Continue** also keeps Rewind checkpoints.
+Baton runs several Claude Desktop accounts on one Mac, each in its own unmodified Claude Desktop window with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window, and when you want to carry on somewhere else (the work account, the personal one, or the one that still has room today) you hand the conversation over with its transcript, sub-agents, Workflow runs, tool outputs and notes; **Continue** also keeps Rewind checkpoints, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
 
 Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Baton turns Remote Control off in its windows by default (one switch to undo it) and, before you continue, names what will not follow.
 
 It never reads credentials, has no network code, backs up Claude's files before changing them, and changes a window's settings only while that window is closed.
 
 - [Install](#install) · [Quick start](#quick-start) · [Continue work in another window](#continue-work-in-another-window) · [What follows and what stays](#what-follows-and-what-stays)
-- [Local only](#local-only) · [Command line](#command-line) · [Privacy and safety](#privacy-and-safety) · [Report a problem](#report-a-problem) · [Troubleshooting](#troubleshooting)
+- [Local only](#local-only) · [Command line](#command-line) · [Privacy and safety](#privacy-and-safety) · [Report a problem](#report-a-problem) · [Troubleshooting](#troubleshooting) · [Why Baton?](#why-baton)
 
 ## Install
 
@@ -64,6 +62,10 @@ ln -s ~/Applications/Claude\ Profiles/Baton.app/Contents/Helpers/baton /usr/loca
 ```
 
 Use one installation, Homebrew or source, not both: two copies would each run their own background sync. The app warns when it finds a second copy.
+
+### Upgrading from Claude Profiles
+
+Same app, new name. If you're upgrading from Claude Profiles, your windows, profiles and sessions carry over untouched; only the name on the tin changed. Baton moves its own folders to the new name the next time it starts with every Claude window closed. If the old folder names are still there, quit Baton, close every Claude window and run `baton migrate`.
 
 ### Uninstall
 
@@ -271,6 +273,10 @@ Technically yes: a profile can sign in to any account. Whether you may use a wor
 **Why is Remote Control off?**
 Remote Control ties a window's sessions to its Anthropic account. With several accounts on one Mac, that is the likely reason Claude forks or hides a session another account opened. Local only keeps work on your Mac; turn it off for a profile that needs Remote Control.
 
+## Why Baton?
+
+In a relay, nobody stops the race to rest: the runner hands the baton to the next one and the race keeps moving. Baton does that between your own Claude windows. It was called Claude Profiles until 1.0; we renamed it because Anthropic's terms don't allow "Claude" inside a product's own name. Descriptive use like "for Claude Desktop" is fine, and that's how we refer to it now.
+
 ## Contributing
 
 Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). `make test` runs the suite.
@@ -279,4 +285,4 @@ Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and
 
 [MIT](LICENSE) © Yuri Trukhin
 
-Baton is an independent project. It is not affiliated with, endorsed by or sponsored by Anthropic. Claude is a trademark of Anthropic, PBC.
+Built by Yuri Trukhin for his own relay of Claude windows. Not affiliated with Anthropic, and not endorsed or sponsored by it. Claude is a trademark of Anthropic, PBC.

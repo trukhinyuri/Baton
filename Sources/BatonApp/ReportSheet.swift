@@ -23,7 +23,7 @@ struct ReportSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Report a problem").font(.title2.bold())
             Text(
-                "Below is exactly what will be shared. Emails, account IDs, profile labels, folder names, session titles and your username are taken out. Nothing is sent until you submit the issue on GitHub yourself."
+                "Dropped the baton? Tell us where. Below is exactly what will be shared. Emails, account IDs, profile labels, folder names, session titles and your username are taken out. Nothing is sent until you submit the issue on GitHub yourself."
             )
             .font(.callout).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -41,7 +41,7 @@ struct ReportSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Report").font(.callout)
                 ScrollView {
-                    Text(form.report == nil ? "Collecting…" : text)
+                    Text(form.report == nil ? "Warming up…" : text)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
