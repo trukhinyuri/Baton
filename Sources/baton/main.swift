@@ -294,7 +294,7 @@ do {
             let folder = c.folders.first.map { " · " + $0 } ?? ""
             print("\(c.sessionID.prefix(8))  \(age(c.lastActivity).padding(toLength: 8, withPad: " ", startingAt: 0)) \(c.title) — \(kindName(c))\(folder)")
         }
-        if all.isEmpty { print("No local conversations found.") }
+        if all.isEmpty { print("Nothing to hand off yet. No local conversations found.") }
     case "continue" where args.count >= 2 && args[1] == "--folder":
         guard let folder = value(of: "--folder", in: args), let to = value(of: "--to", in: args) else {
             fail("continue --folder needs a folder and --to PROFILE")
@@ -312,7 +312,9 @@ do {
         let leftOutNote = leftOut == 0 ? "" : " Left out \(leftOut) older ones: continue them one at a time or raise --max."
         let newSession = args.contains("--new") ? path : nil
         guard !found.isEmpty || newSession != nil else {
-            fail("no Code sessions in \(path) with a message in the last \(value(of: "--since", in: args) ?? "24h"). Widen --since or add --new.")
+            fail(
+                "Nothing to hand off yet. No Code sessions in \(path) with a message in the last \(value(of: "--since", in: args) ?? "24h"). Widen --since or add --new."
+            )
         }
         let anyway = args.contains("--anyway")
         let label = manager.label(of: destination)
@@ -338,6 +340,7 @@ do {
         let key = args[1].lowercased()
         let matches = key == "last" ? Array(all.prefix(1)) : all.filter { $0.sessionID.hasPrefix(key) }
         guard matches.count == 1, let conversation = matches.first else {
+            if all.isEmpty { fail("Nothing to hand off yet. No local conversations found.") }
             fail(
                 matches.isEmpty
                     ? "no conversation “\(args[1])”. Run `baton conversations`." : "“\(args[1])” matches several conversations; use more of its id")
