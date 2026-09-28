@@ -57,7 +57,7 @@ struct WindowStatusTests {
         #expect(WindowStatus.alertTitle(for: WindowStatus.RestartError.liveSessions(label: "WORK", count: 2)) == "Claude Code is still working")
     }
 
-    @Test func reportIncludesRedactedLogTail() throws {
+    @Test func reportIncludesRedactedLogTail() async throws {
         let lines = (0..<250).map { "sync \($0): wrote a card for jane@example.com in /Users/jane/src/app-\($0)" }
         let facts = FeedbackReport.Facts(build: BuildInfo(version: "1.0.0", commit: "abc"), macOS: "15.1", architecture: "arm64",
                                          claudeVersion: nil, windows: [], diagnostics: [], lastSync: nil, lastSyncDate: nil,
@@ -72,7 +72,13 @@ struct WindowStatusTests {
         // The tail comes from this app's own subsystem in the unified log.
         let marker = "report-tail-\(UUID().uuidString.prefix(8))"
         Log.logger("tests").notice("\(marker, privacy: .public) for jane@example.com")
-        let tail = LogTail.read(limit: 50)
+        // The log store takes a moment to show a new entry, longer while other tests are logging.
+        var tail: [String] = []
+        for _ in 0..<20 {
+            tail = LogTail.read(limit: 50, since: 120)
+            if tail.contains(where: { $0.contains(marker) }) { break }
+            try await Task.sleep(for: .milliseconds(250))
+        }
         #expect(tail.count <= 50)
         #expect(tail.contains { $0.contains(marker) && $0.contains("[tests]") }, "\(tail.suffix(5))")
     }
