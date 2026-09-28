@@ -73,9 +73,10 @@ struct ContinueWorkSheet: View {
 
     private var folder: String? { selected?.kind == .cowork ? nil : selected?.folders.first }
 
-    /// The most recent Code sessions in the selected session's folder from the last day, and how many more there are.
-    private var folderSelection: (batch: [Conversation], leftOut: Int) {
-        guard let folder else { return ([], 0) }
+    /// The most recent Code sessions in the selected session's folder from the last day, how many more there are, and
+    /// how many are open in the chosen window already.
+    private var folderSelection: (batch: [Conversation], leftOut: Int, alreadyThere: Int) {
+        guard let folder else { return ([], 0, 0) }
         return ConversationIndex.continueAllBatch(
             in: folder, since: Date().addingTimeInterval(-Self.folderWindow),
             from: model.conversations, to: form.destination)
@@ -190,6 +191,8 @@ struct ContinueWorkSheet: View {
                     Text(
                         "\(folderBatch.count) in \((folder as NSString).lastPathComponent) from the last day"
                             + (folderSelection.leftOut > 0 ? ", the most recent; \(folderSelection.leftOut) older left out" : "")
+                            + (folderSelection.alreadyThere > 0
+                                ? "; \(folderSelection.alreadyThere) already in Claude \(destinationLabel.isEmpty ? "…" : destinationLabel)" : "")
                     )
                     .lineLimit(1).truncationMode(.middle)
                     .help(folderBatch.map(\.title).joined(separator: "\n"))
@@ -297,7 +300,9 @@ struct ContinueWorkSheet: View {
 
     private func destinationTitle(_ status: ProfileStatus) -> String {
         let name = status.isMain ? "Claude (main)" : "Claude \(status.label)"
-        if model.isAtLimit(status) { return name + " · limit reached" + (LimitText.bindingReset(status.limits).map { ", \($0)" } ?? "") }
+        if model.isAtLimit(status) {
+            return name + " · " + LimitText.atLimit(status.limits) + (LimitText.checkHint(status) == nil ? "" : " (open it to check)")
+        }
         guard status.usage != nil else { return name }
         return name + " · " + LimitText.summary(status.limits, usage: status.usage)
     }
@@ -349,11 +354,13 @@ struct ContinueWorkSheet: View {
                         ? "Baton passed to Claude \(label): a copy of “\(conversation.title)” is open there."
                         : "Baton passed to Claude \(label): “\(conversation.title)” is open there."
                     // The footer shows two lines: another window continuing it by itself goes first, then a model warning,
-                    // before the light touch, never after it.
-                    if let note = plan.autoResume.first(where: \.isWarning) ?? plan.autoResume.first {
+                    // then what Baton changed in another window, before the light touch, never after it.
+                    if let note = plan.autoResume.first(where: \.isWarning) {
                         text += " " + note.message()
                     } else if let note = plan.model, note.isWarning {
                         text += " " + note.message(destination: label)
+                    } else if let note = plan.autoResume.first {
+                        text += " " + note.message()
                     } else {
                         text += plan.forks ? " Same history, next runner." : " Same conversation, next runner."
                     }
@@ -372,7 +379,7 @@ struct ContinueWorkSheet: View {
 
     private func goAll(now: Bool = false) {
         guard let folder, !batchNeedsStop else { return }
-        let batch = folderBatch
+        var batch = folderBatch
         form.working = true
         form.problem = nil
         let manager = model.manager
@@ -381,11 +388,18 @@ struct ContinueWorkSheet: View {
         let mode = form.mode
         let newSession = form.alsoNewSession ? folder : nil
         Task {
+            // Sessions their own window picks up within minutes are left there; the rest continue. Only when that is
+            // all of them is there nothing to do but offer to wait.
+            var waiting: AutoResumeOffer?
             if !now, let offer = await offer(for: batch, in: target) {
-                form.offerForAll = true
-                form.offer = offer
-                form.working = false
-                return
+                guard batch.contains(where: { !offer.sessions.contains($0.sessionID) }) else {
+                    form.offerForAll = true
+                    form.offer = offer
+                    form.working = false
+                    return
+                }
+                batch.removeAll { offer.sessions.contains($0.sessionID) }
+                waiting = offer
             }
             do {
                 let plans = try await manager.continueAll(batch, in: target, mode: mode, newSessionIn: newSession)
@@ -399,14 +413,14 @@ struct ContinueWorkSheet: View {
                     model.loadConversations()
                     return
                 }
-                let copies = plans.filter(\.forks).count
-                var text =
-                    "Baton passed to Claude \(label): opened \(plans.count) there" + (copies > 0 ? ", \(copies) as copies" : "")
-                    + (newSession == nil ? "." : ", and started a new session.")
+                var text = ConversationIndex.passedNotice(label: label, opened: plans.count, copies: plans.filter(\.forks).count, newSession: newSession != nil)
+                if let waiting { text += " Left out \(waiting.names): " + waiting.message() }
                 if let note = plans.flatMap(\.autoResume).first(where: \.isWarning) {
                     text += " " + note.message()
                 } else if let warning = plans.compactMap(\.model).first(where: \.isWarning) {
                     text += " " + warning.message(destination: label)
+                } else if let note = plans.flatMap(\.autoResume).first {
+                    text += " " + note.message()
                 }
                 model.show(notice: text)
                 model.preselectedConversation = nil

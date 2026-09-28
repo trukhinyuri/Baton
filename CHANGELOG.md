@@ -32,6 +32,13 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - `baton conversations [--all]` and `baton continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]` (or `baton pass`, the same command) do the same as **Continue work…** from the command line. Continuing needs no macOS permissions
 - Usage shows how old each figure is; figures older than 3 hours are marked. Windows are ordered by weekly usage, lowest first
 
+### Limits and resets
+
+- A window at its limit shows when it resets ("resets at 02:10", or "resets at about Wed 05:00" when Baton can only estimate it), from Claude's own limit messages and Auto-continue when limits reset. Reset times appear for limits reached while Baton is running; one reached before that shows no time, and a limit held back only by an old sample reads "at its limit as of 22:12". A closed window is sampled again about 9 s after you open it
+- A reset Claude reports early, or a reply Claude gives in that window after the limit, frees the window at once and is announced as room again; an estimate never frees a window
+- When a session continues elsewhere, Baton turns off Claude's Auto-continue when limits reset for it in the window it left, if that window is closed, and otherwise once that window closes. `baton doctor` lists what Baton turned off
+- When the window a session came from picks it up by itself within minutes, **Continue work…** and `baton continue` offer to wait; **Continue All** and `baton continue --folder` leave only those sessions there, name them, and continue the rest
+
 ### Sharing between accounts
 
 - Folder rules (`baton rule <folder> --only <email>`) keep a folder's work in the listed accounts, for continuing and for session sharing alike. An unknown email counts as not allowed, and a damaged rules file stops both until it is fixed. Copies made before a rule are retired only in closed windows, with a backup

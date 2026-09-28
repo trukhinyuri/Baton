@@ -119,7 +119,7 @@ Each row shows the account signed in to that window and its five-hour and weekly
 
 ## Continue work in another window
 
-Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet. The signed-in subscription with the lowest weekly usage is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may be higher now*.
+Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet. The signed-in subscription with the lowest weekly usage is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may have changed since*.
 
 <p align="center">
   <img src="docs/images/continue-work.png" width="820" alt="Continue work sheet listing local Code sessions and Cowork tasks, with the window to continue in, the choice between Automatic, Same session and As a copy, and Continue All for the session's folder">

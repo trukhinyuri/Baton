@@ -584,8 +584,6 @@ public final class ProfileManager: @unchecked Sendable {
             }
             throw error
         }
-        // Before the window opens: another window's auto-continue would otherwise run the same work there too.
-        settleAutoResume(&plans, now: Date())
         let newSession = folder.map { ClaudeLink.newCodeSession(folder: $0) }
         guard !links.isEmpty else {
             try await openWindow(destination, links: newSession.map { [$0] } ?? [])
@@ -595,6 +593,9 @@ public final class ProfileManager: @unchecked Sendable {
         let known = SessionCards.sessions(in: cards)
         let started = Date()
         try await openWindow(destination, links: links)
+        // Only once the destination has opened, so a failed open leaves the source window's auto-continue as it was.
+        // A closed source window can't fire in between; an open one is left on until it closes (`settleAutoResume`).
+        settleAutoResume(&plans, now: Date())
         await confirmImported(&plans, known: known, cards: cards, since: started)
         // Claude shows each session once it has imported it, which can take seconds for a long one, and that
         // replaces whatever the window showed. The new session goes last, so it is what stays on screen.
@@ -740,10 +741,12 @@ public final class ProfileManager: @unchecked Sendable {
         let live = LiveSessions.ids(claudeDir: paths.claudeDir)
         let windows = windows
         let ranIn = limitTracker.lastWindows(paths: paths, windows: windows)
+        let openIn = limitTracker.liveWindows(paths: paths, windows: windows)
         return ConversationIndex.scan(paths: paths, windows: windows).map { found in
             var conversation = found
             conversation.hasLiveProcess = conversation.kind != .cowork && live.contains(conversation.sessionID)
             conversation.runningIn = conversation.kind == .cowork ? nil : ranIn[conversation.sessionID]
+            conversation.openIn = conversation.kind == .cowork ? [] : openIn[conversation.sessionID] ?? []
             return conversation
         }
     }
@@ -1019,8 +1022,24 @@ extension String {
 
 /// An advisory `flock(2)` lock shared by the app, the CLI and launchers.
 enum FileLock {
+    /// The locks the current thread holds, so a nested blocking call for the same lock runs its body instead of
+    /// waiting for itself: `flock` locks belong to each open file, so a second `open` in the same process would
+    /// block forever. A nested non-blocking call still finds the lock taken.
+    private static let heldKey = "BatonFileLocksHeld"
+
     /// - Returns: the body's result, or `nil` if `blocking` is false and the lock is held elsewhere.
     static func withLock<T>(_ url: URL, blocking: Bool, _ body: () throws -> T) throws -> T? {
+        let path = url.standardizedFileURL.path
+        let thread = Thread.current.threadDictionary
+        var held = thread[heldKey] as? Set<String> ?? []
+        if held.contains(path) { return blocking ? try body() : nil }
+        held.insert(path)
+        thread[heldKey] = held
+        defer {
+            var after = thread[heldKey] as? Set<String> ?? []
+            after.remove(path)
+            thread[heldKey] = after
+        }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR, 0o644)
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }

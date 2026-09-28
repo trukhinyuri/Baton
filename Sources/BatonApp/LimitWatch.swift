@@ -7,7 +7,9 @@ import UserNotifications
 /// known reset, it says so once, in the window and as a macOS notification if allowed.
 @MainActor
 final class LimitWatch {
-    private var blocked: Set<String>?
+    /// The windows blocked at the previous check, each with its signed-in account.
+    private var blocked: [String: String]?
+    private var applyingPending = false
     private var timer: Timer?
     private var scheduledFor: Date?
     private var observers: [NSObjectProtocol] = []
@@ -26,7 +28,8 @@ final class LimitWatch {
             })
     }
 
-    /// After each reload: announces windows a known reset has freed and schedules the next look.
+    /// After each reload: announces windows a known reset has freed, turns off the auto-continue entries a Continue
+    /// left on in windows that have closed since, and schedules the next look.
     /// - Returns: the windows blocked at a limit now.
     func update(_ statuses: [ProfileStatus], model: AppModel, now: Date = Date()) -> Set<String> {
         let blockedNow = LimitSchedule.blocked(statuses, now: now)
@@ -35,7 +38,23 @@ final class LimitWatch {
         }
         blocked = blockedNow
         schedule(LimitSchedule.nextRefresh(statuses, now: now), model: model)
-        return blockedNow
+        applyPending(model: model)
+        return Set(blockedNow.keys)
+    }
+
+    /// Off the main thread: it reads and may write other windows' settings files.
+    private func applyPending(model: AppModel) {
+        guard !applyingPending, !model.isDemo else { return }
+        applyingPending = true
+        let manager = model.manager
+        Task { [weak self, weak model] in
+            let labels = await Task.detached { manager.applyPendingAutoResume() }.value
+            self?.applyingPending = false
+            for label in labels {
+                model?.show(
+                    notice: "Claude \(label) is closed now, so Baton turned off its Auto-continue when limits reset for a session you continued elsewhere.")
+            }
+        }
     }
 
     private func schedule(_ date: Date?, model: AppModel) {

@@ -200,7 +200,7 @@ struct LocalOnlyTests {
         let after = box.contentsSnapshot()
         let changed = Set(after.keys.filter { before[$0] != after[$0] })
         let config = box.desktopConfig(box.work).path.dropFirst(box.root.path.count + 1)
-        let own = [box.paths.localOnlyFile, box.paths.stateDir.appending(path: "local-only.lock")]
+        let own = [box.paths.localOnlyFile, box.paths.stateDir.appending(path: "local-only.lock"), box.paths.stateDir.appending(path: "open.lock")]
         let expected = Set([String(config)] + own.map { String($0.path.dropFirst(box.root.path.count + 1)) })
         #expect(
             changed.subtracting(expected).allSatisfy { $0.hasPrefix("Library/Application Support/Baton/Backups/") },

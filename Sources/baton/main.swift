@@ -128,14 +128,21 @@ func kindName(_ conversation: Conversation) -> String {
     }
 }
 
-/// "5h 100% · resets 02:10 · week 62% · as of 3m ago" (see `LimitText.summary`).
+/// "5h 100% · resets at 02:10 · week 62% · as of 3m ago" (see `LimitText.summary`).
 func describe(_ status: ProfileStatus) -> String { LimitText.summary(status.limits, usage: status.usage) }
 
-/// Before continuing: when the source window picks the session up by itself within minutes, say so and stop,
-/// unless `--now` says to continue anyway. Exits with 3, so a script can tell that nothing was done and why.
-func offerToWait(_ conversations: [Conversation], in destination: String) {
-    guard !args.contains("--now"), let offer = manager.autoResumeOffer(for: conversations, in: destination) else { return }
+/// Before continuing: when the source window picks sessions up by itself within minutes, say which and leave them
+/// there, unless `--now` says to continue them anyway. When that is all of them, exits with 3, so a script can tell
+/// that nothing was done and why.
+/// - Returns: the conversations to continue.
+func offerToWait(_ conversations: [Conversation], in destination: String, alsoNewSession: Bool = false) -> [Conversation] {
+    guard !args.contains("--now"), let offer = manager.autoResumeOffer(for: conversations, in: destination) else { return conversations }
     print(offer.message())
+    let rest = conversations.filter { !offer.sessions.contains($0.sessionID) }
+    guard rest.isEmpty && !alsoNewSession else {
+        print("Left out \(offer.names); add --now to continue them in Claude \(manager.label(of: destination)) as well.")
+        return rest
+    }
     print("Wait for it there, or add --now to continue in Claude \(manager.label(of: destination)) anyway. Nothing was changed.")
     exit(3)
 }
@@ -211,6 +218,7 @@ do {
                 "\(name.padding(toLength: 18, withPad: " ", startingAt: 0)) \(state.padding(toLength: 7, withPad: " ", startingAt: 0)) \(who.padding(toLength: 32, withPad: " ", startingAt: 0)) \(describe(s))"
             )
             if s.isUnexpectedAccount, let expected = s.profile?.email { print("  ⚠︎ expected \(expected)") }
+            if let hint = LimitText.checkHint(s) { print("  \(LimitText.atLimit(s.limits)). \(hint)") }
             if s.isOpenWithoutProfile, let id = s.profile?.id {
                 print("  ⚠︎ a copy opened without this profile shows the main account; `baton open \(id)` replaces it")
             }
@@ -298,6 +306,17 @@ do {
             }
             for row in manager.localOnlyStatus() { print("\(row.label): \(describe(row.status))") }
             print(describe(manager.cloudMoveLock.status()))
+            for change in manager.autoResume.changes() {
+                print(
+                    "Auto-continue turned off by Baton in Claude \(change.window == "main" ? "(main)" : manager.label(of: change.window)) for "
+                        + "\(change.entry) (limit reset \(LimitText.time(change.resetsAt))) on \(LimitText.time(change.changedAt)): "
+                        + "tick Auto-continue when limits reset on that session's limit message there to turn it back on")
+            }
+            for pending in manager.autoResume.pending() {
+                print(
+                    "Auto-continue to turn off once Claude \(pending.window == "main" ? "(main)" : manager.label(of: pending.window)) is closed: "
+                        + "\(pending.entry) (limit reset \(LimitText.time(pending.resetsAt)))")
+            }
             for entry in entries {
                 print("\(entry.label): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
                 for issue in entry.issues { print("  \(issue)") }
@@ -322,10 +341,14 @@ do {
         guard let limit = Int(value(of: "--max", in: args) ?? String(ConversationIndex.continueAllLimit)), limit > 0 else {
             fail("--max takes a positive number, such as 6")
         }
-        let (found, leftOut) = ConversationIndex.continueAllBatch(
+        let selection = ConversationIndex.continueAllBatch(
             in: path, since: Date().addingTimeInterval(-since),
             from: manager.conversations(), to: destination, limit: limit)
-        let leftOutNote = leftOut == 0 ? "" : " Left out \(leftOut) older ones: continue them one at a time or raise --max."
+        var found = selection.batch
+        let leftOut = selection.leftOut
+        let alreadyNote =
+            selection.alreadyThere == 0 ? "" : " \(selection.alreadyThere) already in Claude \(manager.label(of: destination)): open there now."
+        let leftOutNote = (leftOut == 0 ? "" : " Left out \(leftOut) older ones: continue them one at a time or raise --max.") + alreadyNote
         let newSession = args.contains("--new") ? path : nil
         guard !found.isEmpty || newSession != nil else {
             fail(
@@ -341,16 +364,16 @@ do {
                     + leftOutNote)
             break
         }
-        offerToWait(found, in: destination)
+        found = offerToWait(found, in: destination, alsoNewSession: newSession != nil)
         let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession, anyway: anyway)
         printPlan(plans, to: destination)
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
         reportUnopened(plans, in: destination)
         printCarried(plans)
         let checked = plans.filter { $0.opened == true }.count
-        print(
-            "Opened \(plans.count) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "")
-                + (checked > 0 ? "; \(checked) confirmed imported there" : "") + ". Nothing was sent." + leftOutNote)
+        let started = newSession.map { " and started a new session in \($0)" } ?? ""
+        let confirmed = checked > 0 ? "; \(checked) confirmed imported there" : ""
+        print("Opened \(plans.count) in Claude \(label)\(started)\(confirmed). Nothing was sent.\(leftOutNote)")
     case "continue":
         guard args.count >= 2, let to = value(of: "--to", in: args) else { fail("continue needs a session (or “last”) and --to PROFILE") }
         let all = manager.conversations()
@@ -384,7 +407,7 @@ do {
             }
             break
         }
-        offerToWait([conversation], in: destination)
+        _ = offerToWait([conversation], in: destination)
         switch try await manager.continueConversation(conversation, in: destination, mode: mode, anyway: anyway) {
         case .openedSession(let plan):
             printPlan([plan], to: destination)

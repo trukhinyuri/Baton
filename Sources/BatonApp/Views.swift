@@ -64,6 +64,23 @@ struct UsageMeter: View {
 struct UsageColumn: View {
     let status: ProfileStatus
 
+    /// A limit whose reset has passed, or whose sample is older than its own window: its meter shows "reset".
+    static func hasReset(_ state: LimitState, now: Date) -> Bool {
+        [.reset, .mayHaveReset].contains(state.phase(now: now)) || state.resetByAnswer
+    }
+
+    private func help(usage: Usage, notes: [String], now: Date) -> String {
+        var lines: [String] = []
+        if !notes.isEmpty {
+            lines.append(
+                "Reset times come from Claude: its limit messages and Auto-continue when limits reset. They appear for limits "
+                    + "reached while Baton is running; one reached before that shows no time.")
+        }
+        if !usage.isFresh(now: now) { lines.append("Claude records usage only while this window is open and in use, so this sample can be behind.") }
+        if let hint = LimitText.checkHint(status, now: now) { lines.append(hint) }
+        return lines.joined(separator: " ")
+    }
+
     var body: some View {
         if let usage = status.usage, status.isSignedIn {
             let now = Date()
@@ -73,19 +90,16 @@ struct UsageColumn: View {
             VStack(alignment: .leading, spacing: 5) {
                 UsageMeter(
                     title: "5-hour", percent: limits.fiveHour.percent,
-                    isStale: [.below, .reset].contains(limits.fiveHour.phase(now: now)) && usage.isFiveHourStale(now: now)
-                        || limits.fiveHour.phase(now: now) == .reset)
-                UsageMeter(title: "Weekly", percent: limits.week.percent, isStale: limits.week.phase(now: now) == .reset)
+                    isStale: limits.fiveHour.phase(now: now) == .below && usage.isFiveHourStale(now: now) || Self.hasReset(limits.fiveHour, now: now))
+                UsageMeter(title: "Weekly", percent: limits.week.percent, isStale: Self.hasReset(limits.week, now: now))
                 (Text("Updated \(usage.sampledAt, format: .relative(presentation: .named))")
                     + Text(notes.map { " · " + $0 }.joined())
-                    + Text(usage.isFresh(now: now) || !allBelow ? "" : " · may be higher now"))
+                    + Text(usage.isFresh(now: now) || !allBelow ? "" : " · may have changed since")
+                    + Text(LimitText.checkHint(status, now: now) == nil ? "" : " · open it to check"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 56)
-                    .help(
-                        usage.isFresh(now: now)
-                            ? notes.isEmpty ? "" : "Reset times come from Claude: its limit messages and Auto-continue when limits reset."
-                            : "Claude records usage only while this window is open and in use, so this sample can be behind.")
+                    .help(help(usage: usage, notes: notes, now: now))
             }
         } else {
             Text(status.isSignedIn ? "Usage appears after the first message" : "Usage appears after sign-in")
@@ -235,13 +249,16 @@ struct LimitBanner: View {
     var note = ""
     let action: () -> Void
 
-    /// " It resets 02:10." or " It resets about Wed 05:00."; empty when the reset time isn't known.
+    /// " It resets at 02:10." or " It resets at about Wed 05:00."; empty when the reset time isn't known.
     private var resets: String { LimitText.bindingReset(tired.limits).map { " It \($0)." } ?? "" }
+
+    /// " as of 22:12" when only a sample says so.
+    private var asOf: String { LimitText.asOf(tired.limits).map { " \($0)" } ?? "" }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.orange).accessibilityHidden(true)
-            Text("\(tired.isMain ? "Claude (main)" : "Claude \(tired.label)") has reached its usage limit.\(resets)")
+            Text("\(tired.isMain ? "Claude (main)" : "Claude \(tired.label)") is at its limit\(asOf).\(resets)")
                 .font(.callout.weight(.medium))
             Spacer()
             if !note.isEmpty { Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(.secondary) }

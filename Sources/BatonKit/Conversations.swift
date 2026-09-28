@@ -35,6 +35,8 @@ public struct Conversation: Identifiable, Equatable, Sendable {
     /// The window that last ran this Code session, as far as Baton saw (`LimitTracker`); `nil` when unknown. It is
     /// never offered as the place to continue it.
     public var runningIn: String?
+    /// The windows whose running Claude Code processes have this session open now (`LimitTracker.liveWindows`).
+    public var openIn: Set<String> = []
 
     public var id: String { sessionID }
 
@@ -130,16 +132,24 @@ public enum ConversationIndex {
     /// destination window, so a busy folder moved whole would spend that subscription in minutes.
     public static let continueAllLimit = 6
 
-    /// What “Continue All” moves from `folder` to `destination`: the `limit` most recent of `recent(in:…)`, and how
-    /// many more were left out.
+    /// What “Continue All” moves from `folder` to `destination`: the `limit` most recent of `recent(in:…)`, how
+    /// many more were left out, and how many were skipped because a running process of the destination window has
+    /// them open already (`Conversation.openIn`).
     public static func continueAllBatch(
         in folder: String, since: Date, from conversations: [Conversation], to destination: String,
         limit: Int = continueAllLimit
-    ) -> (batch: [Conversation], leftOut: Int) {
-        let matching = recent(in: folder, since: since, from: conversations).filter { $0.runningIn != destination }
-            .sorted { $0.lastActivity > $1.lastActivity }
+    ) -> (batch: [Conversation], leftOut: Int, alreadyThere: Int) {
+        let recent = recent(in: folder, since: since, from: conversations)
+        let matching = recent.filter { !$0.openIn.contains(destination) }.sorted { $0.lastActivity > $1.lastActivity }
         let batch = Array(matching.prefix(max(limit, 0)))
-        return (batch, matching.count - batch.count)
+        return (batch, matching.count - batch.count, recent.count - matching.count)
+    }
+
+    /// What “Continue All” says when it's done: "Baton passed to Claude LAB: opened 3 sessions there, 1 as a copy."
+    public static func passedNotice(label: String, opened: Int, copies: Int, newSession: Bool) -> String {
+        "Baton passed to Claude \(label): opened \(opened) session\(opened == 1 ? "" : "s") there"
+            + (copies == 0 ? "" : copies == 1 ? ", 1 as a copy" : ", \(copies) as copies")
+            + (newSession ? ", and started a new session." : ".")
     }
 
     /// An absolute path with `~`, `.`, `..` and symbolic links resolved, without a trailing slash.
