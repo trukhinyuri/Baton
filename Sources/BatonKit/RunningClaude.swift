@@ -40,11 +40,17 @@ struct RunningClaude {
 enum ProcessArguments {
     /// The command line of one of this user's processes, read with `sysctl(KERN_PROCARGS2)` the way `ps` does.
     static func of(_ pid: pid_t) -> [String]? {
+        var buffer: [UInt8] = []
+        return of(pid, buffer: &buffer)
+    }
+
+    /// The same, reusing `buffer` across calls, so reading every process doesn't allocate `KERN_ARGMAX` bytes each time.
+    static func of(_ pid: pid_t, buffer: inout [UInt8]) -> [String]? {
         var argmax: Int32 = 0
         var size = MemoryLayout<Int32>.size
         var argmaxName: [Int32] = [CTL_KERN, KERN_ARGMAX]
         guard sysctl(&argmaxName, 2, &argmax, &size, nil, 0) == 0, argmax > 0 else { return nil }
-        var buffer = [UInt8](repeating: 0, count: Int(argmax))
+        if buffer.count < Int(argmax) { buffer = [UInt8](repeating: 0, count: Int(argmax)) }
         size = buffer.count
         var name: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         guard sysctl(&name, 3, &buffer, &size, nil, 0) == 0 else { return nil }

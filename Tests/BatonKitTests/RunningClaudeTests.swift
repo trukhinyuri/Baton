@@ -7,10 +7,10 @@ import Testing
 @Suite("Telling which account a running Claude shows")
 struct RunningClaudeTests {
     let main = URL(fileURLWithPath: "/Users/me/Library/Application Support/Claude", isDirectory: true)
-    let work = URL(fileURLWithPath: "/Users/me/Library/Application Support/Claude Profiles/Profiles/work", isDirectory: true)
+    let work = URL(fileURLWithPath: "/Users/me/Library/Application Support/Baton/Profiles/work", isDirectory: true)
     let claudeApp = URL(fileURLWithPath: "/Applications/Claude.app", isDirectory: true)
-    let engine = URL(fileURLWithPath: "/Users/me/Applications/Claude Profiles/.engines/Claude work.app", isDirectory: true)
-    let binary = "/Users/me/Applications/Claude Profiles/.engines/Claude work.app/Contents/MacOS/Claude"
+    let engine = URL(fileURLWithPath: "/Users/me/Applications/Baton/.engines/Claude work.app", isDirectory: true)
+    let binary = "/Users/me/Applications/Baton/.engines/Claude work.app/Contents/MacOS/Claude"
 
     @Test func readsTheDataDirSwitchLikeChromium() {
         #expect(ProcessArguments.userDataDir(in: [binary, "--user-data-dir=/a b/c"]) == "/a b/c")

@@ -1,0 +1,21 @@
+# 0007. Renamed to Baton; the bundle id, launcher ids and log subsystem keep the old name
+
+Status: accepted
+
+## Context
+
+Until 1.0 the app was called Claude Profiles. Anthropic's terms don't allow "Claude" inside a product's own name, while descriptive use such as "for Claude Desktop" is fine, so 1.0 is called Baton. Everything a person sees or types changes: the app, `Baton.app`, the `baton` command, the Homebrew cask, the repository and the two folders the app creates. People who already use Claude Profiles must keep their windows, sign-ins, launchers in the Dock and sessions, and an upgrade must never leave their data half in one folder and half in another.
+
+## Decision
+
+- **Identifiers the system depends on keep the old name.** The bundle id stays `io.github.trukhinyuri.claudeprofiles`, launchers stay `io.github.trukhinyuri.claudeprofiles.launcher.<id>`, and the log subsystem stays the bundle id. The one-copy-at-a-time check finds a running copy by bundle id, so the old and the new app see each other during the upgrade and never sync at once. The UserDefaults domain, Launch Services and privacy (TCC) records, Dock items of launchers and the cask's `zap` paths follow the bundle id too. Renamed Mac apps keep theirs: Slack still ships `com.tinyspeck.slackmacgap`, and the App Store doesn't allow changing it. Everything that is Claude's keeps Claude's name: `~/.claude`, `~/Library/Application Support/Claude`, Claude Desktop's own bundle id in the engines, and launchers named `Claude <LABEL>.app`.
+- **The folders move once, whole or not at all.** `~/Library/Application Support/Claude Profiles` becomes `~/Library/Application Support/Baton`, and `~/Applications/Claude Profiles` becomes `~/Applications/Baton`. `LegacyMigration` renames both with `rename(2)` under an exclusive lock outside both folders, at app start before any path is resolved and from `baton migrate`, which `scripts/install-app.sh` runs from the staged app. If the second rename fails, the first is renamed back. It moves nothing across volumes, nothing while a process runs from inside either old folder or has a profile's data folder on its command line, nothing while another Baton runs, and nothing while the app itself runs from inside the old launchers folder; it then retries at the next start. `Paths` resolves each folder on its own: the Baton folder if it exists, else the old one if it is a real folder, else the Baton folder. When both names exist, the Baton folder is used and the old one is left untouched. `baton doctor` and the status panel say in one plain line why the old folders are still in use.
+- **Old names keep working where it costs nothing.** A relative link `Claude Profiles` → `Baton` in Application Support keeps old scripts working; nobody sees it. `~/Applications` gets no link, because Finder would show the old name next to the new one. An old `Claude Profiles.app` that came along into `~/Applications/Baton` goes to the Trash; the install script saves it as a dated ZIP in `AppBackups` first. The app bundle carries `Contents/Helpers/claude-profiles` as a relative link to `baton` for all of 1.x.
+- **The cask is renamed, not duplicated.** The tap gets `Casks/baton.rb` and `cask_renames.json` with `{"claude-profiles": "baton"}`, so `brew upgrade` moves existing users to the new token. The cask installs only `baton`, and its `zap` removes only `AppBackups`, caches and preferences, under both folder names.
+
+## Consequences
+
+- An upgrade with Claude windows still open keeps the old folders until the next start with every Claude window closed; nothing is lost in the meantime, and Baton works from the old folders.
+- The bundle id and the launcher ids show the old name to anyone who reads `Info.plist`, `defaults` or the log. That is the price of keeping the Dock items, preferences and the one-copy check across the upgrade.
+- A link someone made by hand into the old launchers folder, such as `/usr/local/bin/claude-profiles`, stops working once the folder moves and has to point at `~/Applications/Baton`.
+- Revisit if macOS gains a supported way to carry an app's records over to a new bundle id, or once 2.0 can drop the `claude-profiles` command and the Application Support link.

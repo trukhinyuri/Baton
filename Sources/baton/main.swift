@@ -13,6 +13,8 @@ let usage = """
       baton remove <profile>              Quit it and move its copy and sign-in to the Trash
       baton sync [--dry-run]              Share local Code sessions; inspect Cowork without copying it
       baton refresh                       Rebuild app copies after a Claude Desktop update
+      baton migrate                       Move Baton's folders from their earlier name, Claude Profiles, once
+                                           nothing runs from them. Exit 3: kept for now, see the line
       baton doctor [--json]               Read-only session and folder checks
       baton local-only on|off|status [PROFILE|main] [--json]
                                            Keep new Claude Code sessions off Remote Control; on by
@@ -68,6 +70,14 @@ case "help", "-h", "--help":
     print(usage)
     exit(0)
 default: break
+}
+
+// Only `baton migrate` moves Baton's folders from their earlier name, before any path is resolved; every other
+// command uses them where they are.
+if let migration = LegacyMigration.command(args, home: FileManager.default.homeDirectoryForCurrentUser) {
+    if migration.exitCode == 1 { fail(migration.message) }
+    print(migration.message)
+    exit(migration.exitCode)
 }
 
 let cli = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
@@ -259,6 +269,7 @@ do {
             print(String(decoding: try encoder.encode(entries), as: UTF8.self))
         } else {
             print("Read-only local inventory. Cloud access and feature availability are not tested.")
+            for note in LegacyMigration.notes(paths: manager.paths) { print(note) }
             let installed = ClaudeVersion.installed(at: manager.paths.claudeApp) ?? "unknown"
             print(
                 "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.tested.lowerBound)–\(ClaudeVersion.tested.upperBound))"

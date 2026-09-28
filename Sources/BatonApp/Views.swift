@@ -384,6 +384,7 @@ struct WindowStatusSheet: View {
                 }
                 section("Not shared, and why", status.skipReasons, empty: "Everything local is shared.")
                 section("Waiting for a restart", status.pendingChanges, empty: "No changes waiting.")
+                if !status.folderNotes.isEmpty { section("Baton's folders", status.folderNotes, empty: "") }
             } else {
                 ProgressView("Checking…")
             }

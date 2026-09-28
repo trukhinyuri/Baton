@@ -5,9 +5,14 @@ import Foundation
 public enum AppInstances {
     public static let bundleID = "io.github.trukhinyuri.claudeprofiles"
 
-    /// Where `make install` and the Homebrew cask put the app.
+    /// Where the Homebrew cask and `make install` put the app: `scripts/install-app.sh` puts it next to the launchers,
+    /// in ~/Applications/Baton or, until Baton moves that folder, ~/Applications/Claude Profiles.
     public static var standardFolders: [URL] {
-        [URL(fileURLWithPath: "/Applications"), FileManager.default.homeDirectoryForCurrentUser.appending(path: "Applications")]
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            URL(fileURLWithPath: "/Applications"), home.appending(path: "Applications"), Paths.newLaunchersDir(home: home),
+            Paths.legacyLaunchersDir(home: home),
+        ]
     }
 
     /// Every `*.app` directly inside `folders` whose Info.plist names `bundleID`, in folder order.

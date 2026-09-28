@@ -16,7 +16,7 @@ Baton is a thin layer around the official Claude Desktop app. It never changes h
 
 ## Profiles
 
-A profile is three things, all derived from a registry entry in `~/Library/Application Support/Claude Profiles/profiles.json`:
+A profile is three things, all derived from a registry entry in `~/Library/Application Support/Baton/profiles.json`:
 
 1. **Engine.** An APFS clone of `/Applications/Claude.app` created with `clonefile(2)`, so it shares disk blocks with the original. The only change is a Finder custom icon, which adds an `Icon\r` file and a Finder flag to the bundle. No code or resource is modified and Anthropic’s signature still verifies with `codesign --verify` (the `--strict` check flags the extra icon file). Because the Dock shows a running app’s icon from its bundle path, each profile window gets its own labeled icon.
 2. **Data directory.** Claude Desktop is an Electron app, and Electron keeps everything (cookies, sign-in, window state, caches) in the directory passed with `--user-data-dir`. Each profile gets its own, so each can be signed in to a different account at the same time.
@@ -25,6 +25,12 @@ A profile is three things, all derived from a registry entry in `~/Library/Appli
 Engines are rebuilt when `CFBundleVersion` of the installed Claude differs from the clone’s and the profile isn’t running (`ProfileManager.refresh()` and on open).
 
 `EngineInstall` builds a sibling staging bundle with `clonefile` or a copy fallback. It checks the source and staged bundle's version, identifier, executable and code signature before replacement. An existing engine is exchanged atomically with the stage using `renamex_np(RENAME_SWAP)` and kept until the installed copy passes the same checks; if it doesn't, the two are exchanged back, and if even that fails, the previous bundle is kept and its path reported. Only the installer's own staging bundle is ever removed.
+
+## Baton's folders
+
+Baton keeps its state in `~/Library/Application Support/Baton` and the launchers and engines in `~/Applications/Baton`. Before 1.0 both were called `Claude Profiles` ([ADR 0007](adr/0007-baton-rename.md)). `Paths` resolves each of the two on its own when it is built: the Baton folder if it exists, else the Claude Profiles one if it is a real folder (a link doesn't count), else the Baton folder for a fresh install.
+
+`LegacyMigration` moves them, at app start before `Paths` is built and before any timer, launcher rebuild or sync, and from `baton migrate`, which `scripts/install-app.sh` runs from the staged app. Ordinary commands never move anything. Under an exclusive `flock` on `~/Library/Application Support/.baton-migration.lock`, outside both folders, it renames both with `renamex_np(RENAME_EXCL)` or neither: if the second rename fails, the first is renamed back. It moves only when the old state folder is a real folder with no Baton folder next to it, the old launchers folder is absent or a real folder with no Baton folder next to it, both stay on their volume, no other process has its executable inside either old folder (engines, their helpers, the Claude Code binaries Claude Desktop keeps in a profile's data folder, another Baton) or a path inside them on its command line (`--user-data-dir`), no other Baton runs, and the app doesn't run from inside the old launchers folder. None of Claude's own data is touched. Anything else keeps the old folders for this run; the status panel and `baton doctor` say why in one plain line. After a move, a relative link `Claude Profiles` → `Baton` in Application Support keeps old scripts working; `~/Applications` gets no link, because Finder would show the old name. An old `Claude Profiles.app` that came along goes to the Trash. Launchers are rebuilt by the existing check that their script names the current paths.
 
 ## Windows opened without their profile
 

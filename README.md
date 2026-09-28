@@ -54,13 +54,13 @@ You need Xcode 16 or later, or the Command Line Tools (`xcode-select --install`)
 ```sh
 git clone https://github.com/trukhinyuri/Baton.git
 cd Baton
-make install        # builds Baton.app and copies it to ~/Applications/Claude Profiles
+make install        # builds Baton.app and copies it to ~/Applications/Baton
 ```
 
-`make install` stages and verifies the new app before replacing the old one, and keeps the previous app as a ZIP in `~/Library/Application Support/Claude Profiles/AppBackups` (the three latest). Your profiles are not touched. The command-line tool ships inside the app:
+`make install` stages and verifies the new app before replacing the old one, and keeps the previous app as a ZIP in `~/Library/Application Support/Baton/AppBackups` (the three latest). Your profiles are not touched. The command-line tool ships inside the app:
 
 ```sh
-ln -s ~/Applications/Claude\ Profiles/Baton.app/Contents/Helpers/baton /usr/local/bin/
+ln -s ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/
 ```
 
 Use one installation, Homebrew or source, not both: two copies would each run their own background sync. The app warns when it finds a second copy.
@@ -78,14 +78,14 @@ Use one installation, Homebrew or source, not both: two copies would each run th
    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Claude.app
    ```
 
-To remove everything, including profiles and their sign-ins, move `~/Library/Application Support/Claude Profiles` and `~/Applications/Claude Profiles` to the Trash after step 1.
+To remove everything, including profiles and their sign-ins, move `~/Library/Application Support/Baton` and `~/Applications/Baton` (or their `Claude Profiles` namesakes, if Baton hasn't moved them yet) to the Trash after step 1.
 
 ## Quick start
 
 1. Open **Baton** and click **Add Subscription**.
 2. Enter the account's email and, if you like, change the Dock label (`WORK`, `LAB`, `TEAM`) and color.
 3. A new Claude window opens. Sign in there with that account, with Google or with email.
-4. To keep a profile in the Dock, drag its launcher from `~/Applications/Claude Profiles` (**⋯ → Show Launcher in Finder**) to the Dock. Spotlight finds launchers too ("Claude WORK").
+4. To keep a profile in the Dock, drag its launcher from `~/Applications/Baton` (**⋯ → Show Launcher in Finder**) to the Dock. Spotlight finds launchers too ("Claude WORK").
 5. When one subscription reaches its limit, click **Continue work…** and pick another.
 
 <p align="center">
@@ -172,6 +172,7 @@ baton local-only cloud-lock on|off|status
 baton doctor [--json]               Check sessions and per-window setup without changing anything
 baton report [--save PATH] [--open] Prepare a problem report (see below)
 baton refresh                       Rebuild app copies after a Claude Desktop update
+baton migrate                       Move Baton's folders from their Claude Profiles name, once nothing runs from them
 baton --version                     Version and commit
 ```
 
@@ -187,7 +188,7 @@ baton continue --folder ~/Projects/api --to LAB --new --dry-run
 
 - **No network.** The app has no network code, no telemetry and no update check; Homebrew handles updates. It never calls Anthropic's servers.
 - **No credentials.** It never reads, copies or stores passwords, sign-in tokens, cookies or the Keychain. You sign in to each window yourself with Claude's own sign-in. To show the account it reads the account id from `config.json`, the matching email from Claude's local cache, and the usage Claude records locally.
-- **Backups first.** Every card it replaces or removes is copied to `~/Library/Application Support/Claude Profiles/Backups/<date>/` first, and so is a settings file before Local only or the settings merge replaces it. The one exception is Claude's `config.json`, which holds sign-in data: only its theme, zoom and language keys are edited, in place, and it is never copied. Backup days older than a week move to the Trash; nothing is deleted outright.
+- **Backups first.** Every card it replaces or removes is copied to `~/Library/Application Support/Baton/Backups/<date>/` first, and so is a settings file before Local only or the settings merge replaces it. The one exception is Claude's `config.json`, which holds sign-in data: only its theme, zoom and language keys are edited, in place, and it is never copied. Backup days older than a week move to the Trash; nothing is deleted outright.
 - **Closed windows only.** A window's settings and interface stores are changed only while that window is closed. Sessions are shared with running windows too, but deletions wait until every window is closed.
 - **Claude's own records stay.** It never writes, edits or removes Claude's history-suppression records, which Claude uses to keep one account's history out of another.
 
@@ -249,10 +250,10 @@ A profile is Claude Desktop started with its own `--user-data-dir`, which is sta
 | What | Where |
 |---|---|
 | Main Claude app (untouched) | `/Applications/Claude.app`, data in `~/Library/Application Support/Claude` |
-| Profile app copies | `~/Applications/Claude Profiles/.engines` |
-| Launchers you can keep in the Dock | `~/Applications/Claude Profiles/Claude <LABEL>.app` |
-| Each profile's sign-in and window state | `~/Library/Application Support/Claude Profiles/Profiles/<id>` |
-| Profile list, folder rules, backups | `~/Library/Application Support/Claude Profiles` |
+| Profile app copies | `~/Applications/Baton/.engines` |
+| Launchers you can keep in the Dock | `~/Applications/Baton/Claude <LABEL>.app` |
+| Each profile's sign-in and window state | `~/Library/Application Support/Baton/Profiles/<id>` |
+| Profile list, folder rules, backups | `~/Library/Application Support/Baton` |
 | Local Claude Code transcripts, settings, skills, memory | `~/.claude`, shared by every window |
 
 More: [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY-MODEL.md), [design decisions](docs/adr/), [testing](docs/TESTING.md) and [why this exists](docs/WHY.md).

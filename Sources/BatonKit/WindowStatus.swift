@@ -19,15 +19,17 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
     public var pendingChanges: [String]
     /// Claude Code sessions running inside this window right now.
     public var liveSessions: Int
+    /// Baton's own folders, for every window alike: why they still have their earlier name (`LegacyMigration.notes`).
+    public var folderNotes: [String]
 
     public init(
         id: String, label: String, isMain: Bool, isRunning: Bool, account: String?, scope: String?,
         scopeSource: String, skipReasons: [String] = [], localOnly: Bool? = nil, pendingChanges: [String] = [],
-        liveSessions: Int = 0
+        liveSessions: Int = 0, folderNotes: [String] = []
     ) {
         self.id = id; self.label = label; self.isMain = isMain; self.isRunning = isRunning; self.account = account
         self.scope = scope; self.scopeSource = scopeSource; self.skipReasons = skipReasons; self.localOnly = localOnly
-        self.pendingChanges = pendingChanges; self.liveSessions = liveSessions
+        self.pendingChanges = pendingChanges; self.liveSessions = liveSessions; self.folderNotes = folderNotes
     }
 
     private var name: String { isMain ? "Claude" : label }
@@ -48,9 +50,10 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
     // MARK: Collecting
 
     /// One entry per window, from the same local reads as the main list and the sessions check.
+    /// - Parameter folderNotes: `LegacyMigration.notes`, shown with every window.
     public static func collect(
         manager: ProfileManager, diagnostics: [Diagnostics.Entry], localOnly: [String: Bool] = [:],
-        pending: [String: [String]] = [:]
+        pending: [String: [String]] = [:], folderNotes: [String] = []
     ) -> [WindowStatus] {
         let paths = manager.paths
         let running = manager.runningClaudes()
@@ -83,7 +86,7 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
                 account: status.email ?? (status.isSignedIn ? "signed in" : nil), scope: scope,
                 scopeSource: status.isSignedIn ? "config.json (lastKnownAccountUuid)" : "not signed in yet",
                 skipReasons: skip, localOnly: localOnly[status.id], pendingChanges: changes,
-                liveSessions: liveSessionCount(windowPIDs: pids, claudePIDs: claudes, parent: parentPID))
+                liveSessions: liveSessionCount(windowPIDs: pids, claudePIDs: claudes, parent: parentPID), folderNotes: folderNotes)
         }
     }
 
