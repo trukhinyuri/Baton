@@ -241,6 +241,14 @@ final class AppModel: ObservableObject {
 
     func label(of windowID: String) -> String { statuses.first { $0.id == windowID }?.label ?? manager.label(of: windowID) }
 
+    /// What follows "Claude " in what the app says: "(main)" or the profile's label.
+    func displayLabel(of windowID: String) -> String {
+        statuses.first { $0.id == windowID }?.displayLabel ?? manager.displayLabel(of: windowID)
+    }
+
+    /// A window on a button: "Claude (main)", or the profile's label ("Continue in WORK").
+    func buttonLabel(of windowID: String) -> String { windowID == "main" ? "Claude (main)" : label(of: windowID) }
+
     func loadConversations() {
         guard !isDemo else { conversations = DemoData.conversations; return }
         isLoadingConversations = true

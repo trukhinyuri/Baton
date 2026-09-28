@@ -214,11 +214,21 @@ struct FolderBatchTests {
         let all = [make("c", 300), make("a", 60), make("b", 120), make("d", 400), make("old", 2 * 86_400)]
         let since = now.addingTimeInterval(-86_400)
 
-        let (batch, leftOut) = ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team", limit: 2)
+        let (batch, leftOut, alreadyThere) = ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team", limit: 2)
 
         #expect(batch.map(\.sessionID) == ["a", "b"])
-        #expect(leftOut == 2)
+        #expect(leftOut == 2 && alreadyThere == 0)
         #expect(ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all, to: "team").leftOut == 0)
+
+        // Only a session a running process of the destination has open is skipped, and counted apart from the rest;
+        // one merely seen there days ago still goes.
+        var open = make("e", 30)
+        open.openIn = ["team"]
+        var seen = make("f", 40)
+        seen.runningIn = "team"
+        let mixed = ConversationIndex.continueAllBatch(in: "/repo", since: since, from: all + [open, seen], to: "team", limit: 2)
+        #expect(mixed.batch.map(\.sessionID) == ["f", "a"])
+        #expect(mixed.leftOut == 3 && mixed.alreadyThere == 1)
     }
 
     @Test func newSessionLinkNamesTheFolder() throws {

@@ -322,15 +322,19 @@ public struct LocalOnly: Sendable {
         try JSONEncoder.localOnly.encode(state).write(to: paths.localOnlyFile, options: .atomic)
     }
 
+    /// Under `open.lock` as well: the open-time merges and Baton's auto-continue change write the same settings file
+    /// from their own reads, and hold that lock while they do.
     private func locked<T>(_ body: (inout State) throws -> T) throws -> T {
-        let result: T? = try FileLock.withLock(paths.stateDir.appending(path: "local-only.lock"), blocking: true) {
-            var state = readState()
-            let before = state
-            let value = try body(&state)
-            if state != before { try saveState(state) }
-            return value
+        let result: T?? = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
+            try FileLock.withLock(paths.stateDir.appending(path: "local-only.lock"), blocking: true) {
+                var state = readState()
+                let before = state
+                let value = try body(&state)
+                if state != before { try saveState(state) }
+                return value
+            }
         }
-        return result!
+        return result!!
     }
 }
 

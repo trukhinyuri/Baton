@@ -30,6 +30,8 @@ struct UsageMeter: View {
     let title: String
     let percent: Int?
     var isStale = false
+    /// What a grey meter reads: "reset", or "answered" when Claude answered after the limit.
+    var staleText = "reset"
 
     private var tint: Color {
         guard let percent, !isStale else { return .secondary }
@@ -49,7 +51,7 @@ struct UsageMeter: View {
                 }
             }
             .frame(height: 5)
-            Text(isStale ? "reset" : percent.map { "\($0)%" } ?? "–")
+            Text(isStale ? staleText : percent.map { "\($0)%" } ?? "–")
                 .monospacedDigit()
                 .foregroundStyle(isStale ? .secondary : .primary)
                 .frame(minWidth: 36, alignment: .trailing)
@@ -57,12 +59,17 @@ struct UsageMeter: View {
         .font(.caption)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title) usage")
-        .accessibilityValue(isStale ? "reset" : percent.map { "\($0) percent" } ?? "unknown")
+        .accessibilityValue(isStale ? staleText : percent.map { "\($0) percent" } ?? "unknown")
     }
 }
 
 struct UsageColumn: View {
     let status: ProfileStatus
+
+    /// A limit whose reset has passed, or whose sample is older than its own window: its meter shows "reset".
+    static func hasReset(_ state: LimitState, now: Date) -> Bool {
+        [.reset, .mayHaveReset].contains(state.phase(now: now)) || state.resetByAnswer
+    }
 
     var body: some View {
         if let usage = status.usage, status.isSignedIn {
@@ -73,19 +80,19 @@ struct UsageColumn: View {
             VStack(alignment: .leading, spacing: 5) {
                 UsageMeter(
                     title: "5-hour", percent: limits.fiveHour.percent,
-                    isStale: [.below, .reset].contains(limits.fiveHour.phase(now: now)) && usage.isFiveHourStale(now: now)
-                        || limits.fiveHour.phase(now: now) == .reset)
-                UsageMeter(title: "Weekly", percent: limits.week.percent, isStale: limits.week.phase(now: now) == .reset)
+                    isStale: limits.fiveHour.phase(now: now) == .below && usage.isFiveHourStale(now: now) || Self.hasReset(limits.fiveHour, now: now),
+                    staleText: limits.fiveHour.resetByAnswer ? "answered" : "reset")
+                UsageMeter(
+                    title: "Weekly", percent: limits.week.percent, isStale: Self.hasReset(limits.week, now: now),
+                    staleText: limits.week.resetByAnswer ? "answered" : "reset")
                 (Text("Updated \(usage.sampledAt, format: .relative(presentation: .named))")
                     + Text(notes.map { " · " + $0 }.joined())
-                    + Text(usage.isFresh(now: now) || !allBelow ? "" : " · may be higher now"))
+                    + Text(usage.isFresh(now: now) || !allBelow ? "" : " · may have changed since")
+                    + Text(LimitText.checkHint(status, now: now) == nil ? "" : " · open it to check"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 56)
-                    .help(
-                        usage.isFresh(now: now)
-                            ? notes.isEmpty ? "" : "Reset times come from Claude: its limit messages and Auto-continue when limits reset."
-                            : "Claude records usage only while this window is open and in use, so this sample can be behind.")
+                    .help(LimitText.columnHelp(status, now: now))
             }
         } else {
             Text(status.isSignedIn ? "Usage appears after the first message" : "Usage appears after sign-in")
@@ -143,7 +150,7 @@ struct ProfileRow: View {
                         .foregroundStyle(.secondary)
                 }
                 if !status.isSignedIn {
-                    Label("Sign in inside the Claude \(status.label) window", systemImage: "person.crop.circle.badge.exclamationmark")
+                    Label("Sign in inside the Claude \(status.displayLabel) window", systemImage: "person.crop.circle.badge.exclamationmark")
                         .font(.caption).foregroundStyle(.orange)
                         .help("While this window signs in, sign-in links from your browser open here instead of in the main Claude app.")
                 } else if status.isUnexpectedAccount, let expected = status.profile?.email {
@@ -236,13 +243,17 @@ struct LimitBanner: View {
     var note = ""
     let action: () -> Void
 
-    /// " It resets 02:10." or " It resets about Wed 05:00."; empty when the reset time isn't known.
+    /// " It resets at 02:10.", " It resets tomorrow at 02:10." or " It resets Wed at about 05:00."; empty when the
+    /// reset time isn't known.
     private var resets: String { LimitText.bindingReset(tired.limits).map { " It \($0)." } ?? "" }
+
+    /// " as of 22:12" when only a sample says so.
+    private var asOf: String { LimitText.asOf(tired.limits).map { " \($0)" } ?? "" }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.orange).accessibilityHidden(true)
-            Text("\(tired.isMain ? "Claude (main)" : "Claude \(tired.label)") has reached its usage limit.\(resets)")
+            Text("Claude \(tired.displayLabel) is at its limit\(asOf).\(resets)")
                 .font(.callout.weight(.medium))
             Spacer()
             if !note.isEmpty { Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(.secondary) }
@@ -270,7 +281,7 @@ struct ContentView: View {
             if let tired = model.limitReached, let best = model.bestDestination(excluding: tired.id) {
                 // With folder rules, where work may continue depends on the work; the sheet offers only allowed windows.
                 LimitBanner(
-                    tired: tired, best: model.folderRules?.isEmpty == true ? model.label(of: best) : nil,
+                    tired: tired, best: model.folderRules?.isEmpty == true ? model.buttonLabel(of: best) : nil,
                     note: model.folderRules?.isEmpty == true ? model.staleNote(best) : ""
                 ) { model.isContinuing = true }
                 .padding(.horizontal, 20)

@@ -72,6 +72,16 @@ public enum DesktopData {
         Set(organizationFolders(in: dataDir, accountID: accountID).map(\.lastPathComponent))
     }
 
+    /// UUIDs of the organization folders other accounts signed in to `dataDir` before left there.
+    public static func organizationIDs(in dataDir: URL, otherThan accountID: String) -> Set<String> {
+        let accounts = ["claude-code-sessions", "local-agent-mode-sessions"].flatMap { folder in
+            (try? FileManager.default.contentsOfDirectory(atPath: dataDir.appending(path: folder).path)) ?? []
+        }
+        return Set(
+            Set(accounts).filter { $0.count == 36 && UUID(uuidString: $0) != nil && $0.lowercased() != accountID.lowercased() }
+                .flatMap { organizationIDs(in: dataDir, accountID: $0) }.map { $0.lowercased() })
+    }
+
     /// How `scope(dataDir:items:)` resolved the account's current organization.
     public enum ScopeSource: Equatable, Sendable {
         /// Claude's own `lastSidebarScopeKey`, so this is exact.

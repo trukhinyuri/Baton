@@ -20,9 +20,10 @@ public struct AutoResumeEntry: Equatable, Sendable {
         self.key = key; self.resetsAt = resetsAt; self.attempt = attempt; self.optedIn = optedIn
     }
 
-    /// Claude will still continue this session by itself.
+    /// Claude will still continue this session by itself. An entry Claude has already acted on (an attempt made
+    /// and its moment passed) isn't: the session has resumed, or Claude gave up on it.
     public func isArmed(now: Date = Date()) -> Bool {
-        optedIn && attempt < Self.maxAttempts && resetsAt > now.addingTimeInterval(-Self.lateLimit)
+        optedIn && attempt < Self.maxAttempts && resetsAt > now.addingTimeInterval(-Self.lateLimit) && !(attempt >= 1 && now > firesAt)
     }
 
     /// When Claude sends its message: 90 seconds after the reset, plus a few seconds.
@@ -111,21 +112,83 @@ public struct AutoResume: Sendable {
         public var prior: String
     }
 
+    /// An entry to turn off once its window is closed: its session continued elsewhere while that window was open.
+    public struct Pending: Codable, Equatable, Sendable {
+        public var window: String
+        public var account: String
+        public var entry: String
+        public var resetsAt: Date
+        public var recordedAt: Date
+    }
+
     struct State: Codable {
         var version = 1
         var changes: [Change] = []
+        var pending: [Pending]? = nil
     }
+
+    /// Changes, the pending turn-offs and the settings files they touch are written under the lock the open-time
+    /// merges and Local only hold, so none of them writes over another's change.
+    private var lockFile: URL { paths.stateDir.appending(path: "open.lock") }
 
     static func stateFile(_ paths: Paths) -> URL { paths.stateDir.appending(path: "auto-resume-changes.json") }
 
     /// Changes not undone yet, oldest first.
     public func changes() -> [Change] { readState().changes }
 
+    /// Turn-offs waiting for their window to close, oldest first.
+    public func pending() -> [Pending] { readState().pending ?? [] }
+
+    /// Remembers to turn `entry` off in `window` once that window is closed.
+    public func addPending(_ entry: AutoResumeEntry, window: String, account: String, now: Date = Date()) throws {
+        _ = try FileLock.withLock(lockFile, blocking: true) {
+            var state = readState()
+            var pending = state.pending ?? []
+            pending.removeAll { $0.window == window && $0.account == account && $0.entry == entry.key }
+            pending.append(Pending(window: window, account: account, entry: entry.key, resetsAt: entry.resetsAt, recordedAt: now))
+            state.pending = pending
+            try saveState(state)
+        }
+    }
+
+    /// Turns off every pending entry whose window is closed now, the way `turnOff` does, and forgets the ones Claude
+    /// is done with. Entries in windows still open stay pending.
+    /// - Returns: the windows where Baton turned an entry off.
+    @discardableResult
+    public func applyPending(now: Date = Date()) -> [String] {
+        let waiting = pending()
+        guard !waiting.isEmpty else { return [] }
+        var done: [Pending] = []
+        var turnedOff: [String] = []
+        for item in waiting {
+            let entry = AutoResume.entries(in: dataDir(item.window), account: item.account)?.first { $0.key == item.entry }
+            guard let entry, entry.resetsAt == item.resetsAt, entry.isArmed(now: now) else {
+                done.append(item)
+                continue
+            }
+            do {
+                if try turnOff(entry, window: item.window, account: item.account, now: now) { turnedOff.append(item.window) }
+                done.append(item)
+            } catch Failure.windowOpen {
+                continue
+            } catch {
+                Log.error("continue", "A pending auto-continue turn-off failed: \(error.localizedDescription)")
+                done.append(item)
+            }
+        }
+        _ = try? FileLock.withLock(lockFile, blocking: true) {
+            var state = readState()
+            state.pending = (state.pending ?? []).filter { !done.contains($0) }
+            try saveState(state)
+        }
+        return turnedOff
+    }
+
     /// Turns `optedIn` off for one entry of a closed window.
     /// - Returns: `false` when Claude had turned it off already.
     @discardableResult
     public func turnOff(_ entry: AutoResumeEntry, window: String, account: String, now: Date = Date()) throws -> Bool {
-        try FileLock.withLock(paths.stateDir.appending(path: "auto-resume.lock"), blocking: true) {
+        try FileLock.withLock(lockFile, blocking: true) {
             guard !running(window) else { throw Failure.windowOpen(label(window)) }
             let url = config(window)
             let original = try Data(contentsOf: url)
@@ -152,7 +215,7 @@ public struct AutoResume: Sendable {
     /// - Returns: whether the file changed.
     @discardableResult
     public func undo(_ change: Change) throws -> Bool {
-        try FileLock.withLock(paths.stateDir.appending(path: "auto-resume.lock"), blocking: true) {
+        try FileLock.withLock(lockFile, blocking: true) {
             guard !running(change.window) else { throw Failure.windowOpen(label(change.window)) }
             var state = readState()
             state.changes.removeAll { $0 == change }
@@ -183,7 +246,8 @@ public struct AutoResume: Sendable {
         return object.members.last { $0.key == "optedIn" }
     }
 
-    /// Backup, then the record, then the file; read back, and put the original bytes back if it didn't come out as planned.
+    /// Backup, then the file; read back, and put the original bytes back if it didn't come out as planned. Only a
+    /// write that read back is recorded; if the record can't be saved, the original bytes go back too.
     private func write(
         _ patch: JSONPatch, over original: Data, to url: URL, window: String, value: Any, account: String, entry: String,
         record: () throws -> Void
@@ -191,7 +255,6 @@ public struct AutoResume: Sendable {
         var expected = try JSONPatch(original).dictionary()
         expected = Self.setting(value, at: ["preferences", "epitaxyPrefs", Self.bucketKey(account), entry, "optedIn"], in: expected)
         _ = try Backup(paths: paths, now: Date()).save(url, everyTime: true)
-        try record()
         guard !running(window) else { throw Failure.windowOpen(label(window)) }
         try LocalOnly.replace(url, with: Data(patch.bytes))
         guard let written = try? JSONPatch(Data(contentsOf: url)), let dictionary = try? written.dictionary(),
@@ -199,6 +262,10 @@ public struct AutoResume: Sendable {
         else {
             try LocalOnly.replace(url, with: original)
             throw Failure.didNotReadBack
+        }
+        do { try record() } catch {
+            try LocalOnly.replace(url, with: original)
+            throw error
         }
     }
 
@@ -212,7 +279,7 @@ public struct AutoResume: Sendable {
     private func running(_ window: String) -> Bool { isRunning(window) || LocalStorage(dataDir: dataDir(window)).isInUse }
     private func dataDir(_ window: String) -> URL { window == "main" ? paths.mainDataDir : paths.dataDir(for: window) }
     private func config(_ window: String) -> URL { dataDir(window).appending(path: LocalOnly.configName) }
-    private func label(_ window: String) -> String { window == "main" ? "MAIN" : window.uppercased() }
+    private func label(_ window: String) -> String { window == "main" ? "(main)" : window.uppercased() }
 
     private func readState() -> State {
         guard let data = try? Data(contentsOf: Self.stateFile(paths)), let state = try? JSONDecoder.autoResume.decode(State.self, from: data)
@@ -245,15 +312,18 @@ extension JSONDecoder {
 
 // MARK: - What the hand-over says
 
-/// What happens to another window's auto-continue for a session that continues elsewhere.
+/// What happens to another window's auto-continue for a session that continues elsewhere. `label` is what follows
+/// "Claude": a profile's label, or "(main)".
 public enum AutoResumeNote: Equatable, Sendable {
     /// That window was closed; Baton turned auto-continue off for this session there.
     case turnedOff(label: String)
     /// A dry run: continuing would turn it off there.
     case willTurnOff(label: String)
-    /// That window is open, so Baton leaves it: Claude will continue the session there by itself.
-    case stillOn(label: String, resetsAt: Date)
-    case couldNotTurnOff(label: String, reason: String)
+    /// That window is open, so Baton leaves it for now and turns it off once that window is closed: the app when it
+    /// sees it closed, or `ProfileManager.open` before it starts that window again. `copied`: the destination got a
+    /// copy, so archiving the original there loses nothing.
+    case stillOn(label: String, resetsAt: Date, copied: Bool = false)
+    case couldNotTurnOff(label: String, reason: String, copied: Bool = false)
 
     public var isWarning: Bool {
         switch self {
@@ -262,22 +332,35 @@ public enum AutoResumeNote: Equatable, Sendable {
         }
     }
 
-    public func message(now: Date = Date(), timeZone: TimeZone = .current) -> String {
+    public func message(now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         switch self {
         case .turnedOff(let label):
             return "Claude \(label) was closed with Auto-continue when limits reset on for this session; Baton turned it off there, "
-                + "so the session doesn't continue in two windows."
+                + "so the session doesn't continue in two windows. To turn it back on, tick that option on the session's limit "
+                + "message in Claude \(label); `baton doctor` lists what Baton turned off."
         case .willTurnOff(let label):
             return "Claude \(label) is closed with Auto-continue when limits reset on for this session; continuing turns it off there."
-        case .stillOn(let label, let resetsAt):
+        case .stillOn(let label, let resetsAt, let copied):
             let firesAt = resetsAt.addingTimeInterval(LimitState.grace)
-            let when = firesAt > now ? "at \(LimitText.time(AutoResumeOffer.pickUp(resetsAt), now: now, timeZone: timeZone))" : "when it next shows it"
+            let when =
+                firesAt > now
+                ? "\(LimitText.time(AutoResumeOffer.pickUp(resetsAt), now: now, timeZone: timeZone, locale: locale)) if it's on screen there, "
+                    + "or when you next open this session there within 6 hours of the reset"
+                : "when you next open this session there, within 6 hours of the reset"
             return "Claude \(label) will continue this session by itself \(when) (Auto-continue when limits reset is on there). "
-                + "To stop it, untick that option on the limit message, archive the session there, or quit that window."
-        case .couldNotTurnOff(let label, let reason):
+                + "Baton turns that off once Claude \(label) is closed: right away while the Baton app is running, otherwise "
+                + "when that window is next opened from Baton. " + Self.stopAdvice(label: label, copied: copied)
+        case .couldNotTurnOff(let label, let reason, let copied):
             return "Claude \(label) may continue this session by itself when it next opens: Auto-continue when limits reset "
-                + "couldn't be turned off there (\(reason)). To stop it, untick that option on the limit message there, or archive the session there."
+                + "couldn't be turned off there (\(reason)). " + Self.stopAdvice(label: label, copied: copied)
         }
+    }
+
+    /// Unticking the option is account-wide in that window; archiving is offered only when the destination has a copy,
+    /// since archiving the shared session there would archive it everywhere.
+    static func stopAdvice(label: String, copied: Bool) -> String {
+        "To stop it sooner, untick that option on the limit message there; that turns auto-continue off for every session "
+            + "of that account in Claude \(label)." + (copied ? " Or archive the original session there: you continue in a copy." : "")
     }
 }
 
@@ -285,11 +368,12 @@ public enum AutoResumeNote: Equatable, Sendable {
 public struct AutoResumeOffer: Equatable, Sendable {
     public var label: String
     public var resetsAt: Date
-    /// How many of the sessions being continued it picks up.
-    public var sessions: Int
+    /// The sessions it picks up, and their titles.
+    public var sessions: Set<String>
+    public var titles: [String]
 
-    public init(label: String, resetsAt: Date, sessions: Int = 1) {
-        self.label = label; self.resetsAt = resetsAt; self.sessions = sessions
+    public init(label: String, resetsAt: Date, sessions: Set<String> = [], titles: [String] = []) {
+        self.label = label; self.resetsAt = resetsAt; self.sessions = Set(sessions.map { $0.lowercased() }); self.titles = titles
     }
 
     /// Offered only when the reset is at most this far away.
@@ -303,10 +387,20 @@ public struct AutoResumeOffer: Equatable, Sendable {
         isOpen && entry.isArmed(now: now) && now < entry.firesAt && entry.resetsAt.timeIntervalSince(now) <= within
     }
 
-    public func message(now: Date = Date(), timeZone: TimeZone = .current) -> String {
-        let what = sessions == 1 ? "this session" : "\(sessions) of these sessions"
-        return "Claude \(label) resets at \(LimitText.time(resetsAt, now: now, timeZone: timeZone)) and picks \(what) up by itself at about "
-            + "\(LimitText.time(Self.pickUp(resetsAt), now: now, timeZone: timeZone))."
+    /// "“A”", "“A” and “B”", "“A”, “B” and “C”".
+    public var names: String {
+        let quoted = titles.map { "“\($0)”" }
+        guard quoted.count > 1, let last = quoted.last else { return quoted.first ?? "this session" }
+        return quoted.dropLast().joined(separator: ", ") + " and " + last
+    }
+
+    public func message(now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        let several = titles.count > 1
+        return "Claude \(label) resets \(LimitText.time(resetsAt, now: now, timeZone: timeZone, locale: locale)) and picks \(names) up by itself "
+            + "\(LimitText.time(Self.pickUp(resetsAt), now: now, about: true, timeZone: timeZone, locale: locale)) "
+            + (several
+                ? "if they're on screen there, or when you next open them there within 6 hours."
+                : "if it's on screen there, or when you next open it there within 6 hours.")
     }
 }
 
@@ -330,13 +424,14 @@ extension ProfileManager {
     /// sessions it ran, and its auto-continue reset times.
     func withLimits(_ statuses: [ProfileStatus], now: Date = Date()) -> [ProfileStatus] {
         let windows = statuses.map { (id: $0.id, dataDir: $0.isMain ? paths.mainDataDir : paths.dataDir(for: $0.id)) }
-        let hits = limitTracker.hits(paths: paths, windows: windows, now: now)
+        let activity = limitTracker.activity(paths: paths, windows: windows, now: now)
         return zip(statuses, windows).map { found, window in
             var status = found
             let samples = UsageHistory.samples(in: window.dataDir)
             let resets = status.accountID.flatMap { AutoResume.entries(in: window.dataDir, account: $0) }?.map(\.resetsAt) ?? []
             status.usage = samples.last?.usage
-            status.limits = Limits(samples: samples, hits: hits[status.id] ?? [], autoResume: resets)
+            status.limits = Limits(
+                samples: samples, hits: activity[status.id]?.hits ?? [], autoResume: resets, answeredAt: activity[status.id]?.answeredAt)
             return status
         }
     }
@@ -360,19 +455,25 @@ extension ProfileManager {
                 let open = isOpen ?? (isWindowOpen(window.id) || LocalStorage(dataDir: window.dataDir).isInUse)
                 isOpen = open
                 result[session, default: []].append(
-                    AutoResumeMatch(window: window.id, label: label(of: window.id), account: account, session: session, entry: entry, isOpen: open))
+                    AutoResumeMatch(
+                        window: window.id, label: displayLabel(of: window.id), account: account, session: session,
+                        entry: entry, isOpen: open))
             }
         }
         return result
     }
 
-    /// When a window whose reset is minutes away would pick one of `conversations` up by itself: offer to wait.
+    /// When a window whose reset is minutes away would pick some of `conversations` up by itself: offer to wait, and
+    /// name them. In a batch, only those are left out; the rest continue.
     public func autoResumeOffer(for conversations: [Conversation], in destination: String, now: Date = Date()) -> AutoResumeOffer? {
-        let code = conversations.filter { $0.kind != .cowork }.map(\.sessionID)
-        let soon = autoResumeMatches(for: Set(code), excluding: destination, now: now).values.joined()
+        let code = conversations.filter { $0.kind != .cowork }
+        let soon = autoResumeMatches(for: Set(code.map(\.sessionID)), excluding: destination, now: now).values.joined()
             .filter { AutoResumeOffer.applies(to: $0.entry, isOpen: $0.isOpen, now: now) }
         guard let first = soon.min(by: { $0.entry.resetsAt < $1.entry.resetsAt }) else { return nil }
-        return AutoResumeOffer(label: first.label, resetsAt: first.entry.resetsAt, sessions: Set(soon.map(\.session)).count)
+        let sessions = Set(soon.map(\.session))
+        return AutoResumeOffer(
+            label: first.label, resetsAt: first.entry.resetsAt, sessions: sessions,
+            titles: code.filter { sessions.contains($0.sessionID) }.map(\.title))
     }
 
     /// What continuing would do to other windows' auto-continue, without changing anything.
@@ -380,31 +481,51 @@ extension ProfileManager {
         guard let destination = plans.first?.destination else { return }
         let matches = autoResumeMatches(for: Set(plans.map(\.conversation.sessionID)), excluding: destination, now: now)
         for i in plans.indices {
+            let copied = plans[i].forks
             plans[i].autoResume = (matches[plans[i].conversation.sessionID] ?? []).map {
-                $0.isOpen ? .stillOn(label: $0.label, resetsAt: $0.entry.resetsAt) : .willTurnOff(label: $0.label)
+                $0.isOpen ? .stillOn(label: $0.label, resetsAt: $0.entry.resetsAt, copied: copied) : .willTurnOff(label: $0.label)
             }
         }
     }
 
-    /// Turns auto-continue off in closed windows for the sessions being continued; says so for open ones.
+    /// Turns auto-continue off in closed windows for the sessions being continued; for open ones, says so and
+    /// remembers to turn it off once that window is closed (`applyPendingAutoResume`).
     func settleAutoResume(_ plans: inout [ContinuePlan], now: Date) {
         guard let destination = plans.first?.destination else { return }
         let matches = autoResumeMatches(for: Set(plans.map(\.conversation.sessionID)), excluding: destination, now: now)
         let autoResume = autoResume
         for i in plans.indices {
+            let copied = plans[i].forks
             plans[i].autoResume = (matches[plans[i].conversation.sessionID] ?? []).compactMap { match -> AutoResumeNote? in
-                let stillOn = AutoResumeNote.stillOn(label: match.label, resetsAt: match.entry.resetsAt)
-                guard !match.isOpen else { return stillOn }
+                let stillOn = AutoResumeNote.stillOn(label: match.label, resetsAt: match.entry.resetsAt, copied: copied)
+                let pending = {
+                    do { try autoResume.addPending(match.entry, window: match.window, account: match.account, now: now) } catch {
+                        Log.error("continue", "Couldn't record a pending auto-continue turn-off: \(error.localizedDescription)")
+                    }
+                }
+                guard !match.isOpen else {
+                    pending()
+                    return stillOn
+                }
                 do {
                     guard try autoResume.turnOff(match.entry, window: match.window, account: match.account, now: now) else { return nil }
-                    Log.logger("continue").notice("Turned off auto-continue for one session in window \(match.window, privacy: .private)")
+                    Log.notice("continue", "Turned off auto-continue for one session in window \(match.window)")
                     return .turnedOff(label: match.label)
                 } catch AutoResume.Failure.windowOpen {
+                    pending()
                     return stillOn
                 } catch {
-                    return .couldNotTurnOff(label: match.label, reason: error.localizedDescription)
+                    return .couldNotTurnOff(label: match.label, reason: error.localizedDescription, copied: copied)
                 }
             }
         }
+    }
+
+    /// Turns off the auto-continue entries Baton left on in windows that were open during a Continue, now that
+    /// those windows are closed. The app calls it after each look at the windows.
+    /// - Returns: the labels ("WORK", "(main)") of the windows where it turned one off.
+    @discardableResult
+    public func applyPendingAutoResume(now: Date = Date()) -> [String] {
+        autoResume.applyPending(now: now).map(displayLabel(of:))
     }
 }

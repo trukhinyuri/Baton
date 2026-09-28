@@ -42,20 +42,37 @@ public enum UsageHistory {
     }
 
     /// The samples of the organizations the signed-in account uses in this window, when the file says which
-    /// organization each sample is for; every sample when it doesn't, or when the organizations aren't known.
-    /// Samples a previously signed-in account left in the file are never taken for this account's.
-    public static func current(_ samples: [UsageSample], organizations: Set<String>) -> [UsageSample] {
+    /// organization each sample is for; every sample when it doesn't. With no organization of the account known,
+    /// those of the organization Claude sampled last, leaving out `otherAccounts`' organizations: Claude samples the
+    /// signed-in account's usage about 9 s after its window starts, so a previous account's samples are the newest
+    /// only until then.
+    public static func current(_ samples: [UsageSample], organizations: Set<String>, otherAccounts: Set<String> = []) -> [UsageSample] {
         let organizations = Set(organizations.map { $0.lowercased() })
-        guard !organizations.isEmpty, samples.contains(where: { $0.org != nil }) else { return samples }
-        return samples.filter { $0.org.map(organizations.contains) ?? false }
+        guard samples.contains(where: { $0.org != nil }) else { return samples }
+        guard organizations.isEmpty else { return samples.filter { $0.org.map(organizations.contains) ?? false } }
+        let others = Set(otherAccounts.map { $0.lowercased() })
+        guard let newest = samples.last(where: { $0.org.map { !others.contains($0) } ?? false })?.org else { return [] }
+        return samples.filter { $0.org == newest }
     }
 
-    /// This window's samples for its signed-in account (see `current`), oldest first.
+    /// This window's samples for its signed-in account, oldest first: those of the organization Claude shows now
+    /// (`DesktopData.scope`); of every organization folder the account has when Claude hasn't said which; and with
+    /// no organization folder yet, those of the organization sampled last that no other account's folders in this
+    /// window name. (`config.json` changes whenever Claude refreshes its sign-in or quits, so its date can't say when
+    /// the account signed in.)
     public static func samples(in dataDir: URL) -> [UsageSample] {
         guard let data = try? Data(contentsOf: dataDir.appending(path: fileName)) else { return [] }
         let all = samples(from: data)
         guard let account = DesktopData.accountID(in: dataDir) else { return all }
-        return current(all, organizations: DesktopData.organizationIDs(in: dataDir, accountID: account))
+        var organizations = DesktopData.organizationIDs(in: dataDir, accountID: account)
+        if organizations.count > 1 {
+            let items = (try? LocalStorage(dataDir: dataDir).items(origin: InterfaceSync.origin)) ?? [:]
+            if let scope = DesktopData.scope(dataDir: dataDir, items: items)?.value, scope.hasPrefix(account + "/") {
+                organizations = [String(scope.dropFirst(account.count + 1))]
+            }
+        }
+        let others = organizations.isEmpty ? DesktopData.organizationIDs(in: dataDir, otherThan: account) : []
+        return current(all, organizations: organizations, otherAccounts: others)
     }
 
     static func number(_ value: Any?) -> Double? {
@@ -120,6 +137,12 @@ public struct LimitState: Equatable, Sendable {
     public var reset: LimitReset?
     /// At 100%, but the account has extra usage left, so work goes on.
     public var extraUsage = false
+    /// Reached by a sample alone: no limit message or auto-continue entry says so, so no reset time is known.
+    public var sampleOnly = false
+    /// Below the limit because Claude answered in one of the window's sessions after the limit was reached; the
+    /// latest sample still reads what it read before (`reset` is `.inferred`, at that reply). Claude answering shows
+    /// the limit no longer binds, but not why: it may have reset, or extra usage may be paying for it.
+    public var resetByAnswer = false
 
     /// Claude resumes work 90 seconds after a reset; Baton counts a window free from then too.
     public static let grace: TimeInterval = 90
@@ -147,12 +170,13 @@ public struct LimitState: Equatable, Sendable {
         case .mayHaveReset: return kind == .fiveHour ? 0 : 100
         case .below:
             guard let percent, let sampledAt else { return nil }
-            if kind == .fiveHour && now.timeIntervalSince(sampledAt) > kind.window { return 0 }
+            if resetByAnswer || kind == .fiveHour && now.timeIntervalSince(sampledAt) > kind.window { return 0 }
             return percent
         }
     }
 
-    static func evaluate(_ kind: LimitKind, samples: [UsageSample], hits: [LimitHit], autoResume: [Date]) -> LimitState {
+    /// - Parameter answeredAt: the newest reply Claude gave in a session this window ran (`LimitTracker`).
+    static func evaluate(_ kind: LimitKind, samples: [UsageSample], hits: [LimitHit], autoResume: [Date], answeredAt: Date? = nil) -> LimitState {
         let values = samples.compactMap { sample in sample.value(kind).map { (at: sample.at, value: $0, extra: sample.extraUsage) } }
         let latest = values.last
         var state = LimitState(kind: kind, percent: latest?.value, sampledAt: latest?.at)
@@ -162,9 +186,10 @@ public struct LimitState: Equatable, Sendable {
         let since = samples.first?.at ?? .distantPast
         let own = hits.filter { $0.kind == kind && $0.resetsAt > $0.at && $0.at >= since }
         // A limit message after the last sample below the limit, or an auto-continue entry whose reset comes after
-        // the latest sample: usage only rises within a window, so the limit was reached after that sample.
+        // the latest sample: usage only rises within a window, so the limit was reached after that sample. An entry
+        // whose own window shows a drop was reset early, so it no longer says anything.
         let messages = own.filter { $0.at > lastBelow }
-        let entries = kind == .fiveHour ? autoResume.filter { $0 > latestAt } : []
+        let entries = kind == .fiveHour ? autoResume.filter { $0 > latestAt && !resetEarly(values.map { ($0.at, $0.value) }, entry: $0) } : []
         var reachedAt: Date? = (latest?.value ?? 0) >= 100 ? latestAt : nil
         if let newest = messages.map(\.at).max() { reachedAt = max(reachedAt ?? newest, newest) }
         if let entry = entries.max() {
@@ -177,7 +202,24 @@ public struct LimitState: Equatable, Sendable {
             }
             return state
         }
+        // Extra usage: from the newest sample that records it, within two hours of the latest and taken at 100%
+        // (not before the limit was reached). Claude writes `xu` only on its full polls, about once an hour, and
+        // doesn't record whether extra usage is turned on, so this is a best guess, not checked against real data.
+        let reachedFrom = values.first { $0.at > lastBelow && $0.value >= 100 }?.at ?? .distantFuture
+        let extra = values.last { $0.extra != nil && $0.at >= latestAt.addingTimeInterval(-2 * 3600) && $0.at >= reachedFrom }?.extra
+        let extraUsage = messages.isEmpty && entries.isEmpty && extra.map { $0 < 100 } == true
+        // Claude answered in a session this window ran after the newest sign of this reach of the limit, a sample at
+        // 100% or a limit message, both after the last sample below it: nothing was binding then. Seen, not
+        // estimated. An auto-continue entry alone doesn't say when Claude refused, so a reply proves nothing then,
+        // and neither does an older reach's sample or message.
+        let evidence = [values.last { $0.value >= 100 && $0.at > lastBelow }?.at, messages.map(\.at).max()].compactMap { $0 }.max()
+        if !extraUsage, let answeredAt, let evidence, answeredAt > reachedAt, answeredAt > evidence {
+            state.reset = LimitReset(at: answeredAt, source: .inferred)
+            state.resetByAnswer = true
+            return state
+        }
         state.reachedAt = reachedAt
+        state.sampleOnly = messages.isEmpty && entries.isEmpty
         // Reached after a sample below the limit (a message or an auto-continue entry says so): it stands at 100% now.
         if (latest?.value ?? 0) < 100 { state.percent = 100 }
         // A reset counts only if it comes after the latest sample: a sample at 100% taken after it means the limit
@@ -189,8 +231,16 @@ public struct LimitState: Equatable, Sendable {
         {
             state.reset = LimitReset(at: estimate, source: .estimate)
         }
-        state.extraUsage = messages.isEmpty && entries.isEmpty && (latest?.extra).map { $0 < 100 } == true
+        state.extraUsage = extraUsage
         return state
+    }
+
+    /// Whether the samples show a reset inside the five-hour window an auto-continue entry belongs to: two samples
+    /// both taken at least ten minutes into that window and before its reset, the later one at least five points
+    /// lower. A drop whose earlier sample is from before that is the previous window ending, not an early reset.
+    static func resetEarly(_ values: [(Date, Int)], entry resetsAt: Date) -> Bool {
+        let from = resetsAt.addingTimeInterval(-LimitKind.fiveHour.window + 600)
+        return drops(in: values).contains { $0.from >= from && $0.to < resetsAt }
     }
 
     /// Where a later sample is at least five points lower than the one before: a reset happened in between.
@@ -222,9 +272,10 @@ public struct Limits: Equatable, Sendable {
     ///   - samples: the window's samples for its current organization, oldest first (`UsageHistory.samples(in:)`).
     ///   - hits: limit messages from sessions this window ran (`LimitTracker`).
     ///   - autoResume: reset times of this window's auto-continue entries (`AutoResume.entries`).
-    public init(samples: [UsageSample], hits: [LimitHit] = [], autoResume: [Date] = []) {
-        fiveHour = .evaluate(.fiveHour, samples: samples, hits: hits, autoResume: autoResume)
-        week = .evaluate(.week, samples: samples, hits: hits, autoResume: autoResume)
+    ///   - answeredAt: the newest reply Claude gave in a session this window ran (`LimitTracker`).
+    public init(samples: [UsageSample], hits: [LimitHit] = [], autoResume: [Date] = [], answeredAt: Date? = nil) {
+        fiveHour = .evaluate(.fiveHour, samples: samples, hits: hits, autoResume: autoResume, answeredAt: answeredAt)
+        week = .evaluate(.week, samples: samples, hits: hits, autoResume: autoResume, answeredAt: answeredAt)
     }
 
     /// From one sample alone, the way Baton judged limits before it knew reset times.
@@ -319,6 +370,46 @@ public struct LimitHit: Codable, Equatable, Sendable {
     }
 }
 
+/// A reply Claude gave in a session: an assistant record with a request id that isn't an error and isn't one Claude
+/// Code wrote itself (`<synthetic>`). One after the newest sign of a limit shows that the limit had been reset.
+public struct LimitAnswer: Equatable, Sendable {
+    public var at: Date
+    public var session: String
+    public var entrypoint: String?
+    public var version: String?
+
+    public init(at: Date, session: String, entrypoint: String? = "claude-desktop", version: String? = nil) {
+        self.at = at; self.session = session.lowercased(); self.entrypoint = entrypoint; self.version = version
+    }
+
+    static let marker = Data(#""type":"assistant""#.utf8)
+    static let requestKey = Data(#""requestId""#.utf8)
+
+    /// One transcript line, if it is such a reply.
+    static func parse(line: Data) -> LimitAnswer? {
+        guard line.range(of: marker) != nil, line.range(of: requestKey) != nil,
+            let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
+            object["type"] as? String == "assistant", object["isApiErrorMessage"] as? Bool != true,
+            let request = object["requestId"] as? String, !request.isEmpty,
+            (object["message"] as? [String: Any])?["model"] as? String != "<synthetic>",
+            let at = (object["timestamp"] as? String).flatMap(LimitHit.parseTime),
+            let session = object["sessionId"] as? String, !session.isEmpty
+        else { return nil }
+        return LimitAnswer(at: at, session: session, entrypoint: object["entrypoint"] as? String, version: object["version"] as? String)
+    }
+
+    /// The last reply in `data`, a run of whole JSON lines, read from the end.
+    static func newest(in data: Data) -> LimitAnswer? {
+        var end = data.endIndex
+        while end > data.startIndex {
+            let start = data[..<end].lastIndex(of: 0x0A).map { $0 + 1 } ?? data.startIndex
+            if start < end, let answer = parse(line: data[start..<end]) { return answer }
+            end = start > data.startIndex ? start - 1 : data.startIndex
+        }
+        return nil
+    }
+}
+
 // MARK: - Which window ran a session
 
 /// Remembers which window ran which Claude Code session and when, from Claude Code's list of running processes
@@ -335,10 +426,16 @@ public final class LimitTracker: @unchecked Sendable {
         public var lastSeen: Date
         public var version: String?
         public var cwd: String?
+        /// The account signed in to the window when the process was seen (`lastKnownAccountUuid`); `nil` in
+        /// sightings recorded before Baton kept it, which no longer count.
+        public var account: String?
 
-        public init(session: String, window: String, pid: Int32, from: Date, lastSeen: Date, version: String? = nil, cwd: String? = nil) {
+        public init(
+            session: String, window: String, pid: Int32, from: Date, lastSeen: Date, version: String? = nil, cwd: String? = nil,
+            account: String? = nil
+        ) {
             self.session = session.lowercased(); self.window = window; self.pid = pid; self.from = from; self.lastSeen = lastSeen
-            self.version = version; self.cwd = cwd
+            self.version = version; self.cwd = cwd; self.account = account
         }
 
         var key: String { "\(pid)|\(session)|\(Int(from.timeIntervalSince1970))" }
@@ -370,6 +467,16 @@ public final class LimitTracker: @unchecked Sendable {
         var modified: Date
         var offset: UInt64
         var hits: [LimitHit]
+        var answer: LimitAnswer?
+    }
+
+    /// What the sessions a window ran say about its limits.
+    public struct Activity: Equatable, Sendable {
+        public var hits: [LimitHit] = []
+        /// The newest reply Claude gave in one of them.
+        public var answeredAt: Date?
+
+        public init(hits: [LimitHit] = [], answeredAt: Date? = nil) { self.hits = hits; self.answeredAt = answeredAt }
     }
 
     /// Only transcripts written in this long, and only sightings seen this recently, count.
@@ -390,32 +497,45 @@ public final class LimitTracker: @unchecked Sendable {
 
     static func file(_ paths: Paths) -> URL { paths.stateDir.appending(path: "limit-sightings.json") }
 
-    /// Records every running process of a window and returns the sightings of the last eight days, newest last.
+    /// Records every running process of a window, with the account signed in to it, and returns the sightings of
+    /// the last eight days, newest last. The file is shared by the app and the CLI, so it is read and written under
+    /// a file lock.
     @discardableResult
     public func observe(paths: Paths, windows: [(id: String, dataDir: URL)], now: Date = Date()) -> [Sighting] {
         let live = liveProcesses(paths.claudeDir)
+        let accounts = Dictionary(windows.map { ($0.id, DesktopData.accountID(in: $0.dataDir)) }, uniquingKeysWith: { a, _ in a })
         return lock.withLock {
-            var store = load(paths)
-            let cutoff = now.addingTimeInterval(-Self.horizon)
-            store.sightings.removeAll { $0.lastSeen < cutoff }
-            var changed = false
-            for process in live {
-                guard let window = Self.window(of: process.executable, in: windows) else { continue }
-                var sighting = Sighting(
-                    session: process.session, window: window, pid: process.pid, from: process.startedAt, lastSeen: now,
-                    version: process.version, cwd: process.cwd)
-                if let i = store.sightings.firstIndex(where: { $0.key == sighting.key }) {
-                    sighting.lastSeen = max(store.sightings[i].lastSeen, now)
-                    store.sightings[i] = sighting
-                    if sighting.lastSeen.timeIntervalSince(saved[sighting.key] ?? .distantPast) > 60 { changed = true }
-                } else {
-                    store.sightings.append(sighting)
-                    changed = true
-                }
-            }
-            if changed { save(store, paths) }
-            return store.sightings.sorted { $0.lastSeen < $1.lastSeen }
+            (try? FileLock.withLock(paths.stateDir.appending(path: "limit-sightings.lock"), blocking: true) {
+                record(live, windows: windows, accounts: accounts, paths: paths, now: now)
+            }) ?? nil ?? load(paths).sightings.sorted { $0.lastSeen < $1.lastSeen }
         }
+    }
+
+    private func record(
+        _ live: [LiveProcess], windows: [(id: String, dataDir: URL)], accounts: [String: String?], paths: Paths, now: Date
+    ) -> [Sighting] {
+        var store = load(paths)
+        let cutoff = now.addingTimeInterval(-Self.horizon)
+        store.sightings.removeAll { $0.lastSeen < cutoff }
+        var changed = false
+        for process in live {
+            guard let window = Self.window(of: process.executable, in: windows) else { continue }
+            var sighting = Sighting(
+                session: process.session, window: window, pid: process.pid, from: process.startedAt, lastSeen: now,
+                version: process.version, cwd: process.cwd, account: accounts[window] ?? nil)
+            if let i = store.sightings.firstIndex(where: { $0.key == sighting.key }) {
+                sighting.lastSeen = max(store.sightings[i].lastSeen, now)
+                // One process belongs to one sign-in: a later account never rewrites what an earlier one ran.
+                if let before = store.sightings[i].account { sighting.account = before }
+                store.sightings[i] = sighting
+                if sighting.lastSeen.timeIntervalSince(saved[sighting.key] ?? .distantPast) > 60 { changed = true }
+            } else {
+                store.sightings.append(sighting)
+                changed = true
+            }
+        }
+        if changed { save(store, paths) }
+        return store.sightings.sorted { $0.lastSeen < $1.lastSeen }
     }
 
     /// The window that last ran each session, by the newest sighting.
@@ -432,33 +552,66 @@ public final class LimitTracker: @unchecked Sendable {
 
     /// Limit messages each window's sessions got, by window id.
     public func hits(paths: Paths, windows: [(id: String, dataDir: URL)], now: Date = Date()) -> [String: [LimitHit]] {
+        activity(paths: paths, windows: windows, now: now).compactMapValues { $0.hits.isEmpty ? nil : $0.hits }
+    }
+
+    /// Limit messages and the newest reply of each window's sessions, by window id, both read in one pass over the
+    /// end of each transcript.
+    public func activity(paths: Paths, windows: [(id: String, dataDir: URL)], now: Date = Date()) -> [String: Activity] {
         let sightings = observe(paths: paths, windows: windows, now: now)
-        var all: [LimitHit] = []
+        var hits: [LimitHit] = []
+        var answers: [LimitAnswer] = []
         var located: [String: URL] = [:]
         for sighting in sightings where located[sighting.session] == nil {
             if let url = transcript(of: sighting, paths: paths, now: now) { located[sighting.session] = url }
         }
         for (session, url) in located {
             guard (SyncFolders.modificationDate(url) ?? .distantPast) >= now.addingTimeInterval(-Self.horizon) else { continue }
-            all += scan(url).filter { $0.session == session }
+            let found = scan(url)
+            hits += found.hits.filter { $0.session == session }
+            if let answer = found.answer, answer.session == session { answers.append(answer) }
         }
-        return Self.attribute(all, to: sightings)
+        let accounts = Dictionary(windows.map { ($0.id, DesktopData.accountID(in: $0.dataDir)) }, uniquingKeysWith: { a, _ in a })
+        var result: [String: Activity] = [:]
+        for (window, found) in Self.attribute(hits, to: sightings, accounts: accounts) { result[window, default: Activity()].hits = found }
+        for answer in answers {
+            guard
+                let window = Self.window(
+                    for: answer.session, at: answer.at, version: answer.version, entrypoint: answer.entrypoint, in: sightings, accounts: accounts)
+            else { continue }
+            result[window, default: Activity()].answeredAt = max(result[window]?.answeredAt ?? answer.at, answer.at)
+        }
+        return result
     }
 
-    /// Each hit goes to the one window whose process had its session open at the time; a hit that no window's
-    /// process covers, or that two windows' processes cover, is left out.
-    static func attribute(_ hits: [LimitHit], to sightings: [Sighting]) -> [String: [LimitHit]] {
+    /// Each hit goes to the one window whose process had its session open at the time, while signed in with the
+    /// account the window has now; a hit that no window's process covers, or that two windows' processes cover, is
+    /// left out. With `accounts` nil, the account isn't checked.
+    static func attribute(_ hits: [LimitHit], to sightings: [Sighting], accounts: [String: String?]? = nil) -> [String: [LimitHit]] {
         var result: [String: [LimitHit]] = [:]
-        for hit in hits where hit.entrypoint == "claude-desktop" {
-            let windows = Set(
-                sightings.filter {
-                    $0.session == hit.session && hit.at >= $0.from && hit.at <= $0.lastSeen.addingTimeInterval(lastSeenGrace)
-                        && ($0.version == nil || hit.version == nil || $0.version == hit.version)
-                }.map(\.window))
-            guard windows.count == 1, let window = windows.first else { continue }
+        for hit in hits {
+            guard let window = window(for: hit.session, at: hit.at, version: hit.version, entrypoint: hit.entrypoint, in: sightings, accounts: accounts)
+            else { continue }
             result[window, default: []].append(hit)
         }
         return result
+    }
+
+    /// The one window whose process had `session` open at `at`, signed in with the account the window has now.
+    static func window(
+        for session: String, at: Date, version: String?, entrypoint: String?, in sightings: [Sighting], accounts: [String: String?]?
+    ) -> String? {
+        guard entrypoint == "claude-desktop" else { return nil }
+        let covering = sightings.filter {
+            $0.session == session && at >= $0.from && at <= $0.lastSeen.addingTimeInterval(lastSeenGrace)
+                && ($0.version == nil || version == nil || $0.version == version)
+        }
+        let windows = Set(covering.map(\.window))
+        guard windows.count == 1, let window = windows.first else { return nil }
+        if let accounts {
+            guard let current = accounts[window] ?? nil, covering.contains(where: { $0.account == current }) else { return nil }
+        }
+        return window
     }
 
     /// `<dataDir>/claude-code/<version>/claude.app/…` belongs to that window.
@@ -486,28 +639,32 @@ public final class LimitTracker: @unchecked Sendable {
         return files[sighting.session]
     }
 
-    /// The hits in the last `tail` bytes of a transcript; a file that only grew is read from where the last read ended.
-    func scan(_ url: URL) -> [LimitHit] {
+    /// The hits and the newest reply in the last `tail` bytes of a transcript; a file that only grew is read from
+    /// where the last read ended.
+    func scan(_ url: URL) -> (hits: [LimitHit], answer: LimitAnswer?) {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
             let size = (attributes[.size] as? NSNumber)?.uint64Value, let modified = attributes[.modificationDate] as? Date
-        else { return [] }
+        else { return ([], nil) }
         let cached = lock.withLock { scans[url.path] }
-        if let cached, cached.size == size, cached.modified == modified { return cached.hits }
+        if let cached, cached.size == size, cached.modified == modified { return (cached.hits, cached.answer) }
         var start = size > Self.tail ? size - Self.tail : 0
         var hits: [LimitHit] = []
+        var answer: LimitAnswer?
         if let cached, size > cached.size, size - cached.offset <= Self.tail {
             start = cached.offset
             hits = cached.hits
+            answer = cached.answer
         }
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return ([], nil) }
         defer { try? handle.close() }
-        guard (try? handle.seek(toOffset: start)) != nil, let data = try? handle.readToEnd() else { return [] }
+        guard (try? handle.seek(toOffset: start)) != nil, let data = try? handle.readToEnd() else { return ([], nil) }
         // Only whole lines: the rest is read again next time.
         let whole = data.lastIndex(of: 0x0A).map { data[..<($0 + 1)] } ?? Data()
         hits += LimitHit.hits(in: whole)
-        let scan = Scan(size: size, modified: modified, offset: start + UInt64(whole.count), hits: hits)
+        if let newer = LimitAnswer.newest(in: whole) { answer = newer }
+        let scan = Scan(size: size, modified: modified, offset: start + UInt64(whole.count), hits: hits, answer: answer)
         lock.withLock { scans[url.path] = scan }
-        return hits
+        return (hits, answer)
     }
 
     // MARK: Store
@@ -578,74 +735,156 @@ extension JSONDecoder {
 
 // MARK: - Text
 
-/// How limits read in the window list, the Continue sheet, the menu and `baton list`.
+/// How limits read in the window list, the Continue sheet, the menu and `baton list`. A window at its limit is "at
+/// its limit" everywhere; a reset time is "resets at 02:10" or "resets tomorrow at 02:10", and "resets Wed at about
+/// 05:00" when it is an estimate.
 public enum LimitText {
-    /// "02:10" within 20 hours of `now`, "Wed 05:00" further away.
-    public static func time(_ date: Date, now: Date = Date(), timeZone: TimeZone = .current) -> String {
+    /// "at 02:10" on the same day as `now`; "tomorrow at 05:00" or "yesterday at 23:10" on the days next to it; "Wed
+    /// at 05:00" within five days of it; "Tue 6 Oct at 08:00" further off. With `about`, "at about 05:00". The time is
+    /// in the style of `locale` (12- or 24-hour).
+    public static func time(
+        _ date: Date, now: Date = Date(), about: Bool = false, timeZone: TimeZone = .current, locale: Locale = .current
+    ) -> String {
+        let (day, clock) = parts(date, now: now, timeZone: timeZone, locale: locale)
+        let at = about ? "at about \(clock)" : "at \(clock)"
+        return day.map { "\($0) \(at)" } ?? at
+    }
+
+    /// "22:12", "yesterday 22:12", "Mon 22:12": a moment, as in "as of 22:12".
+    public static func stamp(_ date: Date, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        let (day, clock) = parts(date, now: now, timeZone: timeZone, locale: locale)
+        return day.map { "\($0) \(clock)" } ?? clock
+    }
+
+    /// The day of `date` as seen from `now` (`nil` on the same day) and its time of day.
+    static func parts(_ date: Date, now: Date, timeZone: TimeZone, locale: Locale) -> (day: String?, clock: String) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.locale = locale
         formatter.timeZone = timeZone
-        formatter.dateFormat = abs(date.timeIntervalSince(now)) < 20 * 3600 ? "HH:mm" : "EEE HH:mm"
-        return formatter.string(from: date)
+        formatter.setLocalizedDateFormatFromTemplate("jmm")
+        let clock = formatter.string(from: date)
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        switch days {
+        case 0: return (nil, clock)
+        case 1: return ("tomorrow", clock)
+        case -1: return ("yesterday", clock)
+        case -5...5:
+            formatter.dateFormat = "EEE"
+            return (formatter.string(from: date), clock)
+        default:
+            // Six or more days off, a weekday alone would read as this week's.
+            formatter.dateFormat = "EEE d MMM"
+            return (formatter.string(from: date), clock)
+        }
     }
 
-    /// "resets 02:10", "resets about Wed 05:00", "may have reset about Wed 05:00"; `nil` without a reset time.
-    public static func reset(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current) -> String? {
+    /// "resets at 02:10", "resets tomorrow at 02:10", "resets Wed at about 05:00", "may have reset at about 05:00";
+    /// `nil` without a reset time.
+    public static func reset(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
         guard let reset = state.reset, reset.source != .inferred else { return nil }
-        let when = time(reset.at, now: now, timeZone: timeZone)
-        if reset.source == .exact { return "resets \(when)" }
-        return reset.at > now ? "resets about \(when)" : "may have reset about \(when)"
+        let exact = reset.source == .exact
+        let when = time(reset.at, now: now, about: !exact, timeZone: timeZone, locale: locale)
+        if exact { return "resets \(when)" }
+        return reset.at > now ? "resets \(when)" : "may have reset \(when)"
     }
 
-    /// "5h 40%", "5h 100% · resets 02:10", "week 100% · resets about Wed 05:00", "5h reset at 02:10",
-    /// "week 100%, may have reset", "week 100%, extra usage available".
-    public static func describe(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current) -> String {
+    /// "5h 40%", "5h 100% · resets at 02:10", "week 100% · resets Wed at about 05:00", "5h reset at 02:10",
+    /// "week reset", "week 100%, extra usage available", "5h: Claude answered since".
+    public static func describe(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         let name = state.kind.name
         switch state.phase(now: now) {
         case .below:
+            // Seen, not explained: the limit may have reset, or extra usage may be paying.
+            if state.resetByAnswer { return "\(name): Claude answered since" }
             guard let percent = state.percent else { return "\(name) ?" }
             if state.kind == .fiveHour, let at = state.sampledAt, now.timeIntervalSince(at) > state.kind.window { return "\(name) reset" }
             return "\(name) \(percent)%"
         case .reached:
             let base = "\(name) \(state.percent ?? 100)%"
             if state.extraUsage { return base + ", extra usage available" }
-            return reset(state, now: now, timeZone: timeZone).map { "\(base) · \($0)" } ?? base
+            return reset(state, now: now, timeZone: timeZone, locale: locale).map { "\(base) · \($0)" } ?? base
         case .reset:
-            return "\(name) reset at \(time(state.reset?.at ?? now, now: now, timeZone: timeZone))"
+            return "\(name) reset \(time(state.reset?.at ?? now, now: now, timeZone: timeZone, locale: locale))"
         case .mayHaveReset:
-            return "\(name) \(state.percent ?? 100)%, may have reset"
+            // Older than the limit's own window: that window has ended, so it has reset.
+            return "\(name) reset"
         }
     }
 
-    /// A short note for the window list beside the meters: "5h resets 02:10", "week resets about Wed 05:00",
-    /// "5h reset at 02:10", "week may have reset", "week at 100%, extra usage available"; `nil` below the limit.
-    public static func note(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current) -> String? {
+    /// A short note for the window list beside the meters: "5h resets at 02:10", "week resets Wed at about 05:00",
+    /// "5h reset at 02:10", "week reset", "week at 100%, extra usage available", "5h: Claude answered since the
+    /// limit"; `nil` below the limit.
+    public static func note(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
         let name = state.kind.name
         switch state.phase(now: now) {
-        case .below: return nil
+        case .below: return state.resetByAnswer ? "\(name): Claude answered since the limit" : nil
         case .reached:
             if state.extraUsage { return "\(name) at 100%, extra usage available" }
-            return reset(state, now: now, timeZone: timeZone).map { "\(name) \($0)" }
-        case .reset: return describe(state, now: now, timeZone: timeZone)
-        case .mayHaveReset: return "\(name) may have reset"
+            return reset(state, now: now, timeZone: timeZone, locale: locale).map { "\(name) \($0)" }
+        case .reset, .mayHaveReset: return describe(state, now: now, timeZone: timeZone, locale: locale)
         }
     }
 
-    /// The whole line for `baton list`: "5h 100% · resets 02:10 · week 62% · as of 3m ago".
-    public static func summary(_ limits: Limits, usage: Usage?, now: Date = Date(), timeZone: TimeZone = .current) -> String {
+    /// The whole line for `baton list`: "5h 100% · resets at 02:10 · week 62% · as of 3m ago".
+    public static func summary(
+        _ limits: Limits, usage: Usage?, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current
+    ) -> String {
         guard usage != nil || limits.states.contains(where: { $0.reachedAt != nil }) else { return "usage unknown" }
-        var line = limits.states.map { describe($0, now: now, timeZone: timeZone) }.joined(separator: " · ")
+        var line = limits.states.map { describe($0, now: now, timeZone: timeZone, locale: locale) }.joined(separator: " · ")
         if let usage {
             line += " · as of \(relativeAge(since: usage.sampledAt, now: now))"
-            if !usage.isFresh(now: now), limits.states.allSatisfy({ $0.phase(now: now) == .below }) { line += " (stale: may be higher now)" }
+            if !usage.isFresh(now: now), limits.states.allSatisfy({ $0.phase(now: now) == .below }) { line += " (stale: may have changed since)" }
         }
         return line
     }
 
-    /// For a window at its limit: "resets 02:10" or "resets about Wed 05:00", by the limit that holds it back
+    /// For a window at its limit: "resets at 02:10" or "resets Wed at about 05:00", by the limit that holds it back
     /// longest; `nil` when that reset isn't known.
-    public static func bindingReset(_ limits: Limits, now: Date = Date(), timeZone: TimeZone = .current) -> String? {
-        limits.binding(now: now).flatMap { reset($0, now: now, timeZone: timeZone) }
+    public static func bindingReset(_ limits: Limits, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
+        limits.binding(now: now).flatMap { reset($0, now: now, timeZone: timeZone, locale: locale) }
+    }
+
+    /// For a window held back by a sample alone: "as of 22:12", the time of that sample; `nil` otherwise.
+    public static func asOf(_ limits: Limits, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
+        guard let binding = limits.binding(now: now), binding.sampleOnly, binding.reset == nil, let at = binding.reachedAt else { return nil }
+        return "as of \(stamp(at, now: now, timeZone: timeZone, locale: locale))"
+    }
+
+    /// "at its limit, resets at 02:10", "at its limit, resets Wed at about 05:00", "at its limit as of 22:12" or
+    /// "at its limit": the one phrase for a window at its limit in the menu, the Continue sheet, the banner and the
+    /// line `baton list` prints under such a window.
+    public static func atLimit(_ limits: Limits, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        if let reset = bindingReset(limits, now: now, timeZone: timeZone, locale: locale) { return "at its limit, \(reset)" }
+        return asOf(limits, now: now, timeZone: timeZone, locale: locale).map { "at its limit \($0)" } ?? "at its limit"
+    }
+
+    /// For a closed window held back by an old sample alone: Claude records usage only while the window is open.
+    public static func checkHint(_ status: ProfileStatus, now: Date = Date()) -> String? {
+        guard !status.isRunning, status.isSignedIn, status.limits.isAtLimit(now: now), status.limits.binding(now: now)?.sampleOnly == true,
+            status.limits.binding(now: now)?.reset == nil
+        else { return nil }
+        return "Open it to check: Claude records a new sample about 9 s after the window starts."
+    }
+
+    /// The tooltip of a window's usage in the window list: where reset times come from and why one may be missing,
+    /// whenever a limit is reached or a note names a reset; that the sample may be behind; how to check a closed
+    /// window. Empty when there is nothing to add.
+    public static func columnHelp(_ status: ProfileStatus, now: Date = Date()) -> String {
+        let states = status.limits.states
+        var lines: [String] = []
+        if states.contains(where: { $0.phase(now: now) == .reached || note($0, now: now) != nil }) {
+            lines.append(
+                "Reset times come from Claude: its limit messages and Auto-continue when limits reset. They appear for limits "
+                    + "reached while Baton is running; one reached before that shows no time.")
+        }
+        if let usage = status.usage, !usage.isFresh(now: now) {
+            lines.append("Claude records usage only while this window is open and in use, so this sample can be behind.")
+        }
+        if let hint = checkHint(status, now: now) { lines.append(hint) }
+        return lines.joined(separator: " ")
     }
 }
 
@@ -658,22 +897,32 @@ public enum LimitSchedule {
         statuses.compactMap { $0.limits.nextChange(after: now) }.min()
     }
 
-    /// Windows blocked at the previous check that a known reset has freed: an exact reset time passing, or a newer
-    /// sample below the limit. A sample simply growing old, or extra usage taking over, isn't announced.
-    public static func freed(blockedBefore: Set<String>, _ statuses: [ProfileStatus], now: Date = Date()) -> [ProfileStatus] {
+    /// Windows blocked at the previous check that a known reset has freed: an exact reset time passing, a newer
+    /// sample below the limit, or a reply Claude gave since. A sample simply growing old, extra usage taking over, or
+    /// another account signing in to the window isn't announced.
+    /// - Parameter blockedBefore: the windows blocked then, each with the account signed in to it (`blocked`).
+    public static func freed(blockedBefore: [String: String], _ statuses: [ProfileStatus], now: Date = Date()) -> [ProfileStatus] {
         statuses.filter { status in
-            guard blockedBefore.contains(status.id), status.isSignedIn else { return false }
+            guard let account = blockedBefore[status.id], status.isSignedIn, status.accountID == account else { return false }
             return status.limits.states.allSatisfy { [.below, .reset].contains($0.phase(now: now)) }
         }
     }
 
-    /// The windows blocked at a limit now, to compare with at the next check.
-    public static func blocked(_ statuses: [ProfileStatus], now: Date = Date()) -> Set<String> {
-        Set(statuses.filter { $0.isSignedIn && $0.limits.isAtLimit(now: now) }.map(\.id))
+    /// The windows blocked at a limit now, each with its signed-in account, to compare with at the next check.
+    public static func blocked(_ statuses: [ProfileStatus], now: Date = Date()) -> [String: String] {
+        Dictionary(
+            statuses.compactMap { status in
+                guard status.isSignedIn, let account = status.accountID, status.limits.isAtLimit(now: now) else { return nil }
+                return (status.id, account)
+            }, uniquingKeysWith: { a, _ in a })
     }
 
-    /// "Claude WORK has room again", or "Claude has room again" for the main window.
-    public static func roomAgain(_ status: ProfileStatus) -> String {
-        "\(status.isMain ? "Claude" : "Claude \(status.label)") has room again"
+    /// "Claude WORK has room again", or "Claude (main) has room again".
+    public static func roomAgain(_ status: ProfileStatus) -> String { "Claude \(status.displayLabel) has room again" }
+
+    /// Why: a reset Claude named, or a lower sample, is a reset; a reply in one of its sessions is only seen, since
+    /// extra usage may be paying for it.
+    public static func roomAgainReason(_ status: ProfileStatus) -> String {
+        status.limits.states.contains(where: \.resetByAnswer) ? "Claude answered in it again." : "Its usage limit has reset."
     }
 }

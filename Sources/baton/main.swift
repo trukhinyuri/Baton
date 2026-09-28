@@ -136,19 +136,26 @@ func describe(_ status: CloudMoveLock.Status) -> String {
 func kindName(_ conversation: Conversation) -> String {
     switch conversation.kind {
     case .code: "Code"
-    case .cowork: "Cowork in \(manager.label(of: conversation.ownerID ?? "main"))"
+    case .cowork: "Cowork in \(conversation.ownerID.map { $0 == "main" ? "Claude (main)" : manager.label(of: $0) } ?? "Claude (main)")"
     }
 }
 
-/// "5h 100% · resets 02:10 · week 62% · as of 3m ago" (see `LimitText.summary`).
+/// "5h 100% · resets at 02:10 · week 62% · as of 3m ago" (see `LimitText.summary`).
 func describe(_ status: ProfileStatus) -> String { LimitText.summary(status.limits, usage: status.usage) }
 
-/// Before continuing: when the source window picks the session up by itself within minutes, say so and stop,
-/// unless `--now` says to continue anyway. Exits with 3, so a script can tell that nothing was done and why.
-func offerToWait(_ conversations: [Conversation], in destination: String) {
-    guard !args.contains("--now"), let offer = manager.autoResumeOffer(for: conversations, in: destination) else { return }
+/// Before continuing: when the source window picks sessions up by itself within minutes, say which and leave them
+/// there, unless `--now` says to continue them anyway (`ConversationIndex.splitForWait`). When nothing else would
+/// continue, exits with 3, so a script can tell that nothing was done and why.
+/// - Returns: the conversations to continue.
+func offerToWait(_ conversations: [Conversation], in destination: String, alsoNewSession: Bool = false) -> [Conversation] {
+    guard !args.contains("--now"), let offer = manager.autoResumeOffer(for: conversations, in: destination) else { return conversations }
     print(offer.message())
-    print("Wait for it there, or add --now to continue in Claude \(manager.label(of: destination)) anyway. Nothing was changed.")
+    let split = ConversationIndex.splitForWait(conversations, offer: offer, alsoNewSession: alsoNewSession)
+    guard split.stop else {
+        print("Left out \(offer.names); add --now to continue them in Claude \(manager.displayLabel(of: destination)) as well.")
+        return split.continuing
+    }
+    print("Wait for it there, or add --now to continue in Claude \(manager.displayLabel(of: destination)) anyway. Nothing was changed.")
     exit(3)
 }
 
@@ -170,7 +177,7 @@ func destinationID(_ name: String) -> String {
 }
 
 func printPlan(_ plans: [ContinuePlan], to destination: String) {
-    let label = manager.label(of: destination)
+    let label = manager.displayLabel(of: destination)
     for plan in plans {
         let how = plan.forks ? "copy" : "same"
         let status =
@@ -206,7 +213,7 @@ func reportUnopened(_ plans: [ContinuePlan], in destination: String) {
     let missing = plans.filter { $0.opened == false }
     guard !missing.isEmpty else { return }
     fail(
-        "\(missing.count) of \(plans.count) did not show up in Claude \(manager.label(of: destination)) within \(Int(manager.importWait)) s: "
+        "\(missing.count) of \(plans.count) did not show up in Claude \(manager.displayLabel(of: destination)) within \(Int(manager.importWait)) s: "
             + missing.map { "\($0.sessionID.prefix(8)) “\($0.conversation.title)”" }.joined(separator: ", ")
             + ". Open them there with `baton continue <id> --to \(destination) --same`.")
 }
@@ -216,13 +223,16 @@ do {
     case "list", nil:
         if let problem = manager.registryError { print("⚠︎ \(problem)") }
         for s in manager.statuses() {
-            let name = s.isMain ? "Claude (main)" : "Claude \(s.label)"
+            let name = "Claude \(s.displayLabel)"
             let who = s.email ?? (s.isSignedIn ? "signed in" : "not signed in")
             let state = s.isRunning ? "open" : "closed"
             print(
                 "\(name.padding(toLength: 18, withPad: " ", startingAt: 0)) \(state.padding(toLength: 7, withPad: " ", startingAt: 0)) \(who.padding(toLength: 32, withPad: " ", startingAt: 0)) \(describe(s))"
             )
             if s.isUnexpectedAccount, let expected = s.profile?.email { print("  ⚠︎ expected \(expected)") }
+            if s.isSignedIn, s.limits.isAtLimit() {
+                print("  ⚠︎ \(LimitText.atLimit(s.limits))." + (LimitText.checkHint(s).map { " " + $0 } ?? ""))
+            }
             if s.isOpenWithoutProfile, let id = s.profile?.id {
                 print("  ⚠︎ a copy opened without this profile shows the main account; `baton open \(id)` replaces it")
             }
@@ -310,6 +320,17 @@ do {
             }
             for row in manager.localOnlyStatus() { print("\(row.label): \(describe(row.status))") }
             print(describe(manager.cloudMoveLock.status()))
+            for change in manager.autoResume.changes() {
+                print(
+                    "Auto-continue turned off by Baton in Claude \(manager.displayLabel(of: change.window)) for "
+                        + "\(change.entry) (limit reset \(LimitText.time(change.resetsAt)), turned off \(LimitText.time(change.changedAt))): "
+                        + "tick Auto-continue when limits reset on that session's limit message there to turn it back on")
+            }
+            for pending in manager.autoResume.pending() {
+                print(
+                    "Auto-continue to turn off once Claude \(manager.displayLabel(of: pending.window)) is closed: "
+                        + "\(pending.entry) (limit reset \(LimitText.time(pending.resetsAt)))")
+            }
             for entry in entries {
                 print("\(entry.label): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
                 for issue in entry.issues { print("  \(issue)") }
@@ -334,10 +355,14 @@ do {
         guard let limit = Int(value(of: "--max", in: args) ?? String(ConversationIndex.continueAllLimit)), limit > 0 else {
             fail("--max takes a positive number, such as 6")
         }
-        let (found, leftOut) = ConversationIndex.continueAllBatch(
+        let selection = ConversationIndex.continueAllBatch(
             in: path, since: Date().addingTimeInterval(-since),
             from: manager.conversations(), to: destination, limit: limit)
-        let leftOutNote = leftOut == 0 ? "" : " Left out \(leftOut) older ones: continue them one at a time or raise --max."
+        var found = selection.batch
+        let leftOut = selection.leftOut
+        let alreadyNote =
+            selection.alreadyThere == 0 ? "" : " \(selection.alreadyThere) already in Claude \(manager.displayLabel(of: destination)): open there now."
+        let leftOutNote = (leftOut == 0 ? "" : " Left out \(leftOut) older ones: continue them one at a time or raise --max.") + alreadyNote
         let newSession = args.contains("--new") ? path : nil
         guard !found.isEmpty || newSession != nil else {
             fail(
@@ -345,7 +370,7 @@ do {
             )
         }
         let anyway = args.contains("--anyway")
-        let label = manager.label(of: destination)
+        let label = manager.displayLabel(of: destination)
         if args.contains("--dry-run") {
             printPlan(try manager.plan(found, in: destination, mode: mode, newSessionIn: newSession, anyway: anyway), to: destination)
             print(
@@ -353,16 +378,19 @@ do {
                     + leftOutNote)
             break
         }
-        offerToWait(found, in: destination)
+        // Without the app, turn-offs an earlier Continue left for windows closed since are applied here.
+        manager.applyPendingAutoResume()
+        found = offerToWait(found, in: destination, alsoNewSession: newSession != nil)
         let plans = try await manager.continueAll(found, in: destination, mode: mode, newSessionIn: newSession, anyway: anyway)
         printPlan(plans, to: destination)
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
         reportUnopened(plans, in: destination)
         printCarried(plans)
         let checked = plans.filter { $0.opened == true }.count
-        print(
-            "Opened \(plans.count) in Claude \(label)" + (newSession.map { " and started a new session in \($0)" } ?? "")
-                + (checked > 0 ? "; \(checked) confirmed imported there" : "") + ". Nothing was sent." + leftOutNote)
+        let started = newSession.map { " and started a new session in \($0)" } ?? ""
+        let confirmed = checked > 0 ? "; \(checked) confirmed imported there" : ""
+        let opened = plans.isEmpty ? "Started a new session in Claude \(label) in \(path)" : "Opened \(plans.count) in Claude \(label)\(started)"
+        print("\(opened)\(confirmed). Nothing was sent.\(leftOutNote)")
     case "continue":
         guard args.count >= 2, let to = value(of: "--to", in: args) else { fail("continue needs a session (or “last”) and --to PROFILE") }
         let all = manager.conversations()
@@ -388,7 +416,7 @@ do {
         if args.contains("--dry-run") {
             if conversation.kind == .cowork {
                 print(
-                    "Would start a new Cowork task in Claude \(manager.label(of: destination)) with “\(conversation.title)”'s history and files attached. Nothing was changed."
+                    "Would start a new Cowork task in Claude \(manager.displayLabel(of: destination)) with “\(conversation.title)”'s history and files attached. Nothing was changed."
                 )
             } else {
                 printPlan(try manager.plan([conversation], in: destination, mode: mode, anyway: anyway), to: destination)
@@ -396,17 +424,18 @@ do {
             }
             break
         }
-        offerToWait([conversation], in: destination)
+        manager.applyPendingAutoResume()
+        _ = offerToWait([conversation], in: destination)
         switch try await manager.continueConversation(conversation, in: destination, mode: mode, anyway: anyway) {
         case .openedSession(let plan):
             printPlan([plan], to: destination)
             printCarried([plan])
             reportUnopened([plan], in: destination)
             print(
-                "Opened “\(conversation.title)”\(plan.forks ? " as a copy" : "") in Claude \(manager.label(of: destination))"
+                "Opened “\(conversation.title)”\(plan.forks ? " as a copy" : "") in Claude \(manager.displayLabel(of: destination))"
                     + (plan.opened == true ? "; confirmed imported there." : "."))
         case .startedCoworkTask(let handoff):
-            print("Started a new Cowork task in Claude \(manager.label(of: destination)) with the history attached. Review it and send it there.")
+            print("Started a new Cowork task in Claude \(manager.displayLabel(of: destination)) with the history attached. Review it and send it there.")
             print("Prepared files: \(handoff.folder.path)")
         }
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }

@@ -62,7 +62,11 @@ struct ContinueWorkSheet: View {
             "Work in \(folders) continues only in \(allowed.accounts.sorted().joined(separator: " or ")), and no window is signed in with it. Add that account with “Add Subscription”, or change the rule with `baton rule`."
     }
 
-    private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.label ?? "" }
+    /// What follows "Claude " for the chosen window: "(main)" or its label; empty while none is chosen.
+    private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.displayLabel ?? "" }
+
+    /// The chosen window on a button: "Claude (main)" or its label.
+    private var destinationButton: String { form.destination.isEmpty ? "" : model.buttonLabel(of: form.destination) }
 
     private var forks: Bool { selected.map { form.mode.forks($0) } ?? false }
 
@@ -73,9 +77,10 @@ struct ContinueWorkSheet: View {
 
     private var folder: String? { selected?.kind == .cowork ? nil : selected?.folders.first }
 
-    /// The most recent Code sessions in the selected session's folder from the last day, and how many more there are.
-    private var folderSelection: (batch: [Conversation], leftOut: Int) {
-        guard let folder else { return ([], 0) }
+    /// The most recent Code sessions in the selected session's folder from the last day, how many more there are, and
+    /// how many are open in the chosen window already.
+    private var folderSelection: (batch: [Conversation], leftOut: Int, alreadyThere: Int) {
+        guard let folder else { return ([], 0, 0) }
         return ConversationIndex.continueAllBatch(
             in: folder, since: Date().addingTimeInterval(-Self.folderWindow),
             from: model.conversations, to: form.destination)
@@ -100,7 +105,7 @@ struct ContinueWorkSheet: View {
 
             List(selection: $form.selection) {
                 ForEach(filtered) { conversation in
-                    ConversationRow(conversation: conversation, owner: conversation.ownerID.map(model.label(of:)))
+                    ConversationRow(conversation: conversation, owner: conversation.ownerID.map(model.buttonLabel(of:)))
                         .tag(conversation.id)
                 }
             }
@@ -190,12 +195,14 @@ struct ContinueWorkSheet: View {
                     Text(
                         "\(folderBatch.count) in \((folder as NSString).lastPathComponent) from the last day"
                             + (folderSelection.leftOut > 0 ? ", the most recent; \(folderSelection.leftOut) older left out" : "")
+                            + (folderSelection.alreadyThere > 0
+                                ? "; \(folderSelection.alreadyThere) already in Claude \(destinationLabel.isEmpty ? "…" : destinationLabel)" : "")
                     )
                     .lineLimit(1).truncationMode(.middle)
                     .help(folderBatch.map(\.title).joined(separator: "\n"))
                     Toggle("Also start a new session there", isOn: $form.alsoNewSession).toggleStyle(.checkbox)
                     Spacer()
-                    Button("Continue All in \(destinationLabel.isEmpty ? "…" : destinationLabel)") { goAll() }
+                    Button("Continue All in \(destinationButton.isEmpty ? "…" : destinationButton)") { goAll() }
                         .disabled(form.working || form.destination.isEmpty || batchNeedsStop || !batchAllowed)
                         .help(
                             !batchAllowed && !form.destination.isEmpty
@@ -271,7 +278,7 @@ struct ContinueWorkSheet: View {
 
     private var primaryTitle: String {
         if form.working { return "Opening…" }
-        let to = destinationLabel.isEmpty ? "" : " in \(destinationLabel)"
+        let to = destinationButton.isEmpty ? "" : " in \(destinationButton)"
         guard let selected, selected.kind != .cowork else { return "Continue" + to }
         if forks { return "Continue as a Copy" + to }
         if selected.mayStillWrite() { return "Continue Anyway" }
@@ -296,15 +303,17 @@ struct ContinueWorkSheet: View {
     }
 
     private func destinationTitle(_ status: ProfileStatus) -> String {
-        let name = status.isMain ? "Claude (main)" : "Claude \(status.label)"
-        if model.isAtLimit(status) { return name + " · limit reached" + (LimitText.bindingReset(status.limits).map { ", \($0)" } ?? "") }
+        let name = "Claude \(status.displayLabel)"
+        if model.isAtLimit(status) {
+            return name + " · " + LimitText.atLimit(status.limits) + (LimitText.checkHint(status) == nil ? "" : " (open it to check)")
+        }
         guard status.usage != nil else { return name }
         return name + " · " + LimitText.summary(status.limits, usage: status.usage)
     }
 
     private func explanation(_ conversation: Conversation) -> String {
         let to = "Claude \(destinationLabel.isEmpty ? "…" : destinationLabel)"
-        let from = "Claude \(conversation.ownerID.map(model.label(of:)) ?? "")"
+        let from = "Claude \(conversation.ownerID.map(model.displayLabel(of:)) ?? "")"
         let why =
             form.mode == .auto && conversation.kind == .code
             ? (conversation.hasLiveProcess ? " It's open in a running Claude Code process." : " It had a message in the last 10 minutes.") : ""
@@ -349,11 +358,13 @@ struct ContinueWorkSheet: View {
                         ? "Baton passed to Claude \(label): a copy of “\(conversation.title)” is open there."
                         : "Baton passed to Claude \(label): “\(conversation.title)” is open there."
                     // The footer shows two lines: another window continuing it by itself goes first, then a model warning,
-                    // before the light touch, never after it.
-                    if let note = plan.autoResume.first(where: \.isWarning) ?? plan.autoResume.first {
+                    // then what Baton changed in another window, before the light touch, never after it.
+                    if let note = plan.autoResume.first(where: \.isWarning) {
                         text += " " + note.message()
                     } else if let note = plan.model, note.isWarning {
                         text += " " + note.message(destination: label)
+                    } else if let note = plan.autoResume.first {
+                        text += " " + note.message()
                     } else {
                         text += plan.forks ? " Same history, next runner." : " Same conversation, next runner."
                     }
@@ -372,7 +383,7 @@ struct ContinueWorkSheet: View {
 
     private func goAll(now: Bool = false) {
         guard let folder, !batchNeedsStop else { return }
-        let batch = folderBatch
+        var batch = folderBatch
         form.working = true
         form.problem = nil
         let manager = model.manager
@@ -381,11 +392,19 @@ struct ContinueWorkSheet: View {
         let mode = form.mode
         let newSession = form.alsoNewSession ? folder : nil
         Task {
+            // Sessions their own window picks up within minutes are left there; the rest continue. Only when that is
+            // all of them is there nothing to do but offer to wait.
+            var waiting: AutoResumeOffer?
             if !now, let offer = await offer(for: batch, in: target) {
-                form.offerForAll = true
-                form.offer = offer
-                form.working = false
-                return
+                let split = ConversationIndex.splitForWait(batch, offer: offer, alsoNewSession: newSession != nil)
+                guard !split.stop else {
+                    form.offerForAll = true
+                    form.offer = offer
+                    form.working = false
+                    return
+                }
+                batch = split.continuing
+                waiting = offer
             }
             do {
                 let plans = try await manager.continueAll(batch, in: target, mode: mode, newSessionIn: newSession)
@@ -399,14 +418,14 @@ struct ContinueWorkSheet: View {
                     model.loadConversations()
                     return
                 }
-                let copies = plans.filter(\.forks).count
-                var text =
-                    "Baton passed to Claude \(label): opened \(plans.count) there" + (copies > 0 ? ", \(copies) as copies" : "")
-                    + (newSession == nil ? "." : ", and started a new session.")
+                var text = ConversationIndex.passedNotice(label: label, opened: plans.count, copies: plans.filter(\.forks).count, newSession: newSession != nil)
+                if let waiting { text += " Left out \(waiting.names): " + waiting.message() }
                 if let note = plans.flatMap(\.autoResume).first(where: \.isWarning) {
                     text += " " + note.message()
                 } else if let warning = plans.compactMap(\.model).first(where: \.isWarning) {
                     text += " " + warning.message(destination: label)
+                } else if let note = plans.flatMap(\.autoResume).first {
+                    text += " " + note.message()
                 }
                 model.show(notice: text)
                 model.preselectedConversation = nil

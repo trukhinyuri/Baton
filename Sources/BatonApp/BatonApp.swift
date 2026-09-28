@@ -106,13 +106,13 @@ struct MenuBarContent: View {
     }
 
     private func menuTitle(for status: ProfileStatus) -> String {
-        let name = status.isMain ? "Claude" : "Claude \(status.label)"
+        let name = "Claude \(status.displayLabel)"
         let who = status.email ?? (status.isSignedIn ? "signed in" : "not signed in")
         var usage = ""
         if status.isSignedIn, status.limits.isAtLimit() {
-            usage = " · at its limit" + (LimitText.bindingReset(status.limits).map { ", \($0)" } ?? "")
-        } else if let week = status.usage?.week {
-            usage = " · \(week)% of week"
+            usage = " · " + LimitText.atLimit(status.limits)
+        } else if status.isSignedIn, status.usage != nil {
+            usage = " · " + LimitText.describe(status.limits.week)
         }
         return "\(status.isRunning ? "●" : "○")  \(name) — \(who)\(usage)"
     }

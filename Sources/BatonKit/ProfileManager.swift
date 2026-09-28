@@ -86,6 +86,9 @@ public struct ProfileStatus: Identifiable, Equatable, Sendable {
     public var isMain: Bool { profile == nil }
     public var isSignedIn: Bool { accountID != nil }
     public var label: String { profile?.label ?? "MAIN" }
+    /// What follows "Claude " in what Baton says: "(main)" for the main window, the profile's label otherwise.
+    /// `label` stays "MAIN", as on the badge, in reports and in `doctor`'s tables.
+    public var displayLabel: String { profile?.label ?? "(main)" }
     public var color: String { profile?.color ?? Profile.mainColor }
     /// Signed in with a different account than the one the profile was created for.
     public var isUnexpectedAccount: Bool {
@@ -158,6 +161,9 @@ public final class ProfileManager: @unchecked Sendable {
     public func label(of windowID: String) -> String {
         windowID == "main" ? "MAIN" : profiles.first { $0.id == windowID }?.label ?? windowID
     }
+
+    /// What follows "Claude " in what Baton says: `"(main)"` or the profile's label.
+    public func displayLabel(of windowID: String) -> String { windowID == "main" ? "(main)" : label(of: windowID) }
 
     // MARK: Status
 
@@ -380,6 +386,9 @@ public final class ProfileManager: @unchecked Sendable {
             }
             // The app and the CLI may open a profile at the same moment; the merges read and write without Claude's locks.
             _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
+                // Auto-continue entries a Continue had to leave on in windows open at the time: this window stays
+                // closed until it starts below, so its own are turned off now, app or no app (`AutoResumeNote.stillOn`).
+                autoResume.applyPending()
                 // A launcher or CLI can start a profile without the manager's background timer.
                 // Claude reads its cards at startup, so share sessions first; a failure must not keep the window closed.
                 var problems: [String] = []
@@ -457,6 +466,7 @@ public final class ProfileManager: @unchecked Sendable {
         }
         do {
             _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
+                autoResume.applyPending()
                 var problems: [String] = []
                 do { _ = try prepareSessionsForLaunch() } catch { problems.append("sessions could not be shared first: \(error.localizedDescription)") }
                 do { _ = try localOnly.reconcile(window: "main") } catch { problems.append("Local only could not be applied: \(error.localizedDescription)") }
@@ -502,7 +512,7 @@ public final class ProfileManager: @unchecked Sendable {
         let label = try checkDestination(destination)
         if conversation.ownerID == destination { throw ProfileError.sameWindow(label) }
         try checkRules(folders: conversation.folders, destination: destination)
-        let handoff = try CoworkHandoff.prepare(conversation, sourceLabel: self.label(of: conversation.ownerID ?? "main"), paths: paths)
+        let handoff = try CoworkHandoff.prepare(conversation, sourceLabel: self.displayLabel(of: conversation.ownerID ?? "main"), paths: paths)
         try await openWindow(destination, links: [handoff.link])
         return .startedCoworkTask(handoff)
     }
@@ -526,7 +536,7 @@ public final class ProfileManager: @unchecked Sendable {
             var conversation = found
             conversation.hasLiveProcess = found.hasLiveProcess || live.contains(found.sessionID)
             guard conversation.kind != .cowork else { throw ProfileError.coworkNeedsItsOwnHandoff(conversation.title) }
-            if liveIn[conversation.sessionID]?.contains(destination) == true { throw ProfileError.sameWindow(label(of: destination)) }
+            if liveIn[conversation.sessionID]?.contains(destination) == true { throw ProfileError.sameWindow(displayLabel(of: destination)) }
             let forks = mode.forks(conversation, now: now)
             // A closed window reads the shared card of a regular Code session, with its model, when it starts;
             // anything else Claude imports there and takes the model from the history.
@@ -584,8 +594,6 @@ public final class ProfileManager: @unchecked Sendable {
             }
             throw error
         }
-        // Before the window opens: another window's auto-continue would otherwise run the same work there too.
-        settleAutoResume(&plans, now: Date())
         let newSession = folder.map { ClaudeLink.newCodeSession(folder: $0) }
         guard !links.isEmpty else {
             try await openWindow(destination, links: newSession.map { [$0] } ?? [])
@@ -595,6 +603,9 @@ public final class ProfileManager: @unchecked Sendable {
         let known = SessionCards.sessions(in: cards)
         let started = Date()
         try await openWindow(destination, links: links)
+        // Only once the destination has opened, so a failed open leaves the source window's auto-continue as it was.
+        // A closed source window can't fire in between; an open one is left on until it closes (`settleAutoResume`).
+        settleAutoResume(&plans, now: Date())
         await confirmImported(&plans, known: known, cards: cards, since: started)
         // Claude shows each session once it has imported it, which can take seconds for a long one, and that
         // replaces whatever the window showed. The new session goes last, so it is what stays on screen.
@@ -663,13 +674,13 @@ public final class ProfileManager: @unchecked Sendable {
         guard let email, allowed.accounts.contains(email.lowercased()) else {
             throw ProfileError.notAllowed(
                 folders: allowed.rules.map(\.folder), accounts: allowed.accounts.sorted(),
-                label: label(of: destination), email: email)
+                label: displayLabel(of: destination), email: email)
         }
     }
 
     @discardableResult
     private func checkDestination(_ destination: String) throws -> String {
-        let label = label(of: destination)
+        let label = displayLabel(of: destination)
         guard destination == "main" || profiles.contains(where: { $0.id == destination }) else { throw ProfileError.notFound(destination) }
         guard DesktopData.accountID(in: dataDir(of: destination)) != nil else { throw ProfileError.notSignedIn(label) }
         return label
@@ -739,10 +750,12 @@ public final class ProfileManager: @unchecked Sendable {
         let live = LiveSessions.ids(claudeDir: paths.claudeDir)
         let windows = windows
         let ranIn = limitTracker.lastWindows(paths: paths, windows: windows)
+        let openIn = limitTracker.liveWindows(paths: paths, windows: windows)
         return ConversationIndex.scan(paths: paths, windows: windows).map { found in
             var conversation = found
             conversation.hasLiveProcess = conversation.kind != .cowork && live.contains(conversation.sessionID)
             conversation.runningIn = conversation.kind == .cowork ? nil : ranIn[conversation.sessionID]
+            conversation.openIn = conversation.kind == .cowork ? [] : openIn[conversation.sessionID] ?? []
             return conversation
         }
     }
@@ -1055,8 +1068,24 @@ extension String {
 
 /// An advisory `flock(2)` lock shared by the app, the CLI and launchers.
 enum FileLock {
+    /// The locks the current thread holds, so a nested blocking call for the same lock runs its body instead of
+    /// waiting for itself: `flock` locks belong to each open file, so a second `open` in the same process would
+    /// block forever. A nested non-blocking call still finds the lock taken.
+    private static let heldKey = "BatonFileLocksHeld"
+
     /// - Returns: the body's result, or `nil` if `blocking` is false and the lock is held elsewhere.
     static func withLock<T>(_ url: URL, blocking: Bool, _ body: () throws -> T) throws -> T? {
+        let path = url.standardizedFileURL.path
+        let thread = Thread.current.threadDictionary
+        var held = thread[heldKey] as? Set<String> ?? []
+        if held.contains(path) { return blocking ? try body() : nil }
+        held.insert(path)
+        thread[heldKey] = held
+        defer {
+            var after = thread[heldKey] as? Set<String> ?? []
+            after.remove(path)
+            thread[heldKey] = after
+        }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR, 0o644)
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
