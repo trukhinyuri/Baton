@@ -20,7 +20,7 @@
   <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their usage">
 </p>
 
-Baton runs several Claude Desktop accounts on one Mac, each in its own unmodified Claude Desktop window with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window, and when you want to carry on somewhere else (the work account, the personal one, or the one that still has room today) you hand the conversation over with its transcript, sub-agents, Workflow runs, tool outputs and notes; **Continue** also keeps Rewind checkpoints, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
+Baton runs several Claude Desktop accounts on one Mac, each in its own unmodified Claude Desktop window with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window. When you want to carry on somewhere else (the work account, the personal one, or the one that still has room today), you hand the conversation over with its transcript, sub-agents, Workflow history, tool outputs and notes. **Continue work…** also keeps Rewind checkpoints, except those from before a copy Claude Desktop made itself, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
 
 Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Baton turns Remote Control off in its windows by default (one switch to undo it) and, before you continue, names what will not follow.
 
@@ -39,7 +39,7 @@ Requirements: macOS 14 Sonoma or later on Apple silicon or Intel, and [Claude De
 brew install --cask trukhinyuri/tap/baton
 ```
 
-This installs `Baton.app` in `/Applications` and links the `baton` command. Quit Baton from its menu before you update; your Claude windows can stay open.
+This installs `Baton.app` in `/Applications` and links the `baton` command. Quit Baton from its menu before you update; your Claude windows can stay open. Coming from Claude Profiles? See [Upgrading from Claude Profiles](#upgrading-from-claude-profiles).
 
 ```sh
 brew upgrade --cask baton
@@ -55,17 +55,35 @@ cd Baton
 make install        # builds Baton.app and copies it to ~/Applications/Baton
 ```
 
-`make install` stages and verifies the new app before replacing the old one, and keeps the previous app as a ZIP in `~/Library/Application Support/Baton/AppBackups` (the three latest). Your profiles are not touched. The command-line tool ships inside the app:
+`make install` stages and verifies the new app before replacing the old one, and keeps the previous app as a ZIP in `AppBackups` in [Baton's data folder](#how-it-works) (the three latest). Your profiles are not touched. The command-line tool ships inside the app:
 
 ```sh
-ln -s ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/
+ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton
 ```
 
 Use one installation, Homebrew or source, not both: two copies would each run their own background sync. The app warns when it finds a second copy.
 
 ### Upgrading from Claude Profiles
 
-Same app, new name. If you're upgrading from Claude Profiles, your windows, profiles and sessions carry over untouched; only the name on the tin changed. Baton moves its own folders to the new name the next time it starts with every Claude window closed. If the old folder names are still there, quit Baton, close every Claude window and run `baton migrate`.
+Same app, new name. If you're upgrading from Claude Profiles, your windows, profiles and sessions carry over untouched; only the name on the tin changed. Baton renames its folder in `~/Applications` the next time it starts with every Claude window closed; its data folder keeps the old name, so nothing inside has to move.
+
+- **The command is now `baton`**, and `baton pass` works too. Homebrew links it for you. If you linked `claude-profiles` yourself, that link stops working once the old app is gone; link the new command instead:
+  ```sh
+  ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton
+  ```
+  With Homebrew the app is `/Applications/Baton.app`. `make install` prints the exact command for every old link it finds.
+- **Scripts that still call `claude-profiles`** can keep doing so through the `claude-profiles` link that Baton 1.x keeps inside the app:
+  ```sh
+  ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/claude-profiles /usr/local/bin/claude-profiles
+  ```
+- **`make install`** installs into the folder you already have, renames it to `~/Applications/Baton` when no Claude window is open (or prints the exact command to finish later), and points your launchers at the new app.
+- **Installed from the ZIP?** Quit Claude Profiles, move `Claude Profiles.app` to the Trash and put `Baton.app` where it was.
+- **Claude Profiles opens at login?** Replace it with Baton in **System Settings → General → Login Items**. If an older copy still starts, Baton asks it to quit rather than handing over to it.
+- **Folder still called Claude Profiles?** Claude windows were open when Baton tried, or Baton runs from inside that folder. Quit Baton, close every Claude window and run `baton migrate`. If `Baton.app` itself is inside that folder, run the copy inside it:
+  ```sh
+  "$HOME/Applications/Claude Profiles/Baton.app/Contents/Helpers/baton" migrate
+  ```
+  It exits with 0 once the folder is renamed or there is nothing to do, 3 when the folder has to keep its name for now (the line it prints says why) and 1 on an error. Launchers are updated in place, not rebuilt.
 
 ### Uninstall
 
@@ -80,7 +98,7 @@ Same app, new name. If you're upgrading from Claude Profiles, your windows, prof
    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Claude.app
    ```
 
-To remove everything, including profiles and their sign-ins, move `~/Library/Application Support/Baton` and `~/Applications/Baton` (or their `Claude Profiles` namesakes, if Baton hasn't moved them yet) to the Trash after step 1.
+To remove everything, including profiles and their sign-ins, move Baton's data folder, `~/Library/Application Support/Baton`, and its launchers folder, `~/Applications/Baton`, to the Trash after step 1. If you upgraded from Claude Profiles, the data folder is `~/Library/Application Support/Claude Profiles`, and the launchers folder may still have that name too.
 
 ## Quick start
 
@@ -88,7 +106,7 @@ To remove everything, including profiles and their sign-ins, move `~/Library/App
 2. Enter the account's email and, if you like, change the Dock label (`WORK`, `LAB`, `TEAM`) and color.
 3. A new Claude window opens. Sign in there with that account, with Google or with email.
 4. To keep a profile in the Dock, drag its launcher from `~/Applications/Baton` (**⋯ → Show Launcher in Finder**) to the Dock. Spotlight finds launchers too ("Claude WORK").
-5. When one subscription reaches its limit, click **Continue work…** and pick another.
+5. Pick up any local Code session or Cowork task in another of your windows: click **Continue work…** and choose where it goes next.
 
 <p align="center">
   <img src="docs/images/add-subscription.png" width="620" alt="Add a Subscription sheet with a live Dock icon preview">
@@ -128,7 +146,7 @@ When you open a session that another account started, Claude Desktop may fork it
 
 | | Follows between windows | Stays with the account |
 |---|---|---|
-| Claude Code | Local sessions with their transcript, sub-agents, Workflow history, tool outputs and (with **Continue**) Rewind checkpoints. Local settings, skills, hooks, memory and MCP definitions in `~/.claude` are shared by every window already. | Cloud sessions, Code Projects with their coordinator, memory and threads, and Project or Remote Control workers. |
+| Claude Code | Local sessions with their transcript, sub-agents, Workflow history, tool outputs and, with **Continue work…**, Rewind checkpoints ([except](#when-claude-desktop-forks-a-session-itself) those from before a copy Claude Desktop made itself). Local settings, skills, hooks, memory and MCP definitions in `~/.claude` are shared by every window already. | Cloud sessions, Code Projects with their coordinator, memory and threads, and Project or Remote Control workers. |
 | Cowork | Local tasks continue as a new task with their history and files. | The original task and its runtime; cloud Cowork tasks and projects. |
 | Chat | Nothing. | claude.ai chats and chat projects. |
 | Automation | Nothing. | Routines and scheduled tasks. Local task prompts in `~/.claude/scheduled-tasks` are shared by every window, so give tasks in different windows different names. |
@@ -139,7 +157,7 @@ Claude rolls out features account by account, so different windows can show diff
 
 ## Local only
 
-**Local only** is on by default. In each window Baton manages, the main one included, it turns off Remote Control's default (`ccRemoteControlDefaultEnabled`), and keeping the Mac reachable for Remote Control where Claude has that setting. It writes these keys only while that window is closed, after a dated backup, and records the previous values so turning Local only off restores them. A window that is running shows *pending* and gets the change at its next start.
+**Local only** is on by default. In each window Baton manages, the main one included, it turns off two Remote Control settings: the default for new sessions (`ccRemoteControlDefaultEnabled`) and, where Claude has it, staying reachable (`remoteControlStayReachable`). It writes these keys only while that window is closed, after a dated backup, and records the previous values so turning Local only off restores them. A window that is running shows *pending* and gets the change at its next start.
 
 It deliberately leaves alone local scheduled tasks, waking the Mac for them, web search in Cowork and your permission mode. It never touches managed preferences set by an organization, sign-in data or any server. If you turn Remote Control back on inside Claude, Local only turns it off again at that window's next start, and the window's badge reads *Remote Control on* until then. To keep Remote Control in one window, turn Local only off for that profile.
 
@@ -152,33 +170,36 @@ If a Claude Desktop version no longer has one of these settings, the status read
 ```text
 baton list                          Every profile, its account and plan usage
 baton add <email> [--label TEXT] [--color #RRGGBB]
-                                     Create a profile and open it to sign in
+                                    Create a profile and open it to sign in
 baton open <profile>                Open a profile's window (id or label)
 baton remove <profile>              Move a closed profile's copy and sign-in to the Trash
 baton sync [--dry-run]              Share local Code sessions across windows now
 baton carry [--dry-run]             Bring sub-agents and tool outputs over to sessions Claude forked
 baton conversations [--all]         Local Code sessions and Cowork tasks that can continue elsewhere
-baton continue <id|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
-                                     Continue one in another profile, as Continue work… does
+baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
+                                    Continue one in another profile, as Continue work… does
 baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [--anyway]|--fork]
                [--new] [--dry-run]
-                                     Continue the recent sessions of a folder, as Continue All does
-baton pass <id|last> --to <profile>    Same as `continue`, easier to shout across the track
+                                    Continue the recent sessions of a folder, as Continue All does
+baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--dry-run]
+                                    Same as `continue`, easier to shout across the track
 baton rules                         Which accounts may continue the work in which folders
 baton rule <folder> --only <email>[,<email>…] | --remove
-                                     Keep a folder's work in those accounts, or drop its rule
+                                    Keep a folder's work in those accounts, or drop its rule
 baton local-only on|off|status      Turn Local only on or off, or show it per window
 baton local-only cloud-lock on|off|status
-                                     Optional, off by default: also deny moving a session to the
-                                     cloud, Mac-wide, in ~/.claude/settings.json
+                                    Optional, off by default: also deny moving a session to the
+                                    cloud, Mac-wide, in ~/.claude/settings.json
 baton doctor [--json]               Check sessions and per-window setup without changing anything
 baton report [--save PATH] [--open] Prepare a problem report (see below)
-baton refresh                       Rebuild app copies after a Claude Desktop update
-baton migrate                       Move Baton's folders from their Claude Profiles name, once nothing runs from them
+baton refresh                       Rebuild app copies and launchers after a Claude Desktop update
+baton migrate                       Rename ~/Applications/Claude Profiles to Baton, with Baton quit and
+                                    every Claude window closed. Exit 3: kept for now; the printed line
+                                    says why
 baton --version                     Version and commit
 ```
 
-`continue` takes the start of an id from `conversations`, or `last` for the most recent one. `--fork` always copies; `--same` keeps the same session but refuses one that may still be written to unless you close it there and add `--anyway`. `--dry-run` prints what would happen, how, and with which model, and changes nothing:
+`continue` (or `pass`) takes the start of a session id from `conversations`, or `last` for the most recent one. `--fork` always copies; `--same` keeps the same session but refuses one that may still be written to unless you close it there and add `--anyway`. `--dry-run` prints what would happen, how, and with which model, and changes nothing:
 
 ```sh
 baton conversations
@@ -190,7 +211,8 @@ baton continue --folder ~/Projects/api --to LAB --new --dry-run
 
 - **No network.** The app has no network code, no telemetry and no update check; Homebrew handles updates. It never calls Anthropic's servers.
 - **No credentials.** It never reads, copies or stores passwords, sign-in tokens, cookies or the Keychain. You sign in to each window yourself with Claude's own sign-in. To show the account it reads the account id from `config.json`, the matching email from Claude's local cache, and the usage Claude records locally.
-- **Backups first.** Every card it replaces or removes is copied to `~/Library/Application Support/Baton/Backups/<date>/` first, and so is a settings file before Local only or the settings merge replaces it. The one exception is Claude's `config.json`, which holds sign-in data: only its theme, zoom and language keys are edited, in place, and it is never copied. Backup days older than a week move to the Trash; nothing is deleted outright.
+- **No inherited keys.** Before it starts anything, Baton (the app and `baton`) drops every `CLAUDE…` and `ANTHROPIC_…` variable it inherited, so a window opened from a terminal or a Claude Code session starts the way a Dock launch starts it, without an API key, proxy or model override from that shell.
+- **Backups first.** Every card it replaces or removes is copied to `Backups/<date>/` in [Baton's data folder](#how-it-works) first, and so is a settings file before Local only or the settings merge replaces it. The one exception is Claude's `config.json`, which holds sign-in data: only its theme, zoom and language keys are edited, in place, and it is never copied. Backup days older than a week move to the Trash; nothing is deleted outright.
 - **Closed windows only.** A window's settings and interface stores are changed only while that window is closed. Sessions are shared with running windows too, but deletions wait until every window is closed.
 - **Claude's own records stay.** It never writes, edits or removes Claude's history-suppression records, which Claude uses to keep one account's history out of another.
 
@@ -232,6 +254,8 @@ A report too long for a link opens GitHub with a short summary; the full text is
 
 **After a Claude Desktop update.** App copies are rebuilt the next time each window opens, or now with `baton refresh`. `doctor` warns when your Claude Desktop version is outside the range Baton was tested with, and Local only reports a setting it can no longer find instead of writing it.
 
+**`~/Applications` still has a Claude Profiles folder.** Baton renames it only when every Claude window is closed and Baton itself doesn't run from inside it; see [Upgrading from Claude Profiles](#upgrading-from-claude-profiles). If `~/Applications/Baton` exists as well, Baton uses it, leaves the other folder alone, and **Status…** names both and what to do.
+
 **Building from source fails with stale paths after moving the checkout.** Use a fresh build directory: `BATON_BUILD_DIR=/tmp/baton-build make install`.
 
 Still stuck? [Report a problem](#report-a-problem).
@@ -254,9 +278,11 @@ A profile is Claude Desktop started with its own `--user-data-dir`, which is sta
 | Main Claude app (untouched) | `/Applications/Claude.app`, data in `~/Library/Application Support/Claude` |
 | Profile app copies | `~/Applications/Baton/.engines` |
 | Launchers you can keep in the Dock | `~/Applications/Baton/Claude <LABEL>.app` |
-| Each profile's sign-in and window state | `~/Library/Application Support/Baton/Profiles/<id>` |
-| Profile list, folder rules, backups | `~/Library/Application Support/Baton` |
+| Each profile's sign-in and window state | `Profiles/<id>` in Baton's data folder |
+| Profile list, folder rules, backups: Baton's data folder | `~/Library/Application Support/Baton`, or `~/Library/Application Support/Claude Profiles` if you upgraded from Claude Profiles |
 | Local Claude Code transcripts, settings, skills, memory | `~/.claude`, shared by every window |
+
+The data folder keeps the name it was created with, because Claude's own files and your session history record paths inside it. Only the launchers folder, the one you see in Finder, takes the new name.
 
 More: [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY-MODEL.md), [design decisions](docs/adr/), [testing](docs/TESTING.md) and [why this exists](docs/WHY.md).
 

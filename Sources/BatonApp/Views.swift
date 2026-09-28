@@ -235,8 +235,16 @@ struct LimitBanner: View {
     }
 }
 
+/// Whether the footer may add "everyone’s in step" to the last sync: checked again after every sync.
+/// An object rather than `@State`, which the Command Line Tools can't expand (no SwiftUI macro plugin).
+@MainActor
+final class SyncFooterState: ObservableObject {
+    @Published var everyoneInStep = false
+}
+
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @StateObject private var syncFooter = SyncFooterState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -263,13 +271,14 @@ struct ContentView: View {
             Divider()
             footer
             Text("Several Claude Desktop accounts, one Mac, one baton. Not affiliated with Anthropic.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 8)
         }
         .frame(minWidth: 760, idealWidth: 900, minHeight: 380, idealHeight: 580)
+        .task(id: model.lastSync) { syncFooter.everyoneInStep = await Self.everyoneInStep(model) }
         .sheet(isPresented: $model.isAdding) { AddProfileSheet(model: model) }
         .sheet(isPresented: $model.isContinuing) { ContinueWorkSheet(model: model) }
         .sheet(isPresented: $model.isCheckingSessions) { DiagnosticsSheet(entries: model.diagnostics) }
@@ -300,7 +309,7 @@ struct ContentView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Subscriptions").font(.title2.weight(.semibold))
-                Text("When one subscription reaches its limit, continue any local Code session or Cowork task in another.")
+                Text("Pick up any local Code session or Cowork task in another of your windows.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -336,7 +345,8 @@ struct ContentView: View {
                 if model.statuses.count < 2 {
                     Text("Add a subscription and your local Code sessions start relaying between windows.")
                 } else if let last = model.lastSync {
-                    Text("Local Code synced · \(last, format: .relative(presentation: .named)) — everyone’s in step.")
+                    Text("Local Code synced · \(last, format: .relative(presentation: .named))")
+                        + Text(syncFooter.everyoneInStep ? " — everyone’s in step." : "")
                 } else {
                     Text("Sharing local Code sessions…")
                 }
@@ -365,6 +375,25 @@ struct ContentView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
     }
+
+    /// True only when every window shares all its local work and has nothing waiting for a restart: the two lists
+    /// the status panel shows ("Not shared, and why" and "Waiting for a restart") are empty for every window.
+    /// Read off the main thread from the same local files as the status panel; anything unreadable counts as not.
+    private static func everyoneInStep(_ model: AppModel) async -> Bool {
+        guard model.lastSync != nil, model.statuses.count > 1 else { return false }
+        if model.isDemo { return isInStep(DemoData.windowStatuses) }
+        let manager = model.manager
+        return await Task.detached {
+            guard let diagnostics = try? Diagnostics.inspect(paths: manager.paths) else { return false }
+            var pending: [String: [String]] = [:]
+            for row in manager.localOnlyStatus() where row.status == .pending { pending[row.window] = ["Local only"] }
+            return isInStep(WindowStatus.collect(manager: manager, diagnostics: diagnostics, pending: pending))
+        }.value
+    }
+
+    nonisolated private static func isInStep(_ windows: [WindowStatus]) -> Bool {
+        !windows.isEmpty && windows.allSatisfy { $0.skipReasons.isEmpty && $0.pendingChanges.isEmpty }
+    }
 }
 
 /// One window's account, sharing scope and why some work isn't shared, with a restart to apply pending changes.
@@ -388,7 +417,9 @@ struct WindowStatusSheet: View {
                     row("Scope from", status.scopeSource)
                     row(
                         "Local only", status.localOnly.map { $0 ? "On" : "Off" } ?? "Not available in this version",
-                        help: "Turns off Remote Control for this window’s new sessions, so they can’t be driven from claude.ai or your phone.")
+                        help:
+                            "Turns off Remote Control for this window’s new sessions from its next start, so they aren’t reachable from claude.ai or your phone unless you turn it on there."
+                    )
                     row(
                         "Claude Code running", status.liveSessions == 0 ? "No sessions" : "\(status.liveSessions) session\(status.liveSessions == 1 ? "" : "s")"
                     )

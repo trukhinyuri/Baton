@@ -1,12 +1,21 @@
 # Changelog
 
-## 1.0.0 — Baton takes the track
+## 1.0.0 — unreleased
 
-Unreleased.
-
-Claude Profiles is now Baton: same app, same windows, a name it can keep in public (Anthropic's terms don't allow "Claude" in a product name). Your profiles and sessions carry over.
+**Baton takes the track.** Claude Profiles is now Baton: same app, same windows, a name it can keep in public (Anthropic's terms don't allow "Claude" in a product name). Your profiles and sessions carry over; what changes for you is listed under "Upgrading from Claude Profiles" just below.
 
 Baton now covers local work only: local Claude Code sessions and Cowork tasks follow between windows, and everything kept in an Anthropic account stays with that account. 0.3.0 was never published; its changes are part of this release.
+
+### Upgrading from Claude Profiles
+
+- Your windows, profiles, sessions, folder rules and backups carry over untouched. Baton's data folder keeps the name it was created with, `~/Library/Application Support/Claude Profiles`, so nothing inside it moves; new installs use `~/Library/Application Support/Baton`
+- The launchers folder `~/Applications/Claude Profiles` becomes `~/Applications/Baton` the first time Baton starts with every Claude window closed, or when you run `baton migrate`. Each launcher is updated in place, and an old `Claude Profiles.app` left in the folder goes to the Trash
+- `baton migrate` exits with 0 once the folder is renamed or there is nothing to do, 3 when it keeps its old name for now (the printed line says why) and 1 on an error. When Baton runs from inside the old folder, quit it, close every Claude window and run the `baton` inside the app: `"$HOME/Applications/Claude Profiles/Baton.app/Contents/Helpers/baton" migrate`
+- `make install` installs into the folder you already have, renames it when no Claude window is open or prints the exact command to finish later, points the launchers at the new app, and prints the exact `ln -sf` for every old `claude-profiles` or `baton` link it finds in `/usr/local/bin` or `/opt/homebrew/bin`
+- The command is now `baton`, and `baton pass` works too. Homebrew links it; a link you made yourself to the old `claude-profiles` stops working once the old app is gone: `ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton`. Scripts that still call `claude-profiles` can link `Contents/Helpers/claude-profiles`, which 1.x keeps
+- Installed Claude Profiles from the ZIP? Quit it, move `Claude Profiles.app` to the Trash and put `Baton.app` where it was. If Claude Profiles opens at login, replace it with Baton in System Settings → General → Login Items
+- An older copy that still starts (from a Login Item, the ZIP or the Trash) is asked to quit when Baton starts, instead of Baton handing over to it
+- The app keeps its bundle id, `io.github.trukhinyuri.claudeprofiles`, so macOS keeps treating it as the same app. The Homebrew cask is `baton`; if you had the `claude-profiles` cask, `brew upgrade` moves you to it
 
 ### Continue work
 
@@ -35,7 +44,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 
 ### Local only
 
-- **Local only**, on by default, turns off Remote Control's default and keeping the Mac reachable for it in every managed window, the main one included, while that window is closed, after a dated backup. Turning it off restores the previous values. A running window shows *pending*, and a Claude version without these settings shows *not supported* and gets no write
+- **Local only**, on by default, turns off two Remote Control settings in every managed window, the main one included: the default for new sessions and, where Claude has it, staying reachable. It writes them only while that window is closed, after a dated backup, and turning it off restores the previous values. A running window shows *pending*, and a Claude version without these settings shows *not supported* and gets no write
 - `baton local-only on|off|status`, a global and per-profile switch in the app, and a badge on each window
 - An optional setting stops the agent from moving a session to the cloud (`permissions.deny` in `~/.claude/settings.json`), written only when you turn it on
 
@@ -56,12 +65,13 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - App copies are rebuilt in a staging bundle, verified and swapped in atomically; the previous copy is restored if the new one fails verification
 - Opening a profile no longer fails when sessions can't be shared first; the window opens and the problem is reported
 - A session whose transcript file is empty is dated by the file instead of being listed last
+- The app and `baton` drop every `CLAUDE…` and `ANTHROPIC_…` variable they inherit before starting anything, so a Claude window opened from a terminal or a Claude Code session starts the way a Dock launch starts it, without an API key, proxy or model override from that shell
 
 ### Install and release
 
 - Universal build for Apple silicon and Intel, signed with the hardened runtime; releases are notarized, stapled, published with `SHA256SUMS.txt` and a build-provenance attestation
 - Homebrew: `brew install --cask trukhinyuri/tap/baton`
-- The installer keeps the previous app as a ZIP in `~/Library/Application Support/Claude Profiles/AppBackups` (the three latest) instead of runnable `.previous-*.app` copies beside the app, and moves those left by 0.2.0 to the Trash
+- The installer keeps the previous app as a ZIP in `AppBackups` inside Baton's data folder (the three latest) instead of runnable `.previous-*.app` copies beside the app, and moves those left by 0.2.0 to the Trash
 
 ### Removed
 
