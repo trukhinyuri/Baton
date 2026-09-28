@@ -460,7 +460,7 @@ public final class ProfileManager: @unchecked Sendable {
             // "Continue All" never leaves an orphan transcript behind.
             let copies = ContinueCopies(paths: paths)
             for made in madeThisRun {
-                TranscriptFork.removeCopy(made.id, in: made.folder, claudeDir: paths.claudeDir)
+                TranscriptFork.removeCopy(made.id, in: made.folder, claudeDir: paths.claudeDir, tempDir: paths.claudeTempDir)
                 try? copies.forget(copy: made.id)
             }
             throw error
@@ -512,14 +512,19 @@ public final class ProfileManager: @unchecked Sendable {
         else { plan.conversation.title += " · copy" }
         let copies = ContinueCopies(paths: paths)
         let folder = plan.conversation.transcript.deletingLastPathComponent()
-        if let reused = copies.existingCopy(of: plan.conversation.sessionID, in: plan.destination, folder: folder) {
+        if let reused = copies.existingCopy(of: plan.conversation.sessionID, transcript: plan.conversation.transcript, in: plan.destination) {
             plan.sessionID = reused
             return nil
         }
-        let new = try TranscriptFork.fork(plan.conversation, claudeDir: paths.claudeDir)
-        plan.sessionID = new
-        try? copies.record(source: plan.conversation.sessionID, destination: plan.destination, copy: new)
-        return (new, folder)
+        let made = try TranscriptFork.forkReporting(plan.conversation, claudeDir: paths.claudeDir, tempDir: paths.claudeTempDir)
+        plan.sessionID = made.id
+        plan.carried = made
+        try? copies.record(source: plan.conversation.sessionID, destination: plan.destination, copy: made.id,
+                           sourceLength: made.sourceLength, sourceTail: made.sourceTail)
+        if !made.leftBehind.isEmpty || !made.worktrees.isEmpty {
+            Log.logger("continue").info("Copy \(made.id, privacy: .private) left \(made.leftBehind.count) scratchpad items and \(made.worktrees.count) worktrees behind")
+        }
+        return (made.id, folder)
     }
 
     /// The accounts that may continue work touching `folders` (see `FolderRules`); `nil` when no rule applies.
