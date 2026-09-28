@@ -361,6 +361,8 @@ struct ContentView: View {
             } label: {
                 Label("Cloud move lock: \(model.cloudMoveLockOn ? "On" : "Off")", systemImage: "lock.shield")
             }
+            .controlSize(.small)
+            .fixedSize()
             .help("Optional, off by default: adds mcp__ccd_session__move_to_cloud to permissions.deny in ~/.claude/settings.json, Mac-wide.")
             Button("Check sessions…") { model.checkSessions() }
             Button("Report a problem…") { model.isReporting = true }

@@ -61,14 +61,21 @@ final class AppModel: ObservableObject {
         reload()
         // Documentation screenshots: BATON_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
         // …_DEMO_SHEET=continue opens "Continue work…", …=report "Report a problem…" and …=status a window's status.
+        // With …_DEMO_SNAPSHOT=<file.png> it draws the window into that file and quits (see DemoSnapshot).
+        // Everything below this guard (checks, timers, sync, launchers, the launch observer) never runs in demo mode.
         guard !isDemo else {
             let sheet = ProcessInfo.processInfo.environment["BATON_DEMO_SHEET"]
             isAdding = sheet == "1"
             isContinuing = sheet == "continue"
             isReporting = sheet == "report"
             if sheet == "status" { showStatus(of: "work") }
+            if let file = DemoSnapshot.file() { DemoSnapshot.take(to: file, withSheet: isAdding || isContinuing || isReporting || statusWindow != nil) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                NSApp.windows.first { $0.identifier?.rawValue == "main" }?.setContentSize(NSSize(width: 900, height: 530))
+                guard let window = DemoSnapshot.mainWindow() else { return }
+                // The demo's size and state are not remembered for the real app, which shares its preferences.
+                window.isRestorable = false
+                _ = window.setFrameAutosaveName("")
+                window.setContentSize(DemoSnapshot.contentSize)
             }
             return
         }

@@ -3,8 +3,8 @@ import Foundation
 import MachO
 
 /// Claude's and Anthropic's settings in the environment Baton was started with. Baton reads none of them itself (it
-/// reads only `BATON_DEMO` and `BATON_DEMO_SHEET`), and every Claude window it opens must use its own account and
-/// settings, not the ones of the terminal or Claude Code session that happened to start Baton.
+/// reads only `BATON_DEMO`, `BATON_DEMO_SHEET` and `BATON_DEMO_SNAPSHOT`), and every Claude window it opens must use
+/// its own account and settings, not the ones of the terminal or Claude Code session that happened to start Baton.
 public enum InheritedEnvironment {
     /// A variable Claude or Anthropic tools read: its name starts with `CLAUDE` or `ANTHROPIC_`.
     public static func isRemoved(_ name: String) -> Bool {

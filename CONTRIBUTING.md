@@ -18,12 +18,15 @@ Thanks for helping. A few ground rules keep the project useful and safe for ever
 | `scripts/build-app.sh` | Builds the universal `Baton.app` and signs it with the hardened runtime |
 | `scripts/verify-build.sh`, `notarize.sh`, `package.sh` | Checks, notarizes and zips a build (`make release` runs all of them) |
 | `scripts/check-docs.sh`, `check-repo.sh`, `check-cask.sh` | Checks the docs, the repository files and the Homebrew cask |
+| `scripts/screenshots.sh` | Draws the README's screenshots from sample data into `docs/images` |
 | `scripts/product.env` | The product name, bundle id and repository, in one place for the scripts and workflows |
 | `packaging/homebrew` | The Homebrew cask |
 | `docs/adr` | Design decisions |
 
-To take screenshots without real accounts, launch the app with sample data:
+To try the app without real accounts, launch it with sample data; it changes nothing on your Mac:
 
 ```sh
 open -n --env BATON_DEMO=1 "build/Baton.app"
 ```
+
+`BATON_DEMO_SHEET=1` also opens **Add Subscription**, `continue` **Continue work…**. After `make app`, `scripts/screenshots.sh` redraws the README's images in `docs/images` from the same sample data; the app draws its own window into each file, so no screen-recording permission is needed.

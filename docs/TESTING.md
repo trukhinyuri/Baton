@@ -43,8 +43,10 @@ The Command Line Tools have no plugin for SwiftUI's own macros, so a view that u
 
 `scripts/verify-build.sh` checks that both binaries are universal (`arm64 x86_64`), signed with the hardened runtime, that the signature verifies, that `Info.plist` records the commit, and that `baton --version` runs natively and under Rosetta and reports the bundle's version. When `build/SHA256SUMS.txt` exists, it checks the archive against it.
 
-Changes to the app's windows are also checked by hand: run it with sample data, which needs no accounts:
+Changes to the app's windows are also checked by hand: run it with sample data, which needs no accounts and changes nothing on the Mac: no folder rename, sync, timers, launchers or changes to Claude's or Baton's files.
 
 ```sh
 open -n --env BATON_DEMO=1 "build/Baton.app"
 ```
+
+`scripts/screenshots.sh` then redraws `docs/images/main-window.png`, `add-subscription.png` and `continue-work.png` from `build/Baton.app`. It runs the app's executable once per picture with only `HOME`, `USER`, `PATH`, `BATON_DEMO=1` and `BATON_DEMO_SNAPSHOT=<file>` (plus `BATON_DEMO_SHEET` for a sheet); the app draws its window, title bar and sheet included, in the light appearance at 2x with AppKit's view caching, writes the PNG and quits. Nothing is captured from the screen, so no screen-recording permission is involved. A run that takes longer than 20 seconds is stopped and reported.

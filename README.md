@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their usage">
+  <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels, accounts, and five-hour and weekly usage">
 </p>
 
 Baton runs several Claude Desktop accounts on one Mac, each in its own unmodified Claude Desktop window with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window. When you want to carry on somewhere else (the work account, the personal one, or the one that still has room today), you hand the conversation over with its transcript, sub-agents, Workflow history, tool outputs and notes. **Continue work…** also keeps Rewind checkpoints, except those from before a copy Claude Desktop made itself, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
@@ -109,7 +109,7 @@ To remove everything, including profiles and their sign-ins, move Baton's data f
 5. Pick up any local Code session or Cowork task in another of your windows: click **Continue work…** and choose where it goes next.
 
 <p align="center">
-  <img src="docs/images/add-subscription.png" width="620" alt="Add a Subscription sheet with a live Dock icon preview">
+  <img src="docs/images/add-subscription.png" width="620" alt="Add Subscription sheet with a live Dock icon preview and fields for the email, Dock label and color">
 </p>
 
 Each row shows the account signed in to that window and its five-hour and weekly usage, as Claude Desktop itself records it; the one with the most headroom is highlighted. Baton stays in the menu bar, where you can open any subscription. App copies are APFS clones that take almost no disk space and are rebuilt automatically after Claude Desktop updates.
@@ -120,6 +120,10 @@ Each row shows the account signed in to that window and its five-hour and weekly
 ## Continue work in another window
 
 Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet. The signed-in subscription with the lowest weekly usage is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may be higher now*.
+
+<p align="center">
+  <img src="docs/images/continue-work.png" width="820" alt="Continue work sheet listing local Code sessions and Cowork tasks, with the window to continue in, the choice between Automatic, Same session and As a copy, and Continue All for the session's folder">
+</p>
 
 | Conversation | What happens in the other window |
 |---|---|

@@ -27,8 +27,8 @@ downloads the ZIP would have to override macOS to open it.
    before it: `## 1.0.0 — unreleased` becomes `## 1.0.0 — 2026-10-05`. The workflow refuses a tag that doesn't match
    `VERSION` or whose heading has no date.
 2. Check the release title for the version in `docs/launch/repo-metadata.md` and the workflow's `case`.
-3. Make sure the screenshots in `docs/images` show the current app; take them from the sample data, which needs no
-   accounts ([TESTING.md](TESTING.md#checking-a-build)).
+3. Make sure the screenshots in `docs/images` show the current app: after `make app`, run `scripts/screenshots.sh`,
+   which draws them from the sample data ([TESTING.md](TESTING.md#checking-a-build)), and look at each one.
 4. Run the green bar locally: `make test`, `swift build -Xswiftc -warnings-as-errors`,
    `swift format lint -r --strict Sources Tests Package.swift`, `scripts/check-docs.sh`, `scripts/check-repo.sh` and
    `scripts/check-cask.sh`, then `make app verify`.
