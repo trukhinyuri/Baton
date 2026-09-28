@@ -74,9 +74,13 @@ backup() { # backup <app> <name>
     mkdir -p "$backups" && chmod 700 "$backups" && ditto -c -k --keepParent "$1" "$backups/$zip" \
         && unzip -tq "$backups/$zip" >/dev/null && echo "$zip"
 }
+# macOS 14 has no trash command; then the item is moved into ~/.Trash with the time added before its extension.
 to_trash() {
     if command -v trash >/dev/null 2>&1; then trash "$1"
-    else mv "$1" "$HOME_DIR/.Trash/$(basename "$1" .app) $(date +%Y-%m-%d-%H%M%S).app"; fi
+    else
+        name="$(basename "$1")"
+        mkdir -p "$HOME_DIR/.Trash" && mv "$1" "$HOME_DIR/.Trash/${name%.*} $(date +%Y-%m-%d-%H%M%S).${name##*.}"
+    fi
 }
 
 if [ "$WHERE" = 1 ]; then choose_dest; exit 0; fi
@@ -181,10 +185,8 @@ else
 fi
 
 # Keep the three latest ZIPs. Older installers kept runnable .previous-*.app copies beside the app; the ZIPs replace them.
-if command -v trash >/dev/null 2>&1; then
-    ls -t "$BACKUPS"/*.zip 2>/dev/null | tail -n +4 | while IFS= read -r old; do trash "$old" || true; done
-    for old in "$(dirname "$FINAL")"/.previous-*.app; do
-        [ -d "$old" ] && trash "$old" && echo "Moved $(basename "$old") to the Trash"
-    done
-fi
+ls -t "$BACKUPS"/*.zip 2>/dev/null | tail -n +4 | while IFS= read -r old; do to_trash "$old" || true; done
+for old in "$(dirname "$FINAL")"/.previous-*.app; do
+    [ -d "$old" ] && to_trash "$old" && echo "Moved $(basename "$old") to the Trash"
+done
 exit 0

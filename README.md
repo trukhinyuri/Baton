@@ -39,7 +39,7 @@ Requirements: macOS 14 Sonoma or later on Apple silicon or Intel, and [Claude De
 brew install --cask trukhinyuri/tap/baton
 ```
 
-This installs `Baton.app` in `/Applications` and links the `baton` command. Quit Baton from its menu before you update; your Claude windows can stay open. Coming from Claude Profiles? See [Upgrading from Claude Profiles](#upgrading-from-claude-profiles).
+This installs `Baton.app` in `/Applications` and links the `baton` command. Quit Baton from its menu before you update; your Claude windows can stay open. Coming from Claude Profiles? Then its folder in `~/Applications` keeps the old name until Baton starts with every Claude window closed; see [Upgrading from Claude Profiles](#upgrading-from-claude-profiles).
 
 ```sh
 brew upgrade --cask baton

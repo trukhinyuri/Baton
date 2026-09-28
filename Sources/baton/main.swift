@@ -14,9 +14,9 @@ let usage = """
       baton add <email> [--label TEXT] [--color #RRGGBB]
                                            Create a profile and open it to sign in
       baton open <profile>                Open a profile's window (id or label)
-      baton remove <profile>              Quit it and move its copy and sign-in to the Trash
+      baton remove <profile>              Move a closed profile's copy and sign-in to the Trash
       baton sync [--dry-run]              Share local Code sessions; inspect Cowork without copying it
-      baton refresh                       Rebuild app copies after a Claude Desktop update
+      baton refresh                       Rebuild app copies and launchers after a Claude Desktop update
       baton migrate                       Rename ~/Applications/Claude Profiles to Baton once no Claude window
                                            is open. Exit 3: kept for now; the printed line says why.
       baton doctor [--json]               Read-only session and folder checks
