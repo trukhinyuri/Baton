@@ -30,6 +30,8 @@ USAGE
   claude-profiles rule <folder> --only <email>[,<email>…] | --remove
                                                  Let only these accounts continue work in the folder and
                                                  inside it, or drop the folder's rule
+  claude-profiles carry [--dry-run]             Bring sub-agents, Workflow runs, tool outputs and the scratchpad
+                                                 into sessions Claude Desktop continued as a new copy itself
   claude-profiles --version                     Print the version and commit
 """
 
@@ -152,6 +154,8 @@ do {
         print("\(r.sessions.pairs) session folders · \(r.sessions.cardsWritten) cards copied · \(r.sessions.cardsRemoved) removed · \(r.sessions.tombstonesWritten) deletions shared")
         print("\(r.cowork.pairs) Cowork folders checked · kept in their original profiles; use continue to carry one elsewhere")
         print("\(r.sessions.accountBoundCards + r.cowork.accountBoundCards) account-linked cards scoped · \(r.sessions.ambiguousAccountBoundCards + r.cowork.ambiguousAccountBoundCards) ambiguous cards left untouched")
+        let carried = r.carried.reduce(0) { $0 + $1.added.count }
+        if carried > 0 { print("\(carried) files carried into \(r.carried.count) sessions Claude Desktop continued as a copy") }
     case "doctor":
         let entries = try Diagnostics.inspect(paths: manager.paths)
         if args.contains("--json") {
@@ -271,6 +275,22 @@ do {
             try IconRenderer.pngData(IconRenderer.appIcon(), pixels: 1024)?.write(to: url)
         } else {
             try IconRenderer.icnsData(for: IconRenderer.appIcon()).write(to: url)
+        }
+    case "carry":
+        let dryRun = args.dropFirst().contains("--dry-run")
+        let reports = try NativeForkCarry.run(paths: manager.paths, dataDirs: manager.dataDirs, dryRun: dryRun)
+        if reports.isEmpty { print("Nothing to carry: every copy Claude Desktop made already has its old session’s files.") }
+        for report in reports {
+            print("\(report.lineage.old.prefix(8)) → \(report.lineage.new.prefix(8)): \(dryRun ? "would add" : "added") \(report.added.count) files, kept \(report.kept) the new session already had")
+            if !report.leftBehind.isEmpty {
+                print("  left in the old scratchpad: \(report.leftBehind.count) items — folders of builds or project copies, files over 1 MB or not text")
+            }
+            for worktree in report.worktrees {
+                print("  git worktree in the old scratchpad, not copied: \((worktree as NSString).abbreviatingWithTildeInPath) — `git worktree move` keeps it")
+            }
+        }
+        if !reports.isEmpty {
+            print("Rewind to points before Claude Desktop’s copy works only in the old session; its checkpoints are kept there.")
         }
     case "--version", "version":
         print(BuildInfo.current.description)

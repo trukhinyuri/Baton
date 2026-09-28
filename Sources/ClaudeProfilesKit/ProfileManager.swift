@@ -79,7 +79,9 @@ public struct ProfileStatus: Identifiable, Equatable, Sendable {
 public struct SyncReport: Equatable, Sendable {
     public var sessions: SessionSync.Report
     public var cowork: CoworkSync.Report
-    public var changes: Int { sessions.changes + cowork.changes }
+    /// What was carried into sessions Claude Desktop copied itself.
+    public var carried: [NativeForkCarry.Report] = []
+    public var changes: Int { sessions.changes + cowork.changes + carried.reduce(0) { $0 + $1.changes } }
 }
 
 /// Creates, opens and removes profiles. Every operation is local to this Mac.
@@ -646,7 +648,12 @@ public final class ProfileManager: @unchecked Sendable {
             let propagateDeletions = !isAnyClaudeRunning
             let sessions = try SessionSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
             let cowork = try CoworkSync(paths: paths, dataDirs: dataDirs).run(propagateDeletions: propagateDeletions)
-            return SyncReport(sessions: sessions, cowork: cowork)
+            // Adds files only, never in Claude's own data, so it runs whether or not windows are open.
+            var carried: [NativeForkCarry.Report] = []
+            do { carried = try NativeForkCarry.run(paths: paths, dataDirs: dataDirs) } catch {
+                Log.logger("carry").error("Carry failed: \(error.localizedDescription, privacy: .private)")
+            }
+            return SyncReport(sessions: sessions, cowork: cowork, carried: carried)
         }
     }
 

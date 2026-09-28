@@ -6,15 +6,21 @@ public struct Paths: Sendable, Equatable {
     public var home: URL
     /// The official Claude Desktop app. Profiles run APFS clones of it.
     public var claudeApp: URL
+    /// Where Claude Code keeps each session's scratchpad and background task output
+    /// (`<claudeTempDir>/<folder>/<session>/{scratchpad,tasks}`). The system may clear it at restart.
+    public var claudeTempDir: URL
 
-    public init(home: URL, claudeApp: URL) {
+    /// - Parameter claudeTempDir: by default a folder inside `home`, so a sandboxed `home` never reaches the real one.
+    public init(home: URL, claudeApp: URL, claudeTempDir: URL? = nil) {
         self.home = home
         self.claudeApp = claudeApp
+        self.claudeTempDir = claudeTempDir ?? home.appending(path: "tmp/claude", directoryHint: .isDirectory)
     }
 
     public static var standard: Paths {
         Paths(home: FileManager.default.homeDirectoryForCurrentUser,
-              claudeApp: URL(fileURLWithPath: "/Applications/Claude.app"))
+              claudeApp: URL(fileURLWithPath: "/Applications/Claude.app"),
+              claudeTempDir: URL(fileURLWithPath: "/private/tmp/claude-\(getuid())", isDirectory: true))
     }
 
     public var applicationSupport: URL { home.appending(path: "Library/Application Support", directoryHint: .isDirectory) }
@@ -30,6 +36,8 @@ public struct Paths: Sendable, Equatable {
     /// Claude Profiles's own state: profile registry and backups.
     public var stateDir: URL { applicationSupport.appending(path: "Claude Profiles", directoryHint: .isDirectory) }
     public var registryFile: URL { stateDir.appending(path: "profiles.json") }
+    /// What was carried into sessions Claude Desktop copied itself; see `NativeForkCarry`.
+    public var carriedFile: URL { stateDir.appending(path: "carried.json") }
     public var backupsDir: URL { stateDir.appending(path: "Backups", directoryHint: .isDirectory) }
     /// Histories and files prepared for continuing a conversation in another profile.
     public var handoffsDir: URL { stateDir.appending(path: "Handoffs", directoryHint: .isDirectory) }
