@@ -36,4 +36,4 @@ uninstall:
 	@echo "Profiles, sign-ins and launchers are kept. Remove them from the app first if you no longer need them."
 
 clean:
-	rm -rf .build build
+	rm -rf .build .build-app build

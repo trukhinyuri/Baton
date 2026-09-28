@@ -26,6 +26,8 @@ Tests use Swift Testing (`@Test`, `#expect`). For a bug, write the test that fai
 
 CI runs the suite on macOS 14 and macOS 15, builds the universal app and runs its x86_64 CLI under Rosetta, and runs the LevelDB compatibility suite. `swift format lint` (configured in `.swift-format`) and `-warnings-as-errors` are reported in CI.
 
+If `swift test` stops with *plugin for module 'TestingMacros' not found*, the build cache is stale: move `.build` to the Trash and run it again.
+
 ## Checking a build
 
 `scripts/verify-build.sh` checks that both binaries are universal (`arm64 x86_64`), signed with the hardened runtime, that the signature verifies, that `Info.plist` records the commit, and that `claude-profiles --version` runs natively and under Rosetta and reports the bundle's version. When `build/SHA256SUMS.txt` exists, it checks the archive against it.

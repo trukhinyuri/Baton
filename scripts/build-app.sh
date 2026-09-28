@@ -19,15 +19,16 @@ fi
 APP="build/$PRODUCT_NAME.app"
 COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo dev)"
 if [ "$COMMIT" != dev ] && ! git diff --quiet HEAD -- 2>/dev/null; then COMMIT="$COMMIT+dirty"; fi
-BUILD_DIR="${CLAUDE_PROFILES_BUILD_DIR:-.build}"
+# Kept apart from .build, which swift test uses, so a release build never shares its cache.
+BUILD_DIR="${CLAUDE_PROFILES_BUILD_DIR:-.build-app}"
 
 # One scratch path per architecture: SwiftPM 6.4's default build system puts every architecture's products in the
-# same .build/out/Products/Release, so a second build would overwrite the first before lipo sees it.
+# same out/Products/Release, so a second build would overwrite the first before lipo sees it.
 build_arch() { # build_arch <arch>: builds both products and prints their folder
     for product in ClaudeProfiles claude-profiles; do
-        swift build --scratch-path "$BUILD_DIR/universal/$1" -c release --arch "$1" --product "$product" >&2
+        swift build --scratch-path "$BUILD_DIR/$1" -c release --arch "$1" --product "$product" >&2
     done
-    swift build --scratch-path "$BUILD_DIR/universal/$1" -c release --arch "$1" --show-bin-path
+    swift build --scratch-path "$BUILD_DIR/$1" -c release --arch "$1" --show-bin-path
 }
 ARM="$(build_arch arm64)"
 INTEL="$(build_arch x86_64)"
