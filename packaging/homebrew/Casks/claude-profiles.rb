@@ -1,7 +1,7 @@
 cask "claude-profiles" do
   # The release workflow (.github/workflows/bump-cask.yml) rewrites version and sha256 in the tap.
   version "1.0.0"
-  sha256 "d2ebd14864f72a57af1647ef7b45e0b0d263c7344f9a0f384fd126f0acff85e3"
+  sha256 "9afdb3fe0b2fac0877930532a197dbedad9568995b20a40d668392c5890bdb35"
 
   url "https://github.com/trukhinyuri/ClaudeProfiles/releases/download/v#{version}/ClaudeProfiles-v#{version}.zip"
   name "Claude Profiles"

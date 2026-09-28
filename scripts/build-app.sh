@@ -33,7 +33,7 @@ build_arch() { # build_arch <arch>: builds both products and prints their folder
 ARM="$(build_arch arm64)"
 INTEL="$(build_arch x86_64)"
 
-rm -rf "$APP"
+rm -rf "$APP" build/*.zip build/SHA256SUMS.txt  # an archive of an earlier build must not outlive it
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
 lipo -create -output "$APP/Contents/MacOS/ClaudeProfiles" "$ARM/ClaudeProfiles" "$INTEL/ClaudeProfiles"
 lipo -create -output "$APP/Contents/Helpers/claude-profiles" "$ARM/claude-profiles" "$INTEL/claude-profiles"
