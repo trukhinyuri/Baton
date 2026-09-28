@@ -38,6 +38,8 @@ public struct Paths: Sendable, Equatable {
     public var registryFile: URL { stateDir.appending(path: "profiles.json") }
     /// What was carried into sessions Claude Desktop copied itself; see `NativeForkCarry`.
     public var carriedFile: URL { stateDir.appending(path: "carried.json") }
+    /// Local only's choices and the values it replaced in each window; see `LocalOnly`.
+    public var localOnlyFile: URL { stateDir.appending(path: "local-only.json") }
     public var backupsDir: URL { stateDir.appending(path: "Backups", directoryHint: .isDirectory) }
     /// Histories and files prepared for continuing a conversation in another profile.
     public var handoffsDir: URL { stateDir.appending(path: "Handoffs", directoryHint: .isDirectory) }

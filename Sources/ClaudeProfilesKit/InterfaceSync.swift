@@ -29,7 +29,7 @@ public struct InterfaceSync: Sendable {
         return key == "ccd-sessions-filter" ? key : nil
     }
 
-    static let prefsKeys = Set(keys.compactMap(prefsName))
+    static let prefsKeys = Set(keys.compactMap(prefsName)).subtracting(LocalOnly.ownedKeys)
     static let prefsAccountPrefixes = accountPrefixes.compactMap(prefsName)
 
     /// Whether this is one of the explicitly portable `epitaxyPrefs` keys.

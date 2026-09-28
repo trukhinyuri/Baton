@@ -76,7 +76,8 @@ public struct SettingsSync: Sendable {
             let mainPrefs = main["preferences"] as? [String: Any] ?? [:]
             let ownPrefs = current["preferences"] as? [String: Any] ?? [:]
             var prefs = ownPrefs
-            for key in Self.portablePreferences {
+            // Local only's switches belong to each window and are never shared.
+            for key in Self.portablePreferences.subtracting(LocalOnly.ownedKeys) {
                 Self.share(key, main: mainPrefs, own: ownPrefs, into: &prefs, base: &attempt, prefix: "preferences:")
             }
             // Scheduled tasks keep their own switches; only MAIN registers a wake helper.

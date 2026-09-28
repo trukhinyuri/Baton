@@ -302,6 +302,9 @@ public final class ProfileManager: @unchecked Sendable {
                 catch { problems.append("Setup: \(error.localizedDescription)") }
                 do { _ = try InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id) }
                 catch { problems.append("Interface: \(error.localizedDescription)") }
+                // Last, so no sync above can put a Remote Control switch back.
+                do { _ = try localOnly.reconcile(window: profile.id) }
+                catch { problems.append("Local only: \(error.localizedDescription)") }
                 if !problems.isEmpty {
                     openWarning = "Claude \(profile.label) opened, but some shared settings could not be refreshed. " + problems.joined(separator: " ")
                 }
@@ -366,6 +369,8 @@ public final class ProfileManager: @unchecked Sendable {
                 var problems: [String] = []
                 do { _ = try prepareSessionsForLaunch() }
                 catch { problems.append("sessions could not be shared first: \(error.localizedDescription)") }
+                do { _ = try localOnly.reconcile(window: "main") }
+                catch { problems.append("Local only could not be applied: \(error.localizedDescription)") }
                 if !problems.isEmpty { lock.withLock { openWarning = "Claude opened, but " + problems.joined(separator: "; ") } }
             }
         } catch {
@@ -555,6 +560,26 @@ public final class ProfileManager: @unchecked Sendable {
 
     private func dataDir(of window: String) -> URL {
         window == "main" ? paths.mainDataDir : paths.dataDir(for: window)
+    }
+
+    /// Local only for every window: new Claude Code sessions stay off Remote Control. Applied to a closed
+    /// window right away and to every window before it starts.
+    public var localOnly: LocalOnly { LocalOnly(paths: paths, isRunning: { self.isWindowOpen($0) }) }
+
+    /// Each window's Local only status, MAIN first, for the window list and `doctor`.
+    public func localOnlyStatus() -> [(window: String, label: String, status: LocalOnly.Status)] {
+        let localOnly = localOnly
+        return windows.map { ($0.id, label(of: $0.id), localOnly.status(window: $0.id)) }
+    }
+
+    /// Turns Local only on or off for one window, or with `window` nil for every window without its own choice.
+    /// Closed windows change now; open ones when they next start (`pending`).
+    @discardableResult
+    public func setLocalOnly(_ enabled: Bool, window: String?) throws -> [String: LocalOnly.Status] {
+        if let window {
+            guard window == "main" || profiles.contains(where: { $0.id == window }) else { throw ProfileError.notFound(window) }
+        }
+        return try localOnly.setEnabled(enabled, window: window, windows: windows.map(\.id))
     }
 
     /// Whether the window of `"main"` or a profile id is running with its own data.
