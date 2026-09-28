@@ -170,7 +170,7 @@ extension ProfileManager {
     /// Quits a window and opens it again so it picks up changed settings, unless a Claude Code session runs in it.
     public func restart(_ id: String) async throws {
         try ensureWritable()
-        let label = label(of: id)
+        let label = displayLabel(of: id)
         guard let window = WindowStatus.collect(manager: self, diagnostics: []).first(where: { $0.id == id }), window.isRunning
         else { return id == "main" ? try await openMain() : try await open(id) }
         if window.liveSessions > 0 { throw WindowStatus.RestartError.liveSessions(label: label, count: window.liveSessions) }

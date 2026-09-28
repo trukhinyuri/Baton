@@ -147,9 +147,23 @@ public enum ConversationIndex {
 
     /// What “Continue All” says when it's done: "Baton passed to Claude LAB: opened 3 sessions there, 1 as a copy."
     public static func passedNotice(label: String, opened: Int, copies: Int, newSession: Bool) -> String {
-        "Baton passed to Claude \(label): opened \(opened) session\(opened == 1 ? "" : "s") there"
+        guard opened > 0 else { return "Baton passed to Claude \(label): " + (newSession ? "started a new session there." : "nothing to open there.") }
+        return "Baton passed to Claude \(label): opened \(opened) session\(opened == 1 ? "" : "s") there"
             + (copies == 0 ? "" : copies == 1 ? ", 1 as a copy" : ", \(copies) as copies")
             + (newSession ? ", and started a new session." : ".")
+    }
+
+    /// What of a “Continue All” batch goes ahead when the source window picks some of it up by itself within
+    /// minutes (`offer`): every other session, and the new session if one was asked for. The ones it picks up are
+    /// left out (the offer names them). `stop`: nothing would go ahead, so there is only the offer to wait. The app
+    /// and `baton continue --folder` both decide with this.
+    public static func splitForWait(
+        _ batch: [Conversation], offer: AutoResumeOffer?, alsoNewSession: Bool
+    ) -> (continuing: [Conversation], leftOut: [Conversation], stop: Bool) {
+        guard let offer else { return (batch, [], false) }
+        let picked = { (conversation: Conversation) in offer.sessions.contains(conversation.sessionID.lowercased()) }
+        let continuing = batch.filter { !picked($0) }
+        return (continuing, batch.filter(picked), continuing.isEmpty && !alsoNewSession)
     }
 
     /// An absolute path with `~`, `.`, `..` and symbolic links resolved, without a trailing slash.

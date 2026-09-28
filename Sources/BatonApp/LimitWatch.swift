@@ -76,7 +76,8 @@ final class LimitWatch {
 
     private func announce(_ status: ProfileStatus, model: AppModel) {
         let title = LimitSchedule.roomAgain(status)
-        model.show(notice: title + ".")
+        let body = LimitSchedule.roomAgainReason(status)
+        model.show(notice: title + ". " + body)
         // Only an installed app bundle may use notifications; `swift run` would stop here.
         guard Bundle.main.bundleURL.pathExtension == "app", Bundle.main.bundleIdentifier != nil else { return }
         let id = "room-again-\(status.id)"
@@ -85,7 +86,7 @@ final class LimitWatch {
             guard granted else { return }
             let content = UNMutableNotificationContent()
             content.title = title
-            content.body = "Its usage limit has reset."
+            content.body = body
             UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
         }
     }

@@ -51,10 +51,11 @@ struct UsageHistoryTests {
     @Test func usesTheWindowsCurrentOrganizationAndTheNewestOverallOnlyWhenUnknown() throws {
         let samples = [sample(0, fh: 10, sd: 20), sample(5, fh: 90, sd: 95, org: otherOrg)]
         #expect(UsageHistory.current(samples, organizations: [org]).map(\.fiveHour) == [10], "another account's newer sample doesn't count")
-        #expect(UsageHistory.current(samples, organizations: []).count == 2, "organization unknown: every sample")
+        #expect(UsageHistory.current(samples, organizations: []).map(\.fiveHour) == [90], "no organization of its own known: the one sampled last")
         #expect(
-            UsageHistory.current(samples, organizations: [], signedInAt: at(3)).map(\.fiveHour) == [90],
-            "no organization yet: only samples since the sign-in")
+            UsageHistory.current(samples, organizations: [], otherAccounts: [otherOrg]).map(\.fiveHour) == [10],
+            "but not one another account's folders name")
+        #expect(UsageHistory.current([sample(0, fh: 1, sd: 2, org: nil)], organizations: [org]).count == 1, "the file doesn't say: every sample")
         #expect(UsageHistory.current(samples, organizations: ["ffffffff-0000-4000-8000-000000000000"]).isEmpty, "none of this account's yet")
 
         let box = try Sandbox()
@@ -63,7 +64,11 @@ struct UsageHistoryTests {
             #"{"version":2,"samples":[{"t":1790625600000,"org":"\#(org)","u":{"fh":10,"sd":20}},{"t":1790625900000,"org":"\#(otherOrg)","u":{"fh":90,"sd":95}}]}"#,
             to: file)
         #expect(DesktopData.usage(in: box.work)?.week == 95, "not signed in: the newest sample")
-        try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountB)"}"#, to: box.work.appending(path: "config.json"))
+        // Claude rewrites config.json when it refreshes the sign-in or quits: newer than every sample, it says nothing.
+        try box.write(#"{"lastKnownAccountUuid":"\#(Sandbox.accountB)"}"#, to: box.work.appending(path: "config.json"), modified: Date())
+        #expect(DesktopData.usage(in: box.work)?.week == 95, "no organization folder yet: the organization sampled last")
+        try box.pair(box.work, account: Sandbox.accountA, org: otherOrg)
+        #expect(DesktopData.usage(in: box.work)?.week == 20, "not the one a previous account's folders name")
         try box.pair(box.work, account: Sandbox.accountB, org: org)
         #expect(DesktopData.usage(in: box.work) == Usage(fiveHour: 10, week: 20, sampledAt: base), "the signed-in account's organization")
     }
@@ -104,7 +109,7 @@ struct LimitStateTests {
         let samples = [sample(-10 * 24 * 60, fh: 5, sd: 50), sample(0, fh: 20, sd: 100)]
         let limits = Limits(samples: samples, hits: [hit(.week, -7 * 24 * 60 - 60, resets: -7 * 24 * 60 + 33 * 60)])
         #expect(limits.week.reset == LimitReset(at: anchor.addingTimeInterval(7 * 86_400), source: .estimate))
-        #expect(LimitText.describe(limits.week, now: at(1), timeZone: utc, locale: gb) == "week 100% · resets at about Wed 05:00")
+        #expect(LimitText.describe(limits.week, now: at(1), timeZone: utc, locale: gb) == "week 100% · resets Wed at about 05:00")
         let after = at(34 * 60)
         #expect(limits.isAtLimit(now: after), "an estimate never frees")
         #expect(LimitText.describe(limits.week, now: after, timeZone: utc, locale: gb) == "week 100% · may have reset at about 05:00")
@@ -153,16 +158,21 @@ struct LimitStateTests {
         let limits = Limits(samples: [sample(0, fh: 100, sd: 40)], hits: [hit(.fiveHour, 1, resets: 370)])
         #expect(
             LimitText.summary(limits, usage: Usage(fiveHour: 100, week: 40, sampledAt: base), now: at(2), timeZone: utc, locale: gb)
-                == "5h 100% · resets at tomorrow 02:10 · week 40% · as of 2m ago")
-        #expect(LimitText.bindingReset(limits, now: at(2), timeZone: utc, locale: gb) == "resets at tomorrow 02:10")
+                == "5h 100% · resets tomorrow at 02:10 · week 40% · as of 2m ago")
+        #expect(LimitText.bindingReset(limits, now: at(2), timeZone: utc, locale: gb) == "resets tomorrow at 02:10")
         #expect(LimitText.bindingReset(limits, now: at(300), timeZone: utc, locale: gb) == "resets at 02:10", "the same day: no day")
         #expect(LimitText.note(limits.fiveHour, now: at(300), timeZone: utc, locale: gb) == "5h resets at 02:10")
         #expect(LimitText.atLimit(limits, now: at(300), timeZone: utc, locale: gb) == "at its limit, resets at 02:10")
         #expect(LimitText.describe(limits.fiveHour, now: at(380), timeZone: utc, locale: gb) == "5h reset at 02:10")
-        #expect(LimitText.time(at(3 * 24 * 60), now: base, timeZone: utc, locale: gb) == "Thu 20:00")
-        #expect(LimitText.time(at(-1), now: base, timeZone: utc, locale: gb) == "19:59")
+        #expect(LimitText.time(at(3 * 24 * 60), now: base, timeZone: utc, locale: gb) == "Thu at 20:00")
+        #expect(LimitText.time(at(-1), now: base, timeZone: utc, locale: gb) == "at 19:59")
+        #expect(LimitText.time(at(-24 * 60), now: base, timeZone: utc, locale: gb) == "yesterday at 20:00")
+        #expect(LimitText.time(at(6 * 24 * 60), now: base, timeZone: utc, locale: gb) == "Sun 4 Oct at 20:00", "a weekday alone would read as this week's")
+        #expect(LimitText.time(at(370), now: base, about: true, timeZone: utc, locale: gb) == "tomorrow at about 02:10")
+        #expect(LimitText.stamp(at(-1), now: base, timeZone: utc, locale: gb) == "19:59")
         let twelve = LimitText.time(at(370), now: base, timeZone: utc, locale: Locale(identifier: "en_US"))
-        #expect(twelve.hasPrefix("tomorrow 2:10") && twelve.hasSuffix("AM"), "the user's clock style")
+        #expect(twelve.hasPrefix("tomorrow at 2:10") && twelve.hasSuffix("AM"), "the user's clock style")
+        #expect(LimitText.bindingReset(limits, now: at(2), timeZone: utc, locale: gb).map { "It \($0)." } == "It resets tomorrow at 02:10.", "the banner")
     }
 
     @Test func aLimitHeldBackByASampleAloneSaysAsOfWhenAndAClosedWindowSaysToOpenIt() {
@@ -181,7 +191,7 @@ struct LimitStateTests {
     /// Hit the five-hour limit (its auto-continue entry resets at +370 min), then Claude reset it early: the next
     /// sample reads 0%.
     @Test func anEarlyResetOverridesAnAutoContinueEntry() {
-        let samples = [sample(0, fh: 50, sd: 10), sample(66, fh: 100, sd: 12), sample(100, fh: 0, sd: 12)]
+        let samples = [sample(0, fh: 50, sd: 10), sample(80, fh: 100, sd: 12), sample(100, fh: 0, sd: 12)]
         let limits = Limits(samples: samples, autoResume: [at(370)])
         #expect(!limits.isAtLimit(now: at(101)) && limits.fiveHour.phase(now: at(101)) == .below)
         #expect(LimitText.describe(limits.fiveHour, now: at(101)) == "5h 0%")
@@ -189,6 +199,22 @@ struct LimitStateTests {
         #expect(rising.isAtLimit(now: at(101)), "usage only rose: the entry stands")
         let atTheStart = Limits(samples: [sample(60, fh: 100, sd: 10), sample(75, fh: 0, sd: 12)], autoResume: [at(370)])
         #expect(atTheStart.isAtLimit(now: at(101)), "a drop right at the start of the entry's window is its own reset")
+        // The entry's window runs from +70; its first sample comes 20 minutes in, lower than the previous window's last.
+        let previous = Limits(samples: [sample(0, fh: 95, sd: 10), sample(90, fh: 5, sd: 11), sample(200, fh: 80, sd: 12)], autoResume: [at(370)])
+        #expect(previous.isAtLimit(now: at(301)) && previous.fiveHour.reset == LimitReset(at: at(370), source: .exact), "the previous window ending")
+    }
+
+    /// SIDE's five-hour samples of 28.09 (minutes from 21:10, the start of the window whose auto-continue entry
+    /// resets at 02:10): 20:56:50 63%, 21:11:50 91%, 21:26:50 24%, 21:41:50 62%, 21:56:50 95%, 22:04:41 100%.
+    @Test func aNewWindowsFirstSampleDoesNotCancelItsEntry() {
+        let samples = [
+            sample(-13.17, fh: 63, sd: 13), sample(1.83, fh: 91, sd: 17), sample(16.83, fh: 24, sd: 4), sample(31.83, fh: 62, sd: 11),
+            sample(46.83, fh: 95, sd: 16), sample(54.68, fh: 100, sd: 17),
+        ]
+        let limits = Limits(samples: samples, autoResume: [at(300)])
+        #expect(limits.fiveHour.reset == LimitReset(at: at(300), source: .exact))
+        #expect(LimitText.atLimit(limits, now: at(60), timeZone: utc, locale: gb) == "at its limit, resets tomorrow at 01:00")
+        #expect(limits.isAtLimit(now: at(301)) && limits.fiveHour.phase(now: at(302)) == .reset, "freed, and announced, at the reset")
     }
 
     /// Claude writes `xu` only on its full polls: the verdict doesn't flip with each poll.
@@ -207,12 +233,23 @@ struct LimitStateTests {
         let limits = Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(2))
         #expect(!limits.isAtLimit(now: at(3)) && limits.week.phase(now: at(3)) == .below && limits.week.resetByAnswer)
         #expect(limits.week.reset == LimitReset(at: at(2), source: .inferred))
-        #expect(LimitText.describe(limits.week, now: at(3)) == "week reset" && limits.load(now: at(3)) == 20)
+        #expect(LimitText.describe(limits.week, now: at(3)) == "week: Claude answered since" && limits.load(now: at(3)) == 20)
         #expect(Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(-1)).isAtLimit(now: at(3)), "a reply before the sample proves nothing")
         let refused = Limits(samples: [sample(0, fh: 20, sd: 90)], hits: [hit(.week, 5, resets: 5000)], answeredAt: at(3))
         #expect(refused.isAtLimit(now: at(6)), "a refusal after the reply still holds")
         let entryOnly = Limits(samples: [sample(0, fh: 90, sd: 10)], autoResume: [at(200)], answeredAt: at(150))
         #expect(entryOnly.isAtLimit(now: at(151)), "with only an entry, the time of the refusal isn't known")
+        let olderReach = Limits(samples: [sample(-3000, fh: 100, sd: 10), sample(0, fh: 97, sd: 12)], autoResume: [at(250)], answeredAt: at(3))
+        #expect(olderReach.isAtLimit(now: at(10)), "a 100% sample from an earlier reach proves nothing about this one")
+
+        // Held back by a limit message after a 90% sample, then Claude answered: not 90% any more.
+        let told = Limits(samples: [sample(0, fh: 90, sd: 12)], hits: [hit(.fiveHour, 5, resets: 300)], answeredAt: at(200))
+        #expect(!told.isAtLimit(now: at(201)) && told.fiveHour.resetByAnswer)
+        #expect(LimitText.describe(told.fiveHour, now: at(201)) == "5h: Claude answered since")
+        #expect(LimitText.note(told.fiveHour, now: at(201)) == "5h: Claude answered since the limit")
+        #expect(told.fiveHour.load(now: at(201)) == 0)
+        #expect(LimitSchedule.roomAgainReason(status("work", limits: told, usage: nil)) == "Claude answered in it again.", "extra usage may be paying")
+        #expect(LimitSchedule.roomAgainReason(status("work", limits: Limits(usage: nil), usage: nil)) == "Its usage limit has reset.")
 
         let before = LimitSchedule.blocked([status("work", limits: Limits(samples: [sample(0, fh: 20, sd: 100)]), usage: nil)], now: at(1))
         #expect(LimitSchedule.freed(blockedBefore: before, [status("work", limits: limits, usage: nil)], now: at(3)).map(\.id) == ["work"])
@@ -479,7 +516,7 @@ struct AutoResumeTextTests {
         let now = resets.addingTimeInterval(-3600)
         #expect(
             AutoResumeNote.stillOn(label: "WORK", resetsAt: resets).message(now: now, timeZone: utc, locale: gb)
-                == "Claude WORK will continue this session by itself at 02:12 if it's on screen there, or when you next open this session there within 6 hours of the reset (Auto-continue when limits reset is on there). Baton turns that off once Claude WORK is closed. To stop it sooner, untick that option on the limit message there; that turns auto-continue off for every session of that account in Claude WORK."
+                == "Claude WORK will continue this session by itself at 02:12 if it's on screen there, or when you next open this session there within 6 hours of the reset (Auto-continue when limits reset is on there). Baton turns that off once Claude WORK is closed: right away while the Baton app is running, otherwise when that window is next opened from Baton. To stop it sooner, untick that option on the limit message there; that turns auto-continue off for every session of that account in Claude WORK."
         )
         let later = AutoResumeNote.stillOn(label: "WORK", resetsAt: resets, copied: true).message(now: resets.addingTimeInterval(600), timeZone: utc)
         #expect(later.contains("by itself when you next open this session there, within 6 hours of the reset"))
@@ -492,6 +529,9 @@ struct AutoResumeTextTests {
         #expect(
             AutoResumeOffer(label: "WORK", resetsAt: resets, titles: ["A", "B", "C"]).message(now: now, timeZone: utc, locale: gb).contains(
                 "picks “A”, “B” and “C” up by itself at about 02:12 if they're on screen there"))
+        #expect(
+            AutoResumeOffer(label: "(main)", resetsAt: resets, titles: ["A"]).message(now: resets.addingTimeInterval(-3 * 3600), timeZone: utc, locale: gb)
+                .hasPrefix("Claude (main) resets tomorrow at 02:10 and picks “A” up by itself tomorrow at about 02:12 if it's on screen"))
         let off = AutoResumeNote.turnedOff(label: "WORK").message()
         #expect(off.hasPrefix("Claude WORK was closed with Auto-continue when limits reset on") && off.contains("To turn it back on, tick that option"))
         #expect(LimitSchedule.roomAgain(status("work", limits: Limits(usage: nil), usage: nil)) == "Claude WORK has room again")
@@ -503,6 +543,9 @@ struct AutoResumeTextTests {
             ConversationIndex.passedNotice(label: "LAB", opened: 1, copies: 0, newSession: true)
                 == "Baton passed to Claude LAB: opened 1 session there, and started a new session.")
         #expect(ConversationIndex.passedNotice(label: "LAB", opened: 4, copies: 2, newSession: false).hasSuffix("4 sessions there, 2 as copies."))
+        #expect(
+            ConversationIndex.passedNotice(label: "(main)", opened: 0, copies: 0, newSession: true)
+                == "Baton passed to Claude (main): started a new session there.", "every session was left to its own window")
     }
 
     @Test func theOfferComesOnlyWithinFifteenMinutesOfAnArmedEntryInAnOpenWindow() {
@@ -577,5 +620,57 @@ struct BindingLimitRankingTests {
             [LimitTracker.LiveProcess(pid: 7, session: session, startedAt: Date(), version: nil, cwd: "/repo", hostSessionID: nil, executable: engine)]
         }
         #expect(throws: ProfileError.sameWindow("WORK")) { try manager.plan([running], in: "work", mode: .fork) }
+    }
+}
+
+@Suite("Waiting for a window that picks sessions up itself")
+struct WaitSplitTests {
+    /// Upper-case ids, as a card or a listing may give them; the offer keeps its ids in lower case.
+    let sessions = (1...6).map {
+        Conversation(
+            kind: .code, sessionID: "AAAAAAA\($0)-BBBB-CCCC-DDDD-EEEEEEEEEEEE", title: "S\($0)", folders: ["/repo"], lastActivity: base,
+            transcript: URL(fileURLWithPath: "/x"))
+    }
+
+    func offer(_ picked: [Conversation]) -> AutoResumeOffer {
+        AutoResumeOffer(label: "WORK", resetsAt: at(10), sessions: Set(picked.map(\.sessionID)), titles: picked.map(\.title))
+    }
+
+    @Test func onlyTheSessionsItPicksUpAreLeftOut() {
+        let one = ConversationIndex.splitForWait(sessions, offer: offer([sessions[2]]), alsoNewSession: false)
+        #expect(one.continuing.map(\.title) == ["S1", "S2", "S4", "S5", "S6"] && one.leftOut.map(\.title) == ["S3"] && !one.stop)
+        let all = ConversationIndex.splitForWait(sessions, offer: offer(sessions), alsoNewSession: false)
+        #expect(all.continuing.isEmpty && all.leftOut.count == 6 && all.stop, "nothing goes ahead: only the offer to wait (the CLI exits 3)")
+        let allAndNew = ConversationIndex.splitForWait(sessions, offer: offer(sessions), alsoNewSession: true)
+        #expect(allAndNew.continuing.isEmpty && allAndNew.leftOut.count == 6 && !allAndNew.stop, "the new session still starts (exit 0)")
+        let none = ConversationIndex.splitForWait(sessions, offer: nil, alsoNewSession: false)
+        #expect(none.continuing.count == 6 && none.leftOut.isEmpty && !none.stop)
+    }
+}
+
+@Suite("Naming windows and explaining reset times")
+struct WindowWordingTests {
+    @Test func theMainWindowIsClaudeMainInWhatBatonSays() throws {
+        let box = try Sandbox()
+        let manager = ProfileManager(paths: box.paths)
+        try manager.registry.save([Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")])
+        #expect(manager.displayLabel(of: "main") == "(main)" && manager.displayLabel(of: "work") == "WORK")
+        #expect(manager.label(of: "main") == "MAIN", "the label itself stays, as on the badge and in reports")
+        #expect(throws: ProfileError.notSignedIn("(main)")) { try manager.plan([], in: "main") }
+        #expect(ProfileError.notSignedIn("(main)").localizedDescription.hasPrefix("Sign in to Claude (main) first"))
+        #expect(status("main", limits: Limits(usage: nil), usage: nil).displayLabel == "(main)")
+    }
+
+    /// A limit reached before Baton was watching has no reset time; the tooltip says why even with no note.
+    @Test func theTooltipExplainsAMissingResetTime() {
+        let reached = Limits(samples: [sample(0, fh: 100, sd: 40)])
+        let open = status("work", limits: reached, usage: Usage(fiveHour: 100, week: 40, sampledAt: at(0)))
+        #expect(open.limits.states.compactMap { LimitText.note($0, now: at(1)) }.isEmpty, "no note beside the meters")
+        #expect(LimitText.columnHelp(open, now: at(1)).contains("They appear for limits reached while Baton is running"))
+        let calm = status("work", limits: Limits(samples: [sample(0, fh: 10, sd: 40)]), usage: Usage(fiveHour: 10, week: 40, sampledAt: at(0)))
+        #expect(LimitText.columnHelp(calm, now: at(1)).isEmpty)
+        var closed = open
+        closed.isRunning = false
+        #expect(LimitText.columnHelp(closed, now: at(1)).hasSuffix("Open it to check: Claude records a new sample about 9 s after the window starts."))
     }
 }

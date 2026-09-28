@@ -62,7 +62,11 @@ struct ContinueWorkSheet: View {
             "Work in \(folders) continues only in \(allowed.accounts.sorted().joined(separator: " or ")), and no window is signed in with it. Add that account with “Add Subscription”, or change the rule with `baton rule`."
     }
 
-    private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.label ?? "" }
+    /// What follows "Claude " for the chosen window: "(main)" or its label; empty while none is chosen.
+    private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.displayLabel ?? "" }
+
+    /// The chosen window on a button: "Claude (main)" or its label.
+    private var destinationButton: String { form.destination.isEmpty ? "" : model.buttonLabel(of: form.destination) }
 
     private var forks: Bool { selected.map { form.mode.forks($0) } ?? false }
 
@@ -101,7 +105,7 @@ struct ContinueWorkSheet: View {
 
             List(selection: $form.selection) {
                 ForEach(filtered) { conversation in
-                    ConversationRow(conversation: conversation, owner: conversation.ownerID.map(model.label(of:)))
+                    ConversationRow(conversation: conversation, owner: conversation.ownerID.map(model.buttonLabel(of:)))
                         .tag(conversation.id)
                 }
             }
@@ -198,7 +202,7 @@ struct ContinueWorkSheet: View {
                     .help(folderBatch.map(\.title).joined(separator: "\n"))
                     Toggle("Also start a new session there", isOn: $form.alsoNewSession).toggleStyle(.checkbox)
                     Spacer()
-                    Button("Continue All in \(destinationLabel.isEmpty ? "…" : destinationLabel)") { goAll() }
+                    Button("Continue All in \(destinationButton.isEmpty ? "…" : destinationButton)") { goAll() }
                         .disabled(form.working || form.destination.isEmpty || batchNeedsStop || !batchAllowed)
                         .help(
                             !batchAllowed && !form.destination.isEmpty
@@ -274,7 +278,7 @@ struct ContinueWorkSheet: View {
 
     private var primaryTitle: String {
         if form.working { return "Opening…" }
-        let to = destinationLabel.isEmpty ? "" : " in \(destinationLabel)"
+        let to = destinationButton.isEmpty ? "" : " in \(destinationButton)"
         guard let selected, selected.kind != .cowork else { return "Continue" + to }
         if forks { return "Continue as a Copy" + to }
         if selected.mayStillWrite() { return "Continue Anyway" }
@@ -299,7 +303,7 @@ struct ContinueWorkSheet: View {
     }
 
     private func destinationTitle(_ status: ProfileStatus) -> String {
-        let name = status.isMain ? "Claude (main)" : "Claude \(status.label)"
+        let name = "Claude \(status.displayLabel)"
         if model.isAtLimit(status) {
             return name + " · " + LimitText.atLimit(status.limits) + (LimitText.checkHint(status) == nil ? "" : " (open it to check)")
         }
@@ -309,7 +313,7 @@ struct ContinueWorkSheet: View {
 
     private func explanation(_ conversation: Conversation) -> String {
         let to = "Claude \(destinationLabel.isEmpty ? "…" : destinationLabel)"
-        let from = "Claude \(conversation.ownerID.map(model.label(of:)) ?? "")"
+        let from = "Claude \(conversation.ownerID.map(model.displayLabel(of:)) ?? "")"
         let why =
             form.mode == .auto && conversation.kind == .code
             ? (conversation.hasLiveProcess ? " It's open in a running Claude Code process." : " It had a message in the last 10 minutes.") : ""
@@ -392,13 +396,14 @@ struct ContinueWorkSheet: View {
             // all of them is there nothing to do but offer to wait.
             var waiting: AutoResumeOffer?
             if !now, let offer = await offer(for: batch, in: target) {
-                guard batch.contains(where: { !offer.sessions.contains($0.sessionID) }) else {
+                let split = ConversationIndex.splitForWait(batch, offer: offer, alsoNewSession: newSession != nil)
+                guard !split.stop else {
                     form.offerForAll = true
                     form.offer = offer
                     form.working = false
                     return
                 }
-                batch.removeAll { offer.sessions.contains($0.sessionID) }
+                batch = split.continuing
                 waiting = offer
             }
             do {

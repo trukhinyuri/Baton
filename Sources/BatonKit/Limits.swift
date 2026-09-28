@@ -42,20 +42,24 @@ public enum UsageHistory {
     }
 
     /// The samples of the organizations the signed-in account uses in this window, when the file says which
-    /// organization each sample is for; every sample when it doesn't. With no organization known, only the samples
-    /// taken since `signedInAt`, when that is known. Samples a previously signed-in account left in the file are never
-    /// taken for this account's.
-    public static func current(_ samples: [UsageSample], organizations: Set<String>, signedInAt: Date? = nil) -> [UsageSample] {
+    /// organization each sample is for; every sample when it doesn't. With no organization of the account known,
+    /// those of the organization Claude sampled last, leaving out `otherAccounts`' organizations: Claude samples the
+    /// signed-in account's usage about 9 s after its window starts, so a previous account's samples are the newest
+    /// only until then.
+    public static func current(_ samples: [UsageSample], organizations: Set<String>, otherAccounts: Set<String> = []) -> [UsageSample] {
         let organizations = Set(organizations.map { $0.lowercased() })
         guard samples.contains(where: { $0.org != nil }) else { return samples }
-        guard !organizations.isEmpty else { return signedInAt.map { since in samples.filter { $0.at >= since } } ?? samples }
-        return samples.filter { $0.org.map(organizations.contains) ?? false }
+        guard organizations.isEmpty else { return samples.filter { $0.org.map(organizations.contains) ?? false } }
+        let others = Set(otherAccounts.map { $0.lowercased() })
+        guard let newest = samples.last(where: { $0.org.map { !others.contains($0) } ?? false })?.org else { return [] }
+        return samples.filter { $0.org == newest }
     }
 
     /// This window's samples for its signed-in account, oldest first: those of the organization Claude shows now
     /// (`DesktopData.scope`); of every organization folder the account has when Claude hasn't said which; and with
-    /// no organization folder yet, only those taken since the sign-in (when `config.json` last changed, which is no
-    /// earlier than the sign-in).
+    /// no organization folder yet, those of the organization sampled last that no other account's folders in this
+    /// window name. (`config.json` changes whenever Claude refreshes its sign-in or quits, so its date can't say when
+    /// the account signed in.)
     public static func samples(in dataDir: URL) -> [UsageSample] {
         guard let data = try? Data(contentsOf: dataDir.appending(path: fileName)) else { return [] }
         let all = samples(from: data)
@@ -67,8 +71,8 @@ public enum UsageHistory {
                 organizations = [String(scope.dropFirst(account.count + 1))]
             }
         }
-        let signedInAt = SyncFolders.modificationDate(dataDir.appending(path: "config.json"))
-        return current(all, organizations: organizations, signedInAt: signedInAt)
+        let others = organizations.isEmpty ? DesktopData.organizationIDs(in: dataDir, otherThan: account) : []
+        return current(all, organizations: organizations, otherAccounts: others)
     }
 
     static func number(_ value: Any?) -> Double? {
@@ -135,9 +139,10 @@ public struct LimitState: Equatable, Sendable {
     public var extraUsage = false
     /// Reached by a sample alone: no limit message or auto-continue entry says so, so no reset time is known.
     public var sampleOnly = false
-
-    /// Below the limit because Claude answered after the last sample at 100%, which still reads 100%.
-    public var resetByAnswer: Bool { reachedAt == nil && reset?.source == .inferred && (percent ?? 0) >= 100 }
+    /// Below the limit because Claude answered in one of the window's sessions after the limit was reached; the
+    /// latest sample still reads what it read before (`reset` is `.inferred`, at that reply). Claude answering shows
+    /// the limit no longer binds, but not why: it may have reset, or extra usage may be paying for it.
+    public var resetByAnswer = false
 
     /// Claude resumes work 90 seconds after a reset; Baton counts a window free from then too.
     public static let grace: TimeInterval = 90
@@ -177,7 +182,6 @@ public struct LimitState: Equatable, Sendable {
         var state = LimitState(kind: kind, percent: latest?.value, sampledAt: latest?.at)
         let latestAt = latest?.at ?? .distantPast
         let lastBelow = values.last(where: { $0.value < 100 })?.at ?? .distantPast
-        let lastFull = values.last(where: { $0.value >= 100 })?.at
         // Before the first sample of this organization the window may have been signed in with another account.
         let since = samples.first?.at ?? .distantPast
         let own = hits.filter { $0.kind == kind && $0.resetsAt > $0.at && $0.at >= since }
@@ -204,12 +208,14 @@ public struct LimitState: Equatable, Sendable {
         let reachedFrom = values.first { $0.at > lastBelow && $0.value >= 100 }?.at ?? .distantFuture
         let extra = values.last { $0.extra != nil && $0.at >= latestAt.addingTimeInterval(-2 * 3600) && $0.at >= reachedFrom }?.extra
         let extraUsage = messages.isEmpty && entries.isEmpty && extra.map { $0 < 100 } == true
-        // Claude answered in a session this window ran after the newest sign of the limit: nothing was binding
-        // then, so the limit was reset. Seen, not estimated.
-        if !extraUsage, let answeredAt, answeredAt > reachedAt,
-            let evidence = ([lastFull] + [own.map(\.at).max()]).compactMap({ $0 }).max(), answeredAt > evidence
-        {
+        // Claude answered in a session this window ran after the newest sign of this reach of the limit, a sample at
+        // 100% or a limit message, both after the last sample below it: nothing was binding then. Seen, not
+        // estimated. An auto-continue entry alone doesn't say when Claude refused, so a reply proves nothing then,
+        // and neither does an older reach's sample or message.
+        let evidence = [values.last { $0.value >= 100 && $0.at > lastBelow }?.at, messages.map(\.at).max()].compactMap { $0 }.max()
+        if !extraUsage, let answeredAt, let evidence, answeredAt > reachedAt, answeredAt > evidence {
             state.reset = LimitReset(at: answeredAt, source: .inferred)
+            state.resetByAnswer = true
             return state
         }
         state.reachedAt = reachedAt
@@ -229,11 +235,12 @@ public struct LimitState: Equatable, Sendable {
         return state
     }
 
-    /// Whether the samples show a reset inside the five-hour window an auto-continue entry belongs to: a sample taken
-    /// more than ten minutes into that window at least five points below the sample before it.
+    /// Whether the samples show a reset inside the five-hour window an auto-continue entry belongs to: two samples
+    /// both taken at least ten minutes into that window and before its reset, the later one at least five points
+    /// lower. A drop whose earlier sample is from before that is the previous window ending, not an early reset.
     static func resetEarly(_ values: [(Date, Int)], entry resetsAt: Date) -> Bool {
-        let start = resetsAt.addingTimeInterval(-LimitKind.fiveHour.window)
-        return drops(in: values).contains { $0.to > start.addingTimeInterval(600) && $0.to < resetsAt }
+        let from = resetsAt.addingTimeInterval(-LimitKind.fiveHour.window + 600)
+        return drops(in: values).contains { $0.from >= from && $0.to < resetsAt }
     }
 
     /// Where a later sample is at least five points lower than the one before: a reset happened in between.
@@ -729,11 +736,28 @@ extension JSONDecoder {
 // MARK: - Text
 
 /// How limits read in the window list, the Continue sheet, the menu and `baton list`. A window at its limit is "at
-/// its limit" everywhere; a reset time is "resets at 02:10", or "resets at about Wed 05:00" when it is an estimate.
+/// its limit" everywhere; a reset time is "resets at 02:10" or "resets tomorrow at 02:10", and "resets Wed at about
+/// 05:00" when it is an estimate.
 public enum LimitText {
-    /// "02:10" on the same day as `now`, "tomorrow 05:00" on the next, "Wed 05:00" otherwise; the time in the style
-    /// of `locale` (12- or 24-hour).
-    public static func time(_ date: Date, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+    /// "at 02:10" on the same day as `now`; "tomorrow at 05:00" or "yesterday at 23:10" on the days next to it; "Wed
+    /// at 05:00" within five days of it; "Tue 6 Oct at 08:00" further off. With `about`, "at about 05:00". The time is
+    /// in the style of `locale` (12- or 24-hour).
+    public static func time(
+        _ date: Date, now: Date = Date(), about: Bool = false, timeZone: TimeZone = .current, locale: Locale = .current
+    ) -> String {
+        let (day, clock) = parts(date, now: now, timeZone: timeZone, locale: locale)
+        let at = about ? "at about \(clock)" : "at \(clock)"
+        return day.map { "\($0) \(at)" } ?? at
+    }
+
+    /// "22:12", "yesterday 22:12", "Mon 22:12": a moment, as in "as of 22:12".
+    public static func stamp(_ date: Date, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        let (day, clock) = parts(date, now: now, timeZone: timeZone, locale: locale)
+        return day.map { "\($0) \(clock)" } ?? clock
+    }
+
+    /// The day of `date` as seen from `now` (`nil` on the same day) and its time of day.
+    static func parts(_ date: Date, now: Date, timeZone: TimeZone, locale: Locale) -> (day: String?, clock: String) {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
         let formatter = DateFormatter()
@@ -741,31 +765,41 @@ public enum LimitText {
         formatter.timeZone = timeZone
         formatter.setLocalizedDateFormatFromTemplate("jmm")
         let clock = formatter.string(from: date)
-        if calendar.isDate(date, inSameDayAs: now) { return clock }
-        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
-            return "tomorrow \(clock)"
-        }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEE"
-        return "\(formatter.string(from: date)) \(clock)"
+        switch days {
+        case 0: return (nil, clock)
+        case 1: return ("tomorrow", clock)
+        case -1: return ("yesterday", clock)
+        case -5...5:
+            formatter.dateFormat = "EEE"
+            return (formatter.string(from: date), clock)
+        default:
+            // Six or more days off, a weekday alone would read as this week's.
+            formatter.dateFormat = "EEE d MMM"
+            return (formatter.string(from: date), clock)
+        }
     }
 
-    /// "resets at 02:10", "resets at about Wed 05:00", "may have reset at about Wed 05:00"; `nil` without a reset time.
+    /// "resets at 02:10", "resets tomorrow at 02:10", "resets Wed at about 05:00", "may have reset at about 05:00";
+    /// `nil` without a reset time.
     public static func reset(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
         guard let reset = state.reset, reset.source != .inferred else { return nil }
-        let when = time(reset.at, now: now, timeZone: timeZone, locale: locale)
-        if reset.source == .exact { return "resets at \(when)" }
-        return reset.at > now ? "resets at about \(when)" : "may have reset at about \(when)"
+        let exact = reset.source == .exact
+        let when = time(reset.at, now: now, about: !exact, timeZone: timeZone, locale: locale)
+        if exact { return "resets \(when)" }
+        return reset.at > now ? "resets \(when)" : "may have reset \(when)"
     }
 
-    /// "5h 40%", "5h 100% · resets at 02:10", "week 100% · resets at about Wed 05:00", "5h reset at 02:10",
-    /// "week reset", "week 100%, extra usage available".
+    /// "5h 40%", "5h 100% · resets at 02:10", "week 100% · resets Wed at about 05:00", "5h reset at 02:10",
+    /// "week reset", "week 100%, extra usage available", "5h: Claude answered since".
     public static func describe(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         let name = state.kind.name
         switch state.phase(now: now) {
         case .below:
+            // Seen, not explained: the limit may have reset, or extra usage may be paying.
+            if state.resetByAnswer { return "\(name): Claude answered since" }
             guard let percent = state.percent else { return "\(name) ?" }
-            if state.resetByAnswer { return "\(name) reset" }
             if state.kind == .fiveHour, let at = state.sampledAt, now.timeIntervalSince(at) > state.kind.window { return "\(name) reset" }
             return "\(name) \(percent)%"
         case .reached:
@@ -773,20 +807,20 @@ public enum LimitText {
             if state.extraUsage { return base + ", extra usage available" }
             return reset(state, now: now, timeZone: timeZone, locale: locale).map { "\(base) · \($0)" } ?? base
         case .reset:
-            return "\(name) reset at \(time(state.reset?.at ?? now, now: now, timeZone: timeZone, locale: locale))"
+            return "\(name) reset \(time(state.reset?.at ?? now, now: now, timeZone: timeZone, locale: locale))"
         case .mayHaveReset:
             // Older than the limit's own window: that window has ended, so it has reset.
             return "\(name) reset"
         }
     }
 
-    /// A short note for the window list beside the meters: "5h resets at 02:10", "week resets at about Wed 05:00",
-    /// "5h reset at 02:10", "week reset", "week at 100%, extra usage available", "5h reset (Claude answered since)";
-    /// `nil` below the limit.
+    /// A short note for the window list beside the meters: "5h resets at 02:10", "week resets Wed at about 05:00",
+    /// "5h reset at 02:10", "week reset", "week at 100%, extra usage available", "5h: Claude answered since the
+    /// limit"; `nil` below the limit.
     public static func note(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
         let name = state.kind.name
         switch state.phase(now: now) {
-        case .below: return state.resetByAnswer ? "\(name) reset (Claude answered since)" : nil
+        case .below: return state.resetByAnswer ? "\(name): Claude answered since the limit" : nil
         case .reached:
             if state.extraUsage { return "\(name) at 100%, extra usage available" }
             return reset(state, now: now, timeZone: timeZone, locale: locale).map { "\(name) \($0)" }
@@ -807,7 +841,7 @@ public enum LimitText {
         return line
     }
 
-    /// For a window at its limit: "resets at 02:10" or "resets at about Wed 05:00", by the limit that holds it back
+    /// For a window at its limit: "resets at 02:10" or "resets Wed at about 05:00", by the limit that holds it back
     /// longest; `nil` when that reset isn't known.
     public static func bindingReset(_ limits: Limits, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
         limits.binding(now: now).flatMap { reset($0, now: now, timeZone: timeZone, locale: locale) }
@@ -816,11 +850,12 @@ public enum LimitText {
     /// For a window held back by a sample alone: "as of 22:12", the time of that sample; `nil` otherwise.
     public static func asOf(_ limits: Limits, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
         guard let binding = limits.binding(now: now), binding.sampleOnly, binding.reset == nil, let at = binding.reachedAt else { return nil }
-        return "as of \(time(at, now: now, timeZone: timeZone, locale: locale))"
+        return "as of \(stamp(at, now: now, timeZone: timeZone, locale: locale))"
     }
 
-    /// "at its limit, resets at 02:10", "at its limit, resets at about Wed 05:00", "at its limit as of 22:12" or
-    /// "at its limit": the one phrase for a window at its limit in the menu, the Continue sheet and `baton list`.
+    /// "at its limit, resets at 02:10", "at its limit, resets Wed at about 05:00", "at its limit as of 22:12" or
+    /// "at its limit": the one phrase for a window at its limit in the menu, the Continue sheet, the banner and the
+    /// line `baton list` prints under such a window.
     public static func atLimit(_ limits: Limits, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         if let reset = bindingReset(limits, now: now, timeZone: timeZone, locale: locale) { return "at its limit, \(reset)" }
         return asOf(limits, now: now, timeZone: timeZone, locale: locale).map { "at its limit \($0)" } ?? "at its limit"
@@ -831,7 +866,25 @@ public enum LimitText {
         guard !status.isRunning, status.isSignedIn, status.limits.isAtLimit(now: now), status.limits.binding(now: now)?.sampleOnly == true,
             status.limits.binding(now: now)?.reset == nil
         else { return nil }
-        return "Open it to check: Claude records usage only while a window is open, about 9 s after it starts."
+        return "Open it to check: Claude records a new sample about 9 s after the window starts."
+    }
+
+    /// The tooltip of a window's usage in the window list: where reset times come from and why one may be missing,
+    /// whenever a limit is reached or a note names a reset; that the sample may be behind; how to check a closed
+    /// window. Empty when there is nothing to add.
+    public static func columnHelp(_ status: ProfileStatus, now: Date = Date()) -> String {
+        let states = status.limits.states
+        var lines: [String] = []
+        if states.contains(where: { $0.phase(now: now) == .reached || note($0, now: now) != nil }) {
+            lines.append(
+                "Reset times come from Claude: its limit messages and Auto-continue when limits reset. They appear for limits "
+                    + "reached while Baton is running; one reached before that shows no time.")
+        }
+        if let usage = status.usage, !usage.isFresh(now: now) {
+            lines.append("Claude records usage only while this window is open and in use, so this sample can be behind.")
+        }
+        if let hint = checkHint(status, now: now) { lines.append(hint) }
+        return lines.joined(separator: " ")
     }
 }
 
@@ -865,7 +918,11 @@ public enum LimitSchedule {
     }
 
     /// "Claude WORK has room again", or "Claude (main) has room again".
-    public static func roomAgain(_ status: ProfileStatus) -> String {
-        "\(status.isMain ? "Claude (main)" : "Claude \(status.label)") has room again"
+    public static func roomAgain(_ status: ProfileStatus) -> String { "Claude \(status.displayLabel) has room again" }
+
+    /// Why: a reset Claude named, or a lower sample, is a reset; a reply in one of its sessions is only seen, since
+    /// extra usage may be paying for it.
+    public static func roomAgainReason(_ status: ProfileStatus) -> String {
+        status.limits.states.contains(where: \.resetByAnswer) ? "Claude answered in it again." : "Its usage limit has reset."
     }
 }

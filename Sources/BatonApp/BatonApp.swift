@@ -106,7 +106,7 @@ struct MenuBarContent: View {
     }
 
     private func menuTitle(for status: ProfileStatus) -> String {
-        let name = status.isMain ? "Claude (main)" : "Claude \(status.label)"
+        let name = "Claude \(status.displayLabel)"
         let who = status.email ?? (status.isSignedIn ? "signed in" : "not signed in")
         var usage = ""
         if status.isSignedIn, status.limits.isAtLimit() {

@@ -319,8 +319,9 @@ public enum AutoResumeNote: Equatable, Sendable {
     case turnedOff(label: String)
     /// A dry run: continuing would turn it off there.
     case willTurnOff(label: String)
-    /// That window is open, so Baton leaves it for now and turns it off once that window is closed. `copied`: the
-    /// destination got a copy, so archiving the original there loses nothing.
+    /// That window is open, so Baton leaves it for now and turns it off once that window is closed: the app when it
+    /// sees it closed, or `ProfileManager.open` before it starts that window again. `copied`: the destination got a
+    /// copy, so archiving the original there loses nothing.
     case stillOn(label: String, resetsAt: Date, copied: Bool = false)
     case couldNotTurnOff(label: String, reason: String, copied: Bool = false)
 
@@ -343,11 +344,12 @@ public enum AutoResumeNote: Equatable, Sendable {
             let firesAt = resetsAt.addingTimeInterval(LimitState.grace)
             let when =
                 firesAt > now
-                ? "at \(LimitText.time(AutoResumeOffer.pickUp(resetsAt), now: now, timeZone: timeZone, locale: locale)) if it's on screen there, "
+                ? "\(LimitText.time(AutoResumeOffer.pickUp(resetsAt), now: now, timeZone: timeZone, locale: locale)) if it's on screen there, "
                     + "or when you next open this session there within 6 hours of the reset"
                 : "when you next open this session there, within 6 hours of the reset"
             return "Claude \(label) will continue this session by itself \(when) (Auto-continue when limits reset is on there). "
-                + "Baton turns that off once Claude \(label) is closed. " + Self.stopAdvice(label: label, copied: copied)
+                + "Baton turns that off once Claude \(label) is closed: right away while the Baton app is running, otherwise "
+                + "when that window is next opened from Baton. " + Self.stopAdvice(label: label, copied: copied)
         case .couldNotTurnOff(let label, let reason, let copied):
             return "Claude \(label) may continue this session by itself when it next opens: Auto-continue when limits reset "
                 + "couldn't be turned off there (\(reason)). " + Self.stopAdvice(label: label, copied: copied)
@@ -394,8 +396,8 @@ public struct AutoResumeOffer: Equatable, Sendable {
 
     public func message(now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
         let several = titles.count > 1
-        return "Claude \(label) resets at \(LimitText.time(resetsAt, now: now, timeZone: timeZone, locale: locale)) and picks \(names) up by itself "
-            + "at about \(LimitText.time(Self.pickUp(resetsAt), now: now, timeZone: timeZone, locale: locale)) "
+        return "Claude \(label) resets \(LimitText.time(resetsAt, now: now, timeZone: timeZone, locale: locale)) and picks \(names) up by itself "
+            + "\(LimitText.time(Self.pickUp(resetsAt), now: now, about: true, timeZone: timeZone, locale: locale)) "
             + (several
                 ? "if they're on screen there, or when you next open them there within 6 hours."
                 : "if it's on screen there, or when you next open it there within 6 hours.")
@@ -454,7 +456,7 @@ extension ProfileManager {
                 isOpen = open
                 result[session, default: []].append(
                     AutoResumeMatch(
-                        window: window.id, label: window.id == "main" ? "(main)" : label(of: window.id), account: account, session: session,
+                        window: window.id, label: displayLabel(of: window.id), account: account, session: session,
                         entry: entry, isOpen: open))
             }
         }
@@ -524,6 +526,6 @@ extension ProfileManager {
     /// - Returns: the labels ("WORK", "(main)") of the windows where it turned one off.
     @discardableResult
     public func applyPendingAutoResume(now: Date = Date()) -> [String] {
-        autoResume.applyPending(now: now).map { $0 == "main" ? "(main)" : label(of: $0) }
+        autoResume.applyPending(now: now).map(displayLabel(of:))
     }
 }
