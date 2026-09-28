@@ -449,12 +449,22 @@ public final class ProfileManager: @unchecked Sendable {
             try prepare(&plans[i])
             links.append(ClaudeLink.resume(plans[i].sessionID))
         }
-        if let folder { links.append(ClaudeLink.newCodeSession(folder: folder)) }
+        let newSession = folder.map { ClaudeLink.newCodeSession(folder: $0) }
+        guard !links.isEmpty else {
+            try await openWindow(destination, links: newSession.map { [$0] } ?? [])
+            return plans
+        }
         let cards = cardFolder(in: dataDir(of: destination))
         let known = cards.map { SessionCards.sessions(in: $0) } ?? []
         let started = Date()
         try await openWindow(destination, links: links)
         await confirmImported(&plans, known: known, cards: cards, since: started)
+        // Claude shows each session once it has imported it, which can take seconds for a long one, and that
+        // replaces whatever the window showed. The new session goes last, so it is what stays on screen.
+        if let newSession {
+            try? await Task.sleep(for: .seconds(1))
+            try await openWindow(destination, links: [newSession])
+        }
         return plans
     }
 
