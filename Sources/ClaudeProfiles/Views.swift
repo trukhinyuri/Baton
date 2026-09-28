@@ -40,7 +40,7 @@ struct UsageMeter: View {
         HStack(spacing: 8) {
             Text(title)
                 .foregroundStyle(.secondary)
-                .frame(width: 48, alignment: .leading)
+                .frame(minWidth: 48, alignment: .leading)
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule().fill(.quaternary)
@@ -52,7 +52,7 @@ struct UsageMeter: View {
             Text(isStale ? "reset" : percent.map { "\($0)%" } ?? "–")
                 .monospacedDigit()
                 .foregroundStyle(isStale ? .secondary : .primary)
-                .frame(width: 36, alignment: .trailing)
+                .frame(minWidth: 36, alignment: .trailing)
         }
         .font(.caption)
         .accessibilityElement(children: .ignore)
@@ -100,6 +100,7 @@ struct ProfileRow: View {
     var body: some View {
         HStack(spacing: 14) {
             ProfileBadge(label: status.label, color: status.color)
+                .accessibilityLabel("Dock label \(status.label)")
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -121,6 +122,7 @@ struct ProfileRow: View {
                     Circle()
                         .fill(status.isRunning ? Color.green : Color.secondary.opacity(0.35))
                         .frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
                     Text(subtitle)
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -143,11 +145,12 @@ struct ProfileRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             UsageColumn(status: status)
-                .frame(width: 210)
+                .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
 
             HStack(spacing: 4) {
                 Button(status.isRunning ? "Show" : "Open") { model.open(status) }
-                    .frame(width: 64)
+                    .frame(minWidth: 64)
+                    .accessibilityLabel("\(status.isRunning ? "Show" : "Open") \(status.isMain ? "Claude" : "Claude \(status.label)")")
                 Menu {
                     if !status.isMain {
                         Button("Show Launcher in Finder") { model.revealLauncher(status) }
@@ -162,7 +165,7 @@ struct ProfileRow: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .accessibilityLabel("More actions")
+                .accessibilityLabel("More actions for \(status.isMain ? "Claude" : "Claude \(status.label)")")
             }
         }
         .padding(.horizontal, 16)
@@ -178,7 +181,8 @@ struct EmptyHint: View {
             Image(systemName: "plus.rectangle.on.rectangle")
                 .font(.system(size: 26))
                 .foregroundStyle(.secondary)
-                .frame(width: 40)
+                .frame(minWidth: 40)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Add your next subscription").font(.body.weight(.semibold))
                 Text("Each one gets its own Claude window and a labeled Dock icon, so you always know which account you are in. Your Claude Code sessions show up in every window, so you can pick up any of them in whichever subscription you choose.")
@@ -202,7 +206,7 @@ struct LimitBanner: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.orange)
+            Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.orange).accessibilityHidden(true)
             Text("\(tired.isMain ? "Claude (main)" : "Claude \(tired.label)") has reached its usage limit.")
                 .font(.callout.weight(.medium))
             Spacer()
@@ -274,7 +278,7 @@ struct ContentView: View {
             Button {
                 model.isAdding = true
             } label: {
-                Label("Add Subscription", systemImage: "plus")
+                Label("Add Subscription…", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
@@ -293,7 +297,7 @@ struct ContentView: View {
             } else if let notice = model.notice {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 Text(notice).lineLimit(2)
-            } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning {
+            } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning ?? model.installWarning {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 Text(problem).lineLimit(2).textSelection(.enabled)
             } else {
@@ -307,7 +311,7 @@ struct ContentView: View {
                 }
             }
             Spacer()
-            Button("Check sessions") { model.checkSessions() }
+            Button("Check sessions…") { model.checkSessions() }
             Link(destination: URL(string: "https://github.com/trukhinyuri/ClaudeProfiles#staying-within-anthropics-terms")!) {
                 Label("Fair use", systemImage: "checkmark.shield")
             }

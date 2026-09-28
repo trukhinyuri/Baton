@@ -35,7 +35,7 @@ struct AddProfileSheet: View {
             HStack(alignment: .top, spacing: 16) {
                 DockIconPreview(label: form.label.isEmpty ? "NEW" : form.label.uppercased(), color: form.color)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Add a Subscription").font(.title3.weight(.semibold))
+                    Text("Add Subscription").font(.title3.weight(.semibold))
                     Text("A new Claude window opens with its own Dock icon. Sign in there with this account, with Google or with email.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -48,6 +48,7 @@ struct AddProfileSheet: View {
                     Text("Email").gridColumnAlignment(.trailing)
                     TextField("you@example.com", text: $form.email)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Email")
                         .textContentType(.emailAddress)
                         .onSubmit(create)
                 }
@@ -56,7 +57,8 @@ struct AddProfileSheet: View {
                     HStack {
                         TextField("WORK", text: Binding(get: { form.label }, set: { form.label = String($0.uppercased().prefix(Profile.maxLabelLength)); form.labelEdited = true }))
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 120)
+                            .frame(minWidth: 100, maxWidth: 140)
+                            .accessibilityLabel("Dock label")
                         if form.labelIsTaken {
                             Text("Already used").font(.caption).foregroundStyle(.orange)
                         }
@@ -74,7 +76,9 @@ struct AddProfileSheet: View {
                                     .overlay(Circle().strokeBorder(Color(hex: hex), lineWidth: form.color == hex ? 1 : 0).padding(-2))
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Color \(hex)")
+                            .accessibilityLabel(Self.colorName(hex))
+                            .accessibilityAddTraits(form.color == hex ? .isSelected : [])
+                            .help(Self.colorName(hex))
                         }
                     }
                 }
@@ -96,7 +100,13 @@ struct AddProfileSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 480)
+        .frame(minWidth: 440, idealWidth: 480)
+    }
+
+    /// Names VoiceOver reads for `Profile.palette`, in the same order.
+    static func colorName(_ hex: String) -> String {
+        let names = ["Blue", "Green", "Violet", "Teal", "Pink", "Orange", "Lime", "Purple"]
+        return Profile.palette.firstIndex(of: hex).map { names[$0] } ?? "Color \(hex)"
     }
 
     private func create() {

@@ -82,7 +82,7 @@ struct ContinueWorkSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Continue work in another subscription").font(.title2.bold())
+            Text("Continue work").font(.title2.bold())
             Text("Choose what to continue and where. The other window opens it for you; nothing is sent on your behalf.")
                 .font(.callout).foregroundStyle(.secondary)
 
@@ -123,7 +123,7 @@ struct ContinueWorkSheet: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 280)
+                    .fixedSize()
                     .help("Automatic continues sessions still open in a running Claude Code process and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session.")
                 }
             }
@@ -188,7 +188,7 @@ struct ContinueWorkSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 780, height: 590)
+        .frame(minWidth: 700, idealWidth: 780, minHeight: 540, idealHeight: 590)
         .onAppear {
             model.loadConversations()
             chooseDefaults()
@@ -351,7 +351,7 @@ struct ConversationRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18)
+            Image(systemName: icon).foregroundStyle(.secondary).frame(minWidth: 18).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(conversation.title).lineLimit(1).truncationMode(.tail)
                 Text(details).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
@@ -369,7 +369,7 @@ struct DiagnosticsSheet: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Session readiness").font(.title2.bold())
+            Text("Check sessions").font(.title2.bold())
             Text("Local inventory only. Cloud Projects stay in their account, and Cowork history stays in its original account or local profile. A copied Cowork card does not prove its history can open. This check does not verify cloud access or change settings.")
                 .font(.callout).foregroundStyle(.secondary)
             ScrollView {
@@ -385,6 +385,6 @@ struct DiagnosticsSheet: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
-        }.padding(22).frame(width: 700, height: 510)
+        }.padding(22).frame(minWidth: 600, idealWidth: 700, minHeight: 420, idealHeight: 510)
     }
 }

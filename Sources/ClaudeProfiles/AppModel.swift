@@ -23,6 +23,8 @@ final class AppModel: ObservableObject {
     @Published var diagnostics: [Diagnostics.Entry] = []
     @Published private(set) var setupWarning: String?
     @Published var pendingRemoval: ProfileStatus?
+    /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
+    @Published private(set) var installWarning: String?
     /// Which accounts may continue work in which folders; `nil` if the rules file can't be read.
     @Published private(set) var folderRules: [FolderRule]? = []
 
@@ -35,6 +37,7 @@ final class AppModel: ObservableObject {
     private var launchObserver: NSObjectProtocol?
 
     init() {
+        if !isDemo { Self.handOverToRunningCopy() }
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/claude-profiles")
         manager = ProfileManager(cliPath: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil)
         reload()
@@ -56,6 +59,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.syncNow() }
         }
         Task.detached { [manager] in try? manager.refresh() }
+        installWarning = AppInstances.duplicateWarning(AppInstances.installedCopies())
         syncNow()
         launchObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
@@ -66,6 +70,15 @@ final class AppModel: ObservableObject {
         }
         // macOS reopens windows at login by starting each app copy without its arguments, possibly before this app.
         manager.recentlyStartedWithoutDataDir(within: 120).forEach(reopenIfStartedWithoutProfile)
+    }
+
+    /// Only one copy may sync at a time: a second one brings the first forward and quits before touching anything.
+    private static func handOverToRunningCopy() {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: AppInstances.bundleID)
+        guard let other = AppInstances.otherInstance(running: running.map(\.processIdentifier), me: ProcessInfo.processInfo.processIdentifier),
+              let app = running.first(where: { $0.processIdentifier == other }) else { return }
+        app.activate()
+        exit(0)
     }
 
     var profiles: [ProfileStatus] { statuses }

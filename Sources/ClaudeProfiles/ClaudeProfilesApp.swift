@@ -19,7 +19,7 @@ struct ClaudeProfilesApp: App {
             CommandGroup(after: .newItem) {
                 Button("Share Sessions Now") { model.syncNow() }.keyboardShortcut("r")
                 Button("Continue work…") { model.isContinuing = true }
-                Button("Check sessions") { model.checkSessions() }
+                Button("Check sessions…") { model.checkSessions() }
             }
         }
 
@@ -27,6 +27,7 @@ struct ClaudeProfilesApp: App {
             MenuBarContent(model: model)
         } label: {
             Image(systemName: "square.stack.3d.up.fill")
+                .accessibilityLabel("Claude Profiles")
         }
     }
 }
