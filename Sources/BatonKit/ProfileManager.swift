@@ -21,6 +21,8 @@ public enum ProfileError: LocalizedError, Equatable {
     case profileOpen(String)
     /// Continuing the same session while its window may still write to it would give it two writers.
     case mayStillBeWritten([String])
+    /// Demo mode (`BATON_DEMO=1`) shows sample data and changes nothing on this Mac.
+    case readOnly
 
     public var errorDescription: String? {
         switch self {
@@ -49,6 +51,7 @@ public enum ProfileError: LocalizedError, Equatable {
             titles.map { "“\($0)”" }.joined(separator: ", ")
                 + (titles.count == 1 ? " may still be written to in its window. " : " may still be written to in their windows. ")
                 + "Continue as a copy, or close it there first and continue anyway."
+        case .readOnly: "Demo mode shows sample data and changes nothing on this Mac."
         }
     }
 }
@@ -111,12 +114,20 @@ public final class ProfileManager: @unchecked Sendable {
     private var openWarning: String?
     /// Opening can succeed using the profile's saved settings even if portable setup could not be refreshed.
     public var lastOpenWarning: String? { lock.withLock { openWarning } }
+    /// Demo mode: every call that would change something on this Mac throws `ProfileError.readOnly` instead.
+    public let isReadOnly: Bool
 
-    public init(paths: Paths = .standard, cliPath: URL? = nil) {
+    public init(paths: Paths = .standard, cliPath: URL? = nil, readOnly: Bool = false) {
         self.paths = paths
         self.registry = ProfileRegistry(paths: paths)
         self.signInRouting = SignInRouting(paths: paths)
         self.cliPath = cliPath
+        self.isReadOnly = readOnly
+    }
+
+    /// Throws in demo mode, before anything is changed.
+    func ensureWritable() throws {
+        if isReadOnly { throw ProfileError.readOnly }
     }
 
     /// Profiles from the registry; empty if it is missing or damaged (see `registryError`).
@@ -182,6 +193,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// sign-in, and says when Claude Desktop is missing or outside the tested versions.
     /// - Returns: warnings to show; empty when all is well.
     public func startUpChecks() -> [String] {
+        guard !isReadOnly else { return [] }
         guard fm.fileExists(atPath: paths.claudeApp.path) else {
             return ["Claude Desktop wasn't found in Applications. Install it, then open Baton again."]
         }
@@ -266,6 +278,7 @@ public final class ProfileManager: @unchecked Sendable {
 
     @discardableResult
     public func create(label rawLabel: String, email rawEmail: String?, color: String? = nil) throws -> Profile {
+        try ensureWritable()
         guard fm.fileExists(atPath: paths.claudeApp.path) else { throw ProfileError.claudeNotInstalled(paths.claudeApp.path) }
         let label = rawLabel.trimmingCharacters(in: .whitespaces).uppercased()
         guard Profile.isValidLabel(label) else { throw ProfileError.invalidLabel }
@@ -304,6 +317,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// Turns "keep the permission mode when continuing here" on or off for one profile. Off by default: a
     /// mode chosen under one account is not silently granted in another unless the owner opts in.
     public func setCarryPermissionMode(_ enabled: Bool, for id: String) throws {
+        try ensureWritable()
         lock.lock(); defer { lock.unlock() }
         try FileLock.withLock(registryLock, blocking: true) {
             var all = try registry.load()
@@ -319,6 +333,8 @@ public final class ProfileManager: @unchecked Sendable {
     var appBuilder: (@Sendable (Profile) throws -> Void)?
     /// Whether the profile's app copy is running; tests replace it.
     var isProfileRunning: (@Sendable (String) -> Bool)?
+    /// Signs and registers a launcher after it is written; tests replace it so nothing reaches Launch Services.
+    var launcherRegistrar: (@Sendable (URL) -> Void)?
 
     // MARK: Open
 
@@ -331,6 +347,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// Brings the profile's window forward, starting it first if needed, and hands it `links` in one go.
     /// Handing them over one by one while the window is still starting could start a second copy of it.
     public func open(_ id: String, links: [URL]) async throws {
+        try ensureWritable()
         lock.withLock { openWarning = nil }
         guard let profile = profiles.first(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         let engine = paths.engine(for: profile.id)
@@ -420,6 +437,7 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     public func openMain(links: [URL]) async throws {
+        try ensureWritable()
         lock.withLock { openWarning = nil }
         if runningClaudes().contains(where: {
             $0.uses(dataDir: paths.mainDataDir, mainDataDir: paths.mainDataDir, bundle: paths.claudeApp)
@@ -471,6 +489,7 @@ public final class ProfileManager: @unchecked Sendable {
         _ conversation: Conversation, in destination: String,
         mode: ContinueMode = .auto, anyway: Bool = false
     ) async throws -> ContinueResult {
+        try ensureWritable()
         guard conversation.kind == .cowork else {
             return .openedSession(try await continueAll([conversation], in: destination, mode: mode, anyway: anyway)[0])
         }
@@ -537,6 +556,7 @@ public final class ProfileManager: @unchecked Sendable {
         _ conversations: [Conversation], in destination: String, mode: ContinueMode = .auto,
         newSessionIn folder: String? = nil, anyway: Bool = false, now: Date = Date()
     ) async throws -> [ContinuePlan] {
+        try ensureWritable()
         var plans = try plan(conversations, in: destination, mode: mode, newSessionIn: folder, anyway: anyway, now: now)
         var links: [URL] = []
         var madeThisRun: [(id: String, folder: URL)] = []
@@ -663,6 +683,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// Closed windows change now; open ones when they next start (`pending`).
     @discardableResult
     public func setLocalOnly(_ enabled: Bool, window: String?) throws -> [String: LocalOnly.Status] {
+        try ensureWritable()
         if let window {
             guard window == "main" || profiles.contains(where: { $0.id == window }) else { throw ProfileError.notFound(window) }
         }
@@ -676,7 +697,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// Turns the cloud move lock on or off. Safe to call any time: it only edits `permissions.deny`.
     @discardableResult
     public func setCloudMoveLock(_ enabled: Bool) throws -> CloudMoveLock.Status {
-        try cloudMoveLock.setEnabled(enabled)
+        try ensureWritable()
+        return try cloudMoveLock.setEnabled(enabled)
     }
 
     /// Whether the window of `"main"` or a profile id is running with its own data.
@@ -746,6 +768,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// Claude Code sessions stay available in every other profile. Cowork sessions keep their files in the
     /// profile's data, so the ones started in it go to the Trash with it and leave the other windows too.
     public func remove(_ id: String) async throws {
+        try ensureWritable()
         guard let profile = profiles.first(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         let engine = paths.engine(for: id).standardizedFileURL
         let running = isProfileRunning?(id) ?? claudeProcesses().contains { $0.bundleURL?.standardizedFileURL == engine }
@@ -766,9 +789,10 @@ public final class ProfileManager: @unchecked Sendable {
 
     // MARK: Maintenance
 
-    /// Rebuilds app copies left behind by a Claude Desktop update and launchers that point to a moved CLI.
-    /// Copies that are running are left alone until next launch.
+    /// Rebuilds app copies left behind by a Claude Desktop update and updates launchers that point to a moved CLI,
+    /// in place. Copies that are running are left alone until next launch.
     public func refresh() throws {
+        try ensureWritable()
         let running = runningBundlePaths()
         for profile in profiles {
             let engine = paths.engine(for: profile.id)
@@ -789,7 +813,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// - Returns: `nil` if another sync (from the app or the CLI) is already running.
     @discardableResult
     public func syncSessions(dryRun: Bool = false) throws -> SyncReport? {
-        try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: false) {
+        try ensureWritable()
+        return try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: false) {
             if !dryRun { createSessionFolders() }
             let propagateDeletions = !isAnyClaudeRunning
             var sync = SessionSync(paths: paths, dataDirs: dataDirs)
@@ -832,6 +857,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// so it started without the shared sessions and the settings kept per account.
     /// A window that doesn't quit within 20 seconds is left alone; it picks everything up on its next start.
     public func finishFirstSignIn(_ id: String) async throws {
+        try ensureWritable()
         guard profiles.contains(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         _ = try? syncSessions()
         let engine = paths.engine(for: id).standardizedFileURL
@@ -896,9 +922,11 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     /// A tiny app bundle that opens the profile. It can live in the Dock and is found by Spotlight.
+    ///
+    /// An existing launcher is updated in place and never removed: its bundle folder, which Dock and Finder items
+    /// point to, stays the same folder, and only its script, Info.plist and icon are written again.
     func buildLauncher(for profile: Profile) throws {
         let app = paths.launcher(for: profile)
-        if fm.fileExists(atPath: app.path) { try fm.removeItem(at: app) }
         let contents = app.appending(path: "Contents", directoryHint: .isDirectory)
         try fm.createDirectory(at: contents.appending(path: "MacOS"), withIntermediateDirectories: true)
         try fm.createDirectory(at: contents.appending(path: "Resources"), withIntermediateDirectories: true)
@@ -920,9 +948,38 @@ public final class ProfileManager: @unchecked Sendable {
             "LSUIElement": true,
         ]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
-            .write(to: contents.appending(path: "Info.plist"))
-        Self.run("/usr/bin/codesign", ["--force", "--sign", "-", app.path])
-        Self.run("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", ["-f", app.path])
+            .write(to: contents.appending(path: "Info.plist"), options: .atomic)
+        if let launcherRegistrar { launcherRegistrar(app) } else { Self.signAndRegister(app) }
+    }
+
+    /// Signs a launcher ad hoc again after its files changed and tells Launch Services it changed.
+    static func signAndRegister(_ app: URL) {
+        run("/usr/bin/codesign", ["--force", "--sign", "-", app.path])
+        run("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", ["-f", app.path])
+    }
+
+    /// Updates every profile's launcher in place, writing `cliPath` into it: after the launchers folder was renamed
+    /// (see `LegacyMigration`), so launchers call `baton` at its new path.
+    /// - Returns: how many were updated, and a plain line for each that couldn't be.
+    public func rewriteLaunchersInPlace() -> (rewritten: Int, problems: [String]) {
+        guard !isReadOnly else { return (0, []) }
+        let all: [Profile]
+        do { all = try registry.load() } catch {
+            return (
+                0, ["Couldn't read the profile list, so the launchers were not updated: \(error.localizedDescription). Run `baton refresh` once it is fixed."]
+            )
+        }
+        var rewritten = 0
+        var problems: [String] = []
+        for profile in all {
+            do {
+                try buildLauncher(for: profile)
+                rewritten += 1
+            } catch {
+                problems.append("Couldn't update the launcher Claude \(profile.label): \(error.localizedDescription). Run `baton refresh` to try again.")
+            }
+        }
+        return (rewritten, problems)
     }
 
     @discardableResult

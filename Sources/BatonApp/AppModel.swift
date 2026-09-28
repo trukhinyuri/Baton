@@ -40,7 +40,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var cloudMoveLockOn = false
 
     let manager: ProfileManager
-    let isDemo = ProcessInfo.processInfo.environment["BATON_DEMO"] == "1"
+    let isDemo = DemoMode.isOn()
     private var refreshTimer: Timer?
     private var syncTimer: Timer?
     /// Profiles whose window was open and not yet signed in at the last check.
@@ -49,11 +49,15 @@ final class AppModel: ObservableObject {
 
     init() {
         if !isDemo { Self.handOverToRunningCopy() }
-        // Before any path is resolved, timer runs, launcher is rebuilt or session is shared: the manager's paths are
-        // whichever folders exist once this is done. Skipped while Baton runs from inside the old launchers folder.
-        let migration = isDemo ? nil : LegacyMigration.run(home: FileManager.default.homeDirectoryForCurrentUser, app: Bundle.main.bundleURL)
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/baton")
-        manager = ProfileManager(cliPath: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil)
+        let cliPath = FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil
+        // Before any path is resolved, timer runs, launcher is rebuilt or session is shared: the manager's paths are
+        // whichever folders exist once this is done. Skipped while Baton runs from inside the old launchers folder,
+        // and in demo mode, which changes nothing.
+        let migration = LegacyMigration.atAppStart(
+            home: FileManager.default.homeDirectoryForCurrentUser, app: Bundle.main.bundleURL, cli: cliPath,
+            variables: ProcessInfo.processInfo.environment)
+        manager = ProfileManager(cliPath: cliPath, readOnly: isDemo)
         reload()
         // Documentation screenshots: BATON_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
         // …_DEMO_SHEET=continue opens "Continue work…", …=report "Report a problem…" and …=status a window's status.
@@ -72,7 +76,10 @@ final class AppModel: ObservableObject {
         // outside the tested range: information for the footer, never a blocking alert.
         var startUp = manager.startUpChecks()
         switch migration {
-        case .migrated(let moved)?: show(notice: LegacyMigration.message(for: .migrated(moved), home: manager.paths.home))
+        case .migrated(let moved)? where moved.problems.isEmpty:
+            show(notice: LegacyMigration.message(for: .migrated(moved), home: manager.paths.home))
+        // A rename that left something undone is a warning, not a success notice.
+        case .migrated(let moved)?: startUp.append(LegacyMigration.message(for: .migrated(moved), home: manager.paths.home))
         case .failed(let message)?: startUp.append(message)
         default: break  // kept or both exist: the status panel and `baton doctor` say why
         }
@@ -99,11 +106,22 @@ final class AppModel: ObservableObject {
     }
 
     /// Only one copy may sync at a time: a second one brings the first forward and quits before touching anything.
+    /// An outdated copy (Claude Profiles.app, one in the Trash or an older version) is quit instead, and this one
+    /// keeps starting: handing over to it would keep the old app running after an upgrade.
     private static func handOverToRunningCopy() {
-        let running = NSRunningApplication.runningApplications(withBundleIdentifier: AppInstances.bundleID)
-        guard let other = AppInstances.otherInstance(running: running.map(\.processIdentifier), me: ProcessInfo.processInfo.processIdentifier),
-            let app = running.first(where: { $0.processIdentifier == other })
-        else { return }
+        let me = ProcessInfo.processInfo.processIdentifier
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: AppInstances.bundleID).filter { $0.processIdentifier != me }
+        guard !running.isEmpty else { return }
+        let copies = running.map {
+            AppInstances.RunningCopy(pid: $0.processIdentifier, bundle: $0.bundleURL, version: $0.bundleURL.flatMap(AppInstances.version(of:)))
+        }
+        let decision = AppInstances.handover(others: copies, currentVersion: BuildInfo.current.version)
+        let outdated = running.filter { decision.terminate.contains($0.processIdentifier) }
+        for app in outdated { app.terminate() }
+        // Up to 5 seconds for them to quit; one that doesn't is left to its own quit and never handed over to.
+        let deadline = Date().addingTimeInterval(5)
+        while outdated.contains(where: { !$0.isTerminated }), Date() < deadline { usleep(100_000) }
+        guard let other = decision.handOverTo, let app = running.first(where: { $0.processIdentifier == other }) else { return }
         app.activate()
         exit(0)
     }
@@ -148,6 +166,7 @@ final class AppModel: ObservableObject {
 
     /// Restarts a window so it applies pending changes; refused while a Claude Code session runs in it.
     func restart(_ id: String) {
+        guard !isDemo else { return }
         let manager = manager
         run("Restarting \(id == "main" ? "Claude" : "Claude \(label(of: id))")…") { try await manager.restart(id) }
     }
@@ -242,6 +261,7 @@ final class AppModel: ObservableObject {
 
     /// Turns the optional, Mac-wide cloud move lock on or off; off by default.
     func setCloudMoveLock(_ enabled: Bool) {
+        guard !isDemo else { return }
         let manager = manager
         run(nil) { _ = try manager.setCloudMoveLock(enabled) }
     }
@@ -309,6 +329,7 @@ final class AppModel: ObservableObject {
     }
 
     func create(email: String, label: String, color: String) {
+        guard !isDemo else { return }
         let manager = manager
         run("Creating Claude \(label)…") {
             let profile = try await Task.detached { try manager.create(label: label, email: email, color: color) }.value
@@ -317,12 +338,13 @@ final class AppModel: ObservableObject {
     }
 
     func remove(_ status: ProfileStatus) {
-        guard let id = status.profile?.id else { return }
+        guard !isDemo, let id = status.profile?.id else { return }
         let manager = manager
         run("Removing Claude \(status.label)…") { try await manager.remove(id) }
     }
 
     func setCarryPermissionMode(_ enabled: Bool, for id: String) {
+        guard !isDemo else { return }
         let manager = manager
         run(nil) { try manager.setCarryPermissionMode(enabled, for: id) }
     }
@@ -333,6 +355,7 @@ final class AppModel: ObservableObject {
     }
 
     private func run(_ message: String?, _ work: @escaping @Sendable () async throws -> Void) {
+        guard !isDemo else { return }  // demo mode changes nothing on this Mac
         busyMessage = message
         Task {
             do {

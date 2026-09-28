@@ -1,55 +1,60 @@
 import Darwin
 import Foundation
 
-/// Moves Baton's two folders from the name it had before 1.0, Claude Profiles, to Baton:
-/// `~/Library/Application Support/Claude Profiles` and `~/Applications/Claude Profiles`. See docs/adr/0007-baton-rename.md.
+/// Renames Baton's launchers folder from its name before 1.0, `~/Applications/Claude Profiles`, to
+/// `~/Applications/Baton`, and updates the launchers inside it in place. See docs/adr/0007-baton-rename.md.
 ///
-/// Runs at app start before `Paths` is built, and from `baton migrate` (which `scripts/install-app.sh` calls); no other
-/// command moves anything. Both folders are renamed with `rename(2)` or neither is, only while nothing uses them, never
-/// across volumes, and nothing of Claude's own is touched. What is kept this time is retried at the next start.
+/// Only the launchers folder, the one people see, is renamed. The data folder in Application Support keeps the name it
+/// has (`Paths.stateRoot`): absolute paths inside it live in Claude's own data, in session cards and in Claude Code's
+/// project keys. Runs at app start before `Paths` is built, from `baton migrate` and from `scripts/install-app.sh`;
+/// no other command renames anything. One `rename(2)`, only while nothing runs from the folder; what is kept this
+/// time is retried at the next start.
 public enum LegacyMigration {
-    /// Why the folders stayed under their old name this time.
+    /// Why the launchers folder kept its old name this time.
     public enum Reason: Sendable, Hashable {
-        /// A Claude window, a Claude Code session or a launcher runs from the old folders or uses a profile's data in them.
+        /// A Claude window or a launcher runs from the old folder, or a Claude window uses a profile's data.
         case claudeRunning
-        /// Another Baton or `baton` command runs: it has the old paths and could recreate the old folders.
+        /// Another Baton or `baton` command runs: it has the old path and could recreate the old folder.
         case batonRunning
-        /// Baton itself runs from inside the old launchers folder.
-        case appInsideLegacyFolder
-        /// An old folder and its new place are on different volumes, and a rename doesn't cross them.
+        /// Baton runs from inside the old folder (this bundle), so it can't rename it itself.
+        case appInsideLegacyFolder(URL)
+        /// The rename would cross volumes (the old folder is a mount point), and Baton never copies it.
         case differentVolume
-        /// Another Baton was working in the old folders (one of its locks was held), or another move didn't finish in time.
+        /// Another `baton` command that opens windows or builds launchers was running, or another rename didn't finish in time.
         case busy
+        /// `rename(2)` failed for another reason, in its words.
+        case renameFailed(String)
     }
 
-    /// A folder that exists under both names. Baton uses the new one and leaves the old one untouched.
-    public struct Conflict: Sendable, Equatable {
-        public var new: URL
-        public var legacy: URL
-    }
-
-    /// What a finished move did.
+    /// What a finished rename did.
     public struct Moved: Sendable, Equatable {
-        public var stateDir: URL
-        /// `nil` when there was no old launchers folder to move.
-        public var launchersDir: URL?
-        /// An old `Claude Profiles.app` that ended up in the new launchers folder went to the Trash.
-        public var trashedOldApp = false
-        /// Follow-ups that failed after both folders moved: the link for old scripts, or trashing the old app.
-        public var problems: [String] = []
+        public var launchersDir: URL
+        /// Launchers updated in place, keeping their bundle folder so Dock and Finder items still find them.
+        public var rewrittenLaunchers: Int
+        /// An old `Claude Profiles.app` that came along went to the Trash.
+        public var trashedOldApp: Bool
+        /// Follow-ups that failed after the rename: a launcher not updated, the old app not trashed. Shown as a warning.
+        public var problems: [String]
+
+        public init(launchersDir: URL, rewrittenLaunchers: Int = 0, trashedOldApp: Bool = false, problems: [String] = []) {
+            self.launchersDir = launchersDir
+            self.rewrittenLaunchers = rewrittenLaunchers
+            self.trashedOldApp = trashedOldApp
+            self.problems = problems
+        }
     }
 
     public enum Outcome: Sendable, Equatable {
-        /// No old folders, or they were moved already, perhaps by another process while this one waited.
+        /// No old folder, or it was renamed already, perhaps by another process while this one waited.
         case nothingToDo
-        /// Folders exist under both names.
-        case bothExist([Conflict])
+        /// Both names exist. Baton uses the new one and leaves the old one alone.
+        case bothExist(new: URL, legacy: URL)
         case migrated(Moved)
         case kept(Reason)
-        /// Nothing was left half moved unless the message says so.
+        /// Nothing was renamed.
         case failed(String)
 
-        /// `baton migrate`'s exit status: 0 moved or nothing to do, 3 kept for now, 1 error.
+        /// `baton migrate`'s exit status: 0 renamed or nothing to do, 3 kept for now, 1 error.
         public var exitCode: Int32 {
             switch self {
             case .nothingToDo, .bothExist, .migrated: 0
@@ -59,169 +64,149 @@ public enum LegacyMigration {
         }
     }
 
-    /// A process of this Mac, as far as it can be read: its executable and, for this user's processes, its arguments.
+    /// A process of this Mac, as far as it can be read: its parent, its executable and, for this user's processes,
+    /// its arguments.
     public struct RunningProcess: Sendable, Equatable {
         public var pid: pid_t
+        public var parent: pid_t?
         public var executable: String?
         public var arguments: [String]?
 
-        public init(pid: pid_t, executable: String?, arguments: [String]? = nil) {
+        public init(pid: pid_t, parent: pid_t? = nil, executable: String?, arguments: [String]? = nil) {
             self.pid = pid
+            self.parent = parent
             self.executable = executable
             self.arguments = arguments
         }
     }
 
-    /// Everything the move reads from or does to the system, so tests run in a temporary folder only.
+    /// Everything the rename reads from or does to the system, so tests run in a temporary folder only.
     public struct Environment: Sendable {
         public var processes: @Sendable () -> [RunningProcess]
-        /// Moves a folder; fails if something is already at the destination.
+        /// Renames a folder; fails if something is already at the destination.
         public var rename: @Sendable (URL, URL) throws -> Void
-        /// The volume (`st_dev`) of a path, `nil` if it can't be read.
-        public var volume: @Sendable (URL) -> UInt64?
         public var trash: @Sendable (URL) throws -> Void
-        /// The migrating process, which may itself run from inside the old launchers folder.
+        /// Updates every profile's launcher in place after the rename, writing `cli` into them.
+        /// - Returns: how many were updated, and a plain line for each that wasn't.
+        public var rewriteLaunchers: @Sendable (_ home: URL, _ cli: URL?) -> (rewritten: Int, problems: [String])
+        /// The migrating process. It and its ancestors never count as running from the old folder.
         public var pid: pid_t
-        /// How long to wait for another process that is moving the folders.
+        /// How long to wait for the lock when another `baton` command holds it.
         public var lockWait: TimeInterval
 
         public init(
             processes: @escaping @Sendable () -> [RunningProcess], rename: @escaping @Sendable (URL, URL) throws -> Void,
-            volume: @escaping @Sendable (URL) -> UInt64?, trash: @escaping @Sendable (URL) throws -> Void,
-            pid: pid_t = getpid(), lockWait: TimeInterval = 10
+            trash: @escaping @Sendable (URL) throws -> Void,
+            rewriteLaunchers: @escaping @Sendable (_ home: URL, _ cli: URL?) -> (rewritten: Int, problems: [String]),
+            pid: pid_t = getpid(), lockWait: TimeInterval = 3
         ) {
             self.processes = processes
             self.rename = rename
-            self.volume = volume
             self.trash = trash
+            self.rewriteLaunchers = rewriteLaunchers
             self.pid = pid
             self.lockWait = lockWait
         }
 
         public static var live: Environment {
             Environment(
-                processes: LegacyMigration.liveProcesses, rename: LegacyMigration.renameExclusive, volume: LegacyMigration.volume,
-                trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) })
+                processes: LegacyMigration.liveProcesses, rename: LegacyMigration.renameExclusive,
+                trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
+                rewriteLaunchers: { home, cli in ProfileManager(paths: .standard(home: home), cliPath: cli).rewriteLaunchersInPlace() })
         }
     }
 
-    /// The name of Baton's app before 1.0. An old copy is never moved into the new launchers folder.
+    /// The name of Baton's app before 1.0. An old copy is never kept in the renamed folder.
     public static let legacyAppName = "Claude Profiles.app"
 
-    /// Held while one process checks and moves the folders. Outside both, so it isn't moved with them.
-    public static func lockFile(home: URL) -> URL { Paths.applicationSupport(home: home).appending(path: ".baton-migration.lock") }
+    /// Taken exclusively while the folder is checked and renamed, and shared by every `baton` command that opens
+    /// windows or builds launchers or engines. Inside the data folder, which never moves.
+    public static func lockFile(home: URL) -> URL { Paths.stateRoot(home: home).appending(path: ".baton-migration.lock") }
 
-    // MARK: Moving
+    // MARK: Renaming
 
-    /// Moves the folders if that is safe now.
-    /// - Parameter app: the running app's bundle at app start; `nil` for the CLI, which may run from inside the old
-    ///   folder because it is one loaded binary.
-    public static func run(home: URL, app: URL? = nil, environment: Environment = .live) -> Outcome {
-        let pairs = Pairs(home: home)
-        // A quick look first, so a fresh or already moved install gets no lock file.
-        guard pairs.needsMove else { return pairs.settled }
-        if let app, isInside(app.path, pairs.legacyLaunchers.path) { return .kept(.appInsideLegacyFolder) }
+    /// At app start: renames the folder if that is safe now. `nil` in demo mode, which never renames or writes anything.
+    /// - Parameter variables: the process environment, read for `BATON_DEMO`.
+    public static func atAppStart(
+        home: URL, app: URL, cli: URL?, variables: [String: String], environment: Environment = .live
+    ) -> Outcome? {
+        guard !DemoMode.isOn(variables) else { return nil }
+        return run(home: home, app: app, cli: cli, environment: environment)
+    }
+
+    /// Renames the launchers folder if that is safe now, then updates the launchers in it in place.
+    /// - Parameters:
+    ///   - app: the running app's bundle at app start; `nil` for the CLI, which may run from inside the old folder
+    ///     because it is one loaded binary.
+    ///   - cli: the `baton` executable, links resolved, that launchers call. When it lies inside the renamed folder,
+    ///     launchers get its path after the rename.
+    public static func run(home: URL, app: URL? = nil, cli: URL? = nil, environment: Environment = .live) -> Outcome {
+        // A quick look first, so a fresh or already renamed install gets no lock file.
+        if let settled = settled(home: home) { return settled }
+        if let app, isInside(app.path, Paths.legacyLaunchersDir(home: home).path) { return .kept(.appInsideLegacyFolder(app)) }
 
         let lock: Int32
-        switch acquire(lockFile(home: home), wait: environment.lockWait) {
+        switch acquire(lockFile(home: home), wait: environment.lockWait, shared: false) {
         case .held(let descriptor): lock = descriptor
-        // Another process is still moving them; whatever it left is the answer if it finished.
-        case .busy: return pairs.needsMove ? .kept(.busy) : pairs.settled
-        case .failed(let reason): return .failed("Couldn't take the lock for moving Baton's folders: \(reason). Nothing was moved.")
+        // Another command runs, or another rename is under way; whatever it left is the answer if it finished.
+        case .busy: return settled(home: home) ?? .kept(.busy)
+        case .failed(let reason):
+            return .failed("Couldn't take the lock for renaming Baton's folder in ~/Applications: \(reason). Nothing was renamed.")
         }
         defer { release(lock) }
 
-        // The process that held the lock may have moved them already. `Pairs` looks at the disk every time.
-        guard pairs.needsMove else { return pairs.settled }
-        if let reason = blocker(pairs: pairs, app: app, environment: environment) { return .kept(reason) }
+        // The process that held the lock may have renamed it already.
+        if let settled = settled(home: home) { return settled }
+        // Read right before the rename, under the lock, so nothing that started while this one waited is missed.
+        if let reason = blocker(home: home, app: app, environment: environment) { return .kept(reason) }
 
-        // An operation of another Baton in progress (opening a window, a sync, a registry change) keeps the folders too.
-        var stateLocks: [Int32] = []
-        defer { stateLocks.forEach(release) }
-        for name in stateLockNames {
-            guard case .held(let descriptor) = acquire(pairs.legacyState.appending(path: name), wait: 0, mode: 0o644) else { return .kept(.busy) }
-            stateLocks.append(descriptor)
+        let legacy = Paths.legacyLaunchersDir(home: home), new = Paths.newLaunchersDir(home: home)
+        let launcherCLI = cli.map { afterRename($0, home: home) }
+        do { try environment.rename(legacy, new) } catch {
+            if (error as? POSIXError)?.code == .EXDEV { return .kept(.differentVolume) }
+            return .kept(.renameFailed(error.localizedDescription))
         }
-        return move(pairs, home: home, environment: environment)
-    }
-
-    /// The lock files `ProfileManager` and `LocalOnly` take inside the state folder.
-    static let stateLockNames = ["registry.lock", "open.lock", "sync.lock", "engines.lock", "local-only.lock"]
-
-    private static func move(_ pairs: Pairs, home: URL, environment: Environment) -> Outcome {
-        let log = Log.logger("migration")
-        do { try environment.rename(pairs.legacyState, pairs.newState) } catch {
-            return .failed(
-                "Couldn't move \(display(pairs.legacyState, home: home)) to \(display(pairs.newState, home: home)): \(error.localizedDescription). Nothing was moved; Baton keeps using the Claude Profiles folders."
-            )
-        }
-        var moved = Moved(stateDir: pairs.newState, launchersDir: nil)
-        if pairs.hasLegacyLaunchers {
-            do { try environment.rename(pairs.legacyLaunchers, pairs.newLaunchers) } catch {
-                let reason = error.localizedDescription
-                do { try environment.rename(pairs.newState, pairs.legacyState) } catch {
-                    log.error("Moved the state folder but not the launchers, and couldn't move it back")
-                    return .failed(
-                        "Couldn't move \(display(pairs.legacyLaunchers, home: home)) to \(display(pairs.newLaunchers, home: home)): \(reason). "
-                            + "Moving \(display(pairs.newState, home: home)) back failed too (\(error.localizedDescription)), so Baton now uses it together with \(display(pairs.legacyLaunchers, home: home))."
-                    )
-                }
-                return .failed(
-                    "Couldn't move \(display(pairs.legacyLaunchers, home: home)) to \(display(pairs.newLaunchers, home: home)): \(reason). The other folder was moved back, so nothing changed; Baton keeps using the Claude Profiles folders."
-                )
-            }
-            moved.launchersDir = pairs.newLaunchers
-        }
-        // Relative, so it keeps working if the home folder moves. Only for scripts; nobody sees Application Support.
-        do {
-            try FileManager.default.createSymbolicLink(atPath: pairs.legacyState.path, withDestinationPath: Paths.folderName)
-        } catch {
-            moved.problems.append(
-                "Couldn't leave a link at \(display(pairs.legacyState, home: home)) for scripts that use the old name: \(error.localizedDescription).")
-        }
+        let rewrite = environment.rewriteLaunchers(home, launcherCLI)
+        var moved = Moved(launchersDir: new, rewrittenLaunchers: rewrite.rewritten, problems: rewrite.problems)
         // The old app came along inside the folder. Baton.app replaces it, and one copy at a time may run.
-        let oldApp = pairs.newLaunchers.appending(path: legacyAppName, directoryHint: .isDirectory)
-        if moved.launchersDir != nil, Paths.isRealDirectory(oldApp), bundleIdentifier(of: oldApp) == AppInstances.bundleID {
+        let oldApp = new.appending(path: legacyAppName, directoryHint: .isDirectory)
+        if isRealDirectory(oldApp), bundleIdentifier(of: oldApp) == AppInstances.bundleID {
             do {
                 try environment.trash(oldApp)
                 moved.trashedOldApp = true
             } catch {
                 moved.problems.append(
-                    "Couldn't move the old \(legacyAppName) in \(display(pairs.newLaunchers, home: home)) to the Trash: \(error.localizedDescription).")
+                    "Couldn't move the old \(legacyAppName) in \(display(new, home: home)) to the Trash: \(error.localizedDescription). Move it there yourself; Baton.app replaces it."
+                )
             }
         }
-        log.notice("Moved Baton's folders from their old name")
+        Log.logger("migration").notice("Renamed the launchers folder from its old name")
         return .migrated(moved)
     }
 
-    // MARK: Checking
-
-    /// Baton's folder pairs under the old and the new name, and what is there now.
-    struct Pairs {
-        var home: URL
-        var newState: URL { Paths.newStateDir(home: home) }
-        var legacyState: URL { Paths.legacyStateDir(home: home) }
-        var newLaunchers: URL { Paths.newLaunchersDir(home: home) }
-        var legacyLaunchers: URL { Paths.legacyLaunchersDir(home: home) }
-
-        var hasLegacyLaunchers: Bool { Paths.isRealDirectory(legacyLaunchers) }
-
-        /// The old state folder is a real directory with nothing at the new name, and the old launchers folder is either
-        /// absent or a real directory with nothing at its new name.
-        var needsMove: Bool {
-            guard Paths.isRealDirectory(legacyState), !exists(newState) else { return false }
-            return !exists(legacyLaunchers) || (hasLegacyLaunchers && !exists(newLaunchers))
-        }
-
-        var conflicts: [Conflict] {
-            [(newState, legacyState), (newLaunchers, legacyLaunchers)]
-                .filter { exists($0.0) && Paths.isRealDirectory($0.1) }
-                .map { Conflict(new: $0.0, legacy: $0.1) }
-        }
-
-        /// The answer when there is nothing to move.
-        var settled: Outcome { conflicts.isEmpty ? .nothingToDo : .bothExist(conflicts) }
+    /// The answer when there is nothing to rename, `nil` while the old folder waits for its rename.
+    static func settled(home: URL) -> Outcome? {
+        let legacy = Paths.legacyLaunchersDir(home: home), new = Paths.newLaunchersDir(home: home)
+        guard Paths.isDirectory(legacy) else { return .nothingToDo }
+        return exists(new) ? .bothExist(new: new, legacy: legacy) : nil
     }
+
+    /// Where `cli` will be after the rename: mapped into the new folder when it lies inside the old one.
+    static func afterRename(_ cli: URL, home: URL) -> URL {
+        let legacy = Paths.legacyLaunchersDir(home: home)
+        let path = cli.standardizedFileURL.path
+        // As written and, for a real folder (not a link, whose target stays put), with links resolved.
+        var roots = [legacy.standardizedFileURL.path]
+        if isRealDirectory(legacy), let real = realPath(legacy) { roots.append(real) }
+        for root in roots where isInside(path, root) {
+            let rest = String(path.dropFirst(root.count))
+            let parent = (root as NSString).deletingLastPathComponent
+            return URL(fileURLWithPath: parent + "/" + Paths.folderName + rest)
+        }
+        return cli
+    }
+
+    // MARK: Checking
 
     /// Anything at `url`, a dangling link included.
     static func exists(_ url: URL) -> Bool {
@@ -229,45 +214,88 @@ public enum LegacyMigration {
         return lstat(url.path, &info) == 0
     }
 
-    /// Why moving isn't safe right now, or `nil` if it is. Doesn't take the lock and changes nothing.
-    static func blocker(pairs: Pairs, app: URL?, environment: Environment) -> Reason? {
-        if let app, isInside(app.path, pairs.legacyLaunchers.path) { return .appInsideLegacyFolder }
-        // As written and with links resolved: the process list names executables by their real path.
-        let roots = [pairs.legacyState, pairs.legacyLaunchers].flatMap { [$0.standardizedFileURL.path, realPath($0)].compactMap { $0 } }
+    /// A directory itself, not a symbolic link to one.
+    static func isRealDirectory(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR
+    }
 
-        var found: Set<Reason> = []
-        for process in environment.processes() where process.pid != environment.pid {
+    /// Why renaming isn't safe right now, or `nil` if it is. Reads the process list; takes no lock and changes nothing.
+    ///
+    /// Counts any process with its executable inside the old folder (engines and their helpers, another Baton), a
+    /// launcher's script run by a shell, any process with `--user-data-dir` inside the data folder's profiles, and any
+    /// other Baton or Claude Profiles app or CLI. The migrating process and its ancestors never count: a shell that only
+    /// names the folder in its arguments, such as `scripts/install-app.sh`, doesn't keep it.
+    static func blocker(home: URL, app: URL?, environment: Environment) -> Reason? {
+        let legacy = Paths.legacyLaunchersDir(home: home)
+        if let app, isInside(app.path, legacy.path) { return .appInsideLegacyFolder(app) }
+        let launchers = roots(legacy)
+        let profiles = roots(Paths.stateRoot(home: home).appending(path: "Profiles", directoryHint: .isDirectory))
+
+        let processes = environment.processes()
+        let excluded = ancestors(of: environment.pid, in: processes)
+        var found: [Reason] = []
+        for process in processes where !excluded.contains(process.pid) {
             if let executable = process.executable {
-                let isBaton = isBatonExecutable(executable)
-                if roots.contains(where: { isInside(executable, $0) }) {
-                    found.insert(isBaton ? .appInsideLegacyFolder : .claudeRunning)
+                let baton = batonBundle(of: executable)
+                if launchers.contains(where: { isInside(executable, $0) }) {
+                    found.append(baton.map { .appInsideLegacyFolder($0) } ?? .claudeRunning)
                     continue
                 }
-                if isBaton {
-                    found.insert(.batonRunning)
+                if baton != nil {
+                    found.append(.batonRunning)
                     continue
                 }
             }
-            if let arguments = process.arguments, uses(arguments, roots: roots) { found.insert(.claudeRunning) }
+            guard let arguments = process.arguments else { continue }
+            if let dataDir = ProcessArguments.userDataDir(in: arguments), profiles.contains(where: { isInside(dataDir, $0) }) {
+                found.append(.claudeRunning)
+            } else if isShell(process.executable), arguments.count >= 2, launchers.contains(where: { isInside(arguments[1], $0) }) {
+                found.append(.claudeRunning)  // a launcher's script, run by `sh`
+            }
         }
-        if found.contains(.appInsideLegacyFolder) { return .appInsideLegacyFolder }
-
-        let support = Paths.applicationSupport(home: pairs.home), applications = pairs.legacyLaunchers.deletingLastPathComponent()
-        var sameVolume = environment.volume(pairs.legacyState).map { $0 == environment.volume(support) } ?? false
-        if pairs.hasLegacyLaunchers {
-            sameVolume = sameVolume && (environment.volume(pairs.legacyLaunchers).map { $0 == environment.volume(applications) } ?? false)
+        for reason in found {
+            if case .appInsideLegacyFolder = reason { return reason }
         }
-        if !sameVolume { return .differentVolume }
         return [.claudeRunning, .batonRunning].first(where: found.contains)
     }
 
-    /// Baton's app or CLI, under either name, wherever it is installed: an executable at one of these places inside an
-    /// app bundle whose Info.plist names Baton's bundle id (which the rename kept), so another app called Baton doesn't count.
-    static func isBatonExecutable(_ executable: String) -> Bool {
+    /// `pid` and every process it descends from.
+    static func ancestors(of pid: pid_t, in processes: [RunningProcess]) -> Set<pid_t> {
+        let parents = Dictionary(processes.map { ($0.pid, $0.parent) }, uniquingKeysWith: { first, _ in first })
+        var result: Set<pid_t> = [pid]
+        var current = pid
+        while let parent = parents[current] ?? nil, parent > 0, result.insert(parent).inserted {
+            current = parent
+        }
+        return result
+    }
+
+    /// A folder as written and with links resolved: the process list names executables by their real path.
+    static func roots(_ url: URL) -> [String] {
+        let written = url.standardizedFileURL.path
+        guard let real = realPath(url), real != written else { return [written] }
+        return [written, real]
+    }
+
+    static func isShell(_ executable: String?) -> Bool {
+        guard let executable else { return false }
+        return ["sh", "bash", "zsh", "dash", "ksh"].contains((executable as NSString).lastPathComponent)
+    }
+
+    /// The app bundle of Baton's app or CLI, under either name, wherever it is installed: an executable at one of these
+    /// places inside an app bundle whose Info.plist names Baton's bundle id (which the rename kept), so another app
+    /// called Baton doesn't count. `nil` for anything else.
+    static func batonBundle(of executable: String) -> URL? {
+        guard let bundle = bundle(containing: executable), bundleIdentifier(of: bundle) == AppInstances.bundleID else { return nil }
+        return bundle
+    }
+
+    /// The app bundle around Baton's app or CLI executable at `executable`, by where it sits in the bundle.
+    static func bundle(containing executable: String) -> URL? {
         let places = ["/Contents/MacOS/Baton", "/Contents/Helpers/baton", "/Contents/MacOS/ClaudeProfiles", "/Contents/Helpers/claude-profiles"]
-        guard let place = places.first(where: executable.hasSuffix) else { return false }
-        let bundle = URL(fileURLWithPath: String(executable.dropLast(place.count)), isDirectory: true)
-        return bundleIdentifier(of: bundle) == AppInstances.bundleID
+        guard let place = places.first(where: executable.hasSuffix) else { return nil }
+        return URL(fileURLWithPath: String(executable.dropLast(place.count)), isDirectory: true)
     }
 
     /// The path with every link resolved, `nil` if it doesn't exist.
@@ -275,17 +303,6 @@ public enum LegacyMigration {
         guard let resolved = Darwin.realpath(url.path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
-    }
-
-    /// Whether a command line names a path inside one of `roots`: Electron's `--user-data-dir`, the value of any other
-    /// `--name=value` or `-name=value`, or a plain path, such as a launcher script run by `sh`.
-    static func uses(_ arguments: [String], roots: [String]) -> Bool {
-        if let dataDir = ProcessArguments.userDataDir(in: arguments), roots.contains(where: { isInside(dataDir, $0) }) { return true }
-        return arguments.dropFirst().contains { argument in
-            var value = Substring(argument)
-            if argument.hasPrefix("-"), let equals = argument.firstIndex(of: "=") { value = argument[argument.index(after: equals)...] }
-            return roots.contains { isInside(String(value), $0) }
-        }
     }
 
     /// `path` is `root` or inside it. Case-insensitive, as the default macOS volume is.
@@ -296,81 +313,96 @@ public enum LegacyMigration {
         return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 
-    // MARK: What doctor and the status panel say
+    // MARK: What doctor, the status panel and `baton migrate` say
 
-    /// Plain lines for `baton doctor` and the status panel while Baton uses a folder of its old name, or finds one
-    /// next to the new one. Empty once the folders are moved. Reads the process list but changes nothing.
-    public static func notes(paths: Paths, app: URL? = nil, environment: Environment = .live) -> [String] {
-        let pairs = Pairs(home: paths.home)
-        let conflicts = pairs.conflicts
-        if !conflicts.isEmpty {
-            return conflicts.map { conflict in
-                "Both \(display(conflict.new, home: paths.home)) and \(display(conflict.legacy, home: paths.home)) exist. Baton uses the first and leaves the Claude Profiles one untouched; move what you still need out of it yourself."
-            }
+    /// Plain lines for `baton doctor` and the status panel while the launchers folder has its old name, or both
+    /// names exist. Empty once it is renamed. Reads the process list but changes nothing.
+    /// - Parameters:
+    ///   - app: the running app's bundle, `nil` for the CLI.
+    ///   - cli: the running `baton`, links resolved: when it is inside the old folder, the line names it.
+    public static func notes(paths: Paths, app: URL? = nil, cli: URL? = nil, environment: Environment = .live) -> [String] {
+        let home = paths.home
+        switch settled(home: home) {
+        case .bothExist(let new, let legacy)?: return [bothLine(new: new, legacy: legacy, home: home)]
+        case .some: return []
+        case nil:
+            let reason = blocker(home: home, app: app, environment: environment)
+            return [line(for: reason, home: home, insideApp: insideApp(cli: cli, home: home))]
         }
-        guard paths.usesLegacyFolders else { return [] }
-        guard pairs.needsMove else {
-            // Only one of the two still has its old name, say after a move that couldn't be undone, and the pair that
-            // `run` moves together isn't complete.
-            let home = paths.home
-            var lines: [String] = []
-            if paths.stateDir == pairs.legacyState {
-                lines.append(
-                    "Baton still uses \(display(pairs.legacyState, home: home)) because \(display(pairs.legacyLaunchers, home: home)) is a link or a file, not a folder it can move along. With Baton and every Claude window closed, move that aside, then run `baton migrate`."
-                )
-            }
-            if paths.launchersDir == pairs.legacyLaunchers {
-                lines.append(
-                    "Baton still uses \(display(pairs.legacyLaunchers, home: home)): it moves that folder only together with \(display(pairs.legacyState, home: home)), which isn't there to move. With Baton and every Claude window closed, rename it to \(Paths.folderName) yourself."
-                )
-            }
-            return lines
-        }
-        return [line(for: blocker(pairs: pairs, app: app, environment: environment))]
     }
 
-    /// Why the folders still have their old name, in plain words; `nil` when nothing stops moving them now.
-    public static func line(for reason: Reason?) -> String {
+    /// The Baton.app whose `baton` is `cli`, when it lies inside the old folder: it can't rename that folder at start.
+    static func insideApp(cli: URL?, home: URL) -> URL? {
+        guard let cli, isInside(cli.path, Paths.legacyLaunchersDir(home: home).path) else { return nil }
+        return bundle(containing: cli.standardizedFileURL.path)
+    }
+
+    /// Why the folder still has its old name, in plain words.
+    /// - Parameter insideApp: a Baton.app inside the old folder, which can't rename it when it starts: the line then
+    ///   ends with the command that does.
+    public static func line(for reason: Reason?, home: URL, insideApp: URL? = nil) -> String {
+        let folder = "Baton's folder in ~/Applications still has the Claude Profiles name"
+        let later =
+            insideApp.map { "Close every Claude window and quit Baton, then run: \(migrateCommand($0))" }
+            ?? "Baton renames it the next time it starts with every Claude window closed."
         switch reason {
         case .claudeRunning?:
-            "Baton still uses the Claude Profiles folders because Claude windows are open. It moves them the next time it starts with every Claude window closed."
-        case .appInsideLegacyFolder?:
-            "Baton runs from inside the old Claude Profiles folder. Quit Baton, close every Claude window, then run scripts/install-app.sh again or `baton migrate`."
+            return "\(folder) because Claude windows are open. \(later)"
+        case .appInsideLegacyFolder(let app)?:
+            let legacy = display(Paths.legacyLaunchersDir(home: home), home: home)
+            return
+                "Baton runs from inside \(legacy), so it can't rename that folder itself. Quit Baton, close every Claude window, then run: \(migrateCommand(app))"
         case .batonRunning?:
-            "Baton still uses the Claude Profiles folders because another Baton is running. Quit it, then open Baton again with every Claude window closed, or run `baton migrate`."
+            let then =
+                insideApp.map { "Quit it, close every Claude window, then run: \(migrateCommand($0))" }
+                ?? "Quit it, then open Baton again with every Claude window closed."
+            return "\(folder) because another Baton is running. \(then)"
         case .differentVolume?:
-            "Baton still uses the Claude Profiles folders because they are on a different volume from their new place, and Baton only renames them, never copies."
+            return "\(folder): it is a separate volume, and Baton renames folders but never copies them. Baton keeps using it where it is."
         case .busy?:
-            "Baton still uses the Claude Profiles folders because another Baton was working in them. It moves them the next time it starts with every Claude window closed."
+            return "\(folder) because another baton command was using it. \(later)"
+        case .renameFailed(let reason)?:
+            return "\(folder): renaming it failed (\(reason)). \(later)"
         case nil:
-            "Baton still uses the Claude Profiles folders. It moves them the next time it starts with every Claude window closed, or now with `baton migrate`."
+            return insideApp.map { "\(folder). Close every Claude window and quit Baton, then run: \(migrateCommand($0))" }
+                ?? "\(folder). Baton renames it the next time it starts with every Claude window closed, or now with `baton migrate`."
         }
     }
 
-    /// The result line `baton migrate` prints and the app shows after a move.
-    public static func message(for outcome: Outcome, home: URL) -> String {
+    /// `"<app>/Contents/Helpers/baton" migrate`, with the full path.
+    static func migrateCommand(_ app: URL) -> String {
+        "\"\(app.standardizedFileURL.path)/Contents/Helpers/baton\" migrate"
+    }
+
+    static func bothLine(new: URL, legacy: URL, home: URL) -> String {
+        let (new, legacy) = (display(new, home: home), display(legacy, home: home))
+        return
+            "Both \(new) and \(legacy) exist. Baton uses \(new) and leaves the other alone: move anything you still need out of \(legacy), then move that folder to the Trash."
+    }
+
+    /// The result line `baton migrate` prints and the app shows after a rename.
+    /// - Parameter insideApp: see `line(for:home:insideApp:)`.
+    public static func message(for outcome: Outcome, home: URL, insideApp: URL? = nil) -> String {
         switch outcome {
-        case .nothingToDo: return "Nothing to move: Baton already uses its own folders."
-        case .bothExist(let conflicts):
-            return conflicts.map { conflict in
-                "Both \(display(conflict.new, home: home)) and \(display(conflict.legacy, home: home)) exist. Baton uses the first and leaves the Claude Profiles one untouched; move what you still need out of it yourself."
-            }.joined(separator: " ")
+        case .nothingToDo: return "Nothing to rename: Baton's folder in ~/Applications already has its name."
+        case .bothExist(let new, let legacy): return bothLine(new: new, legacy: legacy, home: home)
         case .migrated(let moved):
-            var text = "Moved Baton's folders from Claude Profiles to \(display(moved.stateDir, home: home))"
-            text += moved.launchersDir.map { " and \(display($0, home: home))." } ?? "."
+            let count = moved.rewrittenLaunchers
+            var text = "Renamed ~/Applications/Claude Profiles to \(display(moved.launchersDir, home: home))"
+            text += count == 0 ? "." : " and updated its \(count) launcher\(count == 1 ? "" : "s") in place, so Dock items keep working."
             if moved.trashedOldApp { text += " The old \(legacyAppName) went to the Trash: Baton.app replaces it." }
             return ([text] + moved.problems).joined(separator: " ")
-        case .kept(let reason): return line(for: reason)
+        case .kept(let reason): return line(for: reason, home: home, insideApp: insideApp)
         case .failed(let message): return message
         }
     }
 
-    /// Before `baton` builds its paths: `baton migrate` moves the folders and returns its line and exit status.
-    /// Every other command returns `nil` and uses the folders where they are.
-    public static func command(_ args: [String], home: URL, environment: Environment = .live) -> (message: String, exitCode: Int32)? {
+    /// `baton migrate`: renames the folder and returns its line and exit status. Every other command returns `nil`.
+    /// - Parameter cli: the running `baton`, links resolved.
+    public static func command(_ args: [String], home: URL, cli: URL?, environment: Environment = .live) -> (message: String, exitCode: Int32)? {
         guard args.first == "migrate" else { return nil }
-        let outcome = run(home: home, environment: environment)
-        return (message(for: outcome, home: home), outcome.exitCode)
+        let outcome = run(home: home, cli: cli, environment: environment)
+        return (message(for: outcome, home: home, insideApp: insideApp(cli: cli, home: home)), outcome.exitCode)
     }
 
     /// `~/…` for a path inside `home`.
@@ -379,7 +411,19 @@ public enum LegacyMigration {
         return path.hasPrefix(root + "/") ? "~" + path.dropFirst(root.count) : path
     }
 
-    // MARK: The system
+    // MARK: The lock
+
+    /// Holds a shared lock on `lockFile(home:)` until the process exits, so the folder is never renamed while this
+    /// command runs; waits up to `wait` seconds for a rename under way to finish. Called before `Paths` is built.
+    /// - Returns: a line to show when a rename kept the lock the whole time; `nil` when held, or when the lock file
+    ///   can't be opened at all, in which case the command runs without it.
+    public static func holdShared(home: URL, wait: TimeInterval = 30) -> String? {
+        switch acquire(lockFile(home: home), wait: wait, shared: true) {
+        case .held: return nil  // released when the process exits
+        case .busy: return "Baton is renaming its folder in ~/Applications right now. Try again in a moment."
+        case .failed: return nil
+        }
+    }
 
     enum LockResult {
         case held(Int32)
@@ -387,12 +431,13 @@ public enum LegacyMigration {
         case failed(String)
     }
 
-    /// An exclusive `flock(2)` on `url`, waiting up to `wait` seconds for another process to let go of it.
-    static func acquire(_ url: URL, wait: TimeInterval, mode: mode_t = 0o600) -> LockResult {
-        let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, mode)
+    /// A `flock(2)` on `url`, exclusive unless `shared`, waiting up to `wait` seconds for other holders to let go.
+    static func acquire(_ url: URL, wait: TimeInterval, shared: Bool) -> LockResult {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { return .failed(String(cString: strerror(errno))) }
         let deadline = Date().addingTimeInterval(wait)
-        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+        while flock(descriptor, (shared ? LOCK_SH : LOCK_EX) | LOCK_NB) != 0 {
             let error = errno
             guard error == EWOULDBLOCK || error == EINTR else {
                 close(descriptor)
@@ -412,16 +457,13 @@ public enum LegacyMigration {
         close(descriptor)
     }
 
+    // MARK: The system
+
     /// `rename(2)` that refuses to replace anything at the destination, even an empty folder.
     static func renameExclusive(_ source: URL, _ destination: URL) throws {
         guard renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-    }
-
-    static func volume(_ url: URL) -> UInt64? {
-        var info = stat()
-        return lstat(url.path, &info) == 0 ? UInt64(bitPattern: Int64(info.st_dev)) : nil
     }
 
     static func bundleIdentifier(of app: URL) -> String? {
@@ -431,7 +473,7 @@ public enum LegacyMigration {
         return info["CFBundleIdentifier"] as? String
     }
 
-    /// Every process's executable, and the arguments of this user's processes (the only ones macOS lets it read).
+    /// Every process's executable and parent, and the arguments of this user's processes (the only ones macOS lets it read).
     static func liveProcesses() -> [RunningProcess] {
         let capacity = proc_listallpids(nil, 0)
         guard capacity > 0 else { return [] }
@@ -447,8 +489,17 @@ public enum LegacyMigration {
             let executable = length > 0 ? String(decoding: path.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self) : nil
             var info = proc_bsdinfo()
             let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-            let isMine = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size && info.pbi_uid == uid
-            return RunningProcess(pid: pid, executable: executable, arguments: isMine ? ProcessArguments.of(pid, buffer: &buffer) : nil)
+            let hasInfo = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size
+            return RunningProcess(
+                pid: pid, parent: hasInfo ? pid_t(info.pbi_ppid) : nil, executable: executable,
+                arguments: hasInfo && info.pbi_uid == uid ? ProcessArguments.of(pid, buffer: &buffer) : nil)
         }
+    }
+}
+
+/// Documentation screenshots: `BATON_DEMO=1` shows sample data and changes nothing on the Mac.
+public enum DemoMode {
+    public static func isOn(_ variables: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        variables["BATON_DEMO"] == "1"
     }
 }

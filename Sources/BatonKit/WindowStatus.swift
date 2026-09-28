@@ -19,7 +19,7 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
     public var pendingChanges: [String]
     /// Claude Code sessions running inside this window right now.
     public var liveSessions: Int
-    /// Baton's own folders, for every window alike: why they still have their earlier name (`LegacyMigration.notes`).
+    /// Baton's launchers folder, for every window alike: why it still has its earlier name (`LegacyMigration.notes`).
     public var folderNotes: [String]
 
     public init(
@@ -153,6 +153,7 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
             case .windowDidNotAppear: "The window didn’t appear"
             case .profileOpen: "The window is still open"
             case .mayStillBeWritten: "It may still be written to"
+            case .readOnly: "Demo mode"
             }
         case let error as RestartError:
             switch error {
@@ -168,6 +169,7 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
 extension ProfileManager {
     /// Quits a window and opens it again so it picks up changed settings, unless a Claude Code session runs in it.
     public func restart(_ id: String) async throws {
+        try ensureWritable()
         let label = label(of: id)
         guard let window = WindowStatus.collect(manager: self, diagnostics: []).first(where: { $0.id == id }), window.isRunning
         else { return id == "main" ? try await openMain() : try await open(id) }
