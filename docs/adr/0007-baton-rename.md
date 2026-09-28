@@ -4,7 +4,7 @@ Status: accepted
 
 ## Context
 
-Until 1.0 the app was called Claude Profiles. Anthropic's terms don't allow "Claude" inside a product's own name, while descriptive use such as "for Claude Desktop" is fine, so 1.0 is called Baton. Everything a person sees or types changes: the app, `Baton.app`, the `baton` command, the Homebrew cask, the repository and the launchers folder in `~/Applications`. People who already use Claude Profiles must keep their windows, sign-ins, launchers in the Dock and sessions, and an upgrade must never leave their data half in one folder and half in another.
+Until 1.0 the app was called Claude Profiles. 1.0 is called Baton to keep "Claude", Anthropic's trademark, out of the product's own name; Claude Desktop is named only to say what Baton works with. Everything a person sees or types changes: the app, `Baton.app`, the `baton` command, the Homebrew cask, the repository and the launchers folder in `~/Applications`. People who already use Claude Profiles must keep their windows, sign-ins, launchers in the Dock and sessions, and an upgrade must never leave their data half in one folder and half in another.
 
 ## Decision
 
@@ -21,5 +21,5 @@ Until 1.0 the app was called Claude Profiles. Anthropic's terms don't allow "Cla
 - An install from before 1.0 keeps its data in `~/Library/Application Support/Claude Profiles` for good. Only someone who reads that folder's name sees the old one, and nothing in Claude's data has to be rewritten.
 - An upgrade with Claude windows still open keeps the launchers folder's old name until the next start with every Claude window closed, or until the printed `baton migrate`; nothing is lost in the meantime, and Baton works from the old folder.
 - The bundle id and the launcher ids show the old name to anyone who reads `Info.plist`, `defaults` or the log. That is the price of keeping the Dock items, preferences and the one-copy check across the upgrade.
-- A link someone made by hand into the old launchers folder, such as `/usr/local/bin/claude-profiles`, stops working once the folder is renamed and has to point at `~/Applications/Baton`; the install script prints the command for the usual places.
+- A link someone made by hand into the old launchers folder, such as `/usr/local/bin/claude-profiles`, stops working once the old app or folder is gone and has to point at `~/Applications/Baton`; the install script prints the command for the usual places.
 - Revisit if macOS gains a supported way to carry an app's records over to a new bundle id, or once 2.0 can drop the `claude-profiles` command.

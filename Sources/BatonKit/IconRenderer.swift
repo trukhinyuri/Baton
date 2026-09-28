@@ -15,6 +15,16 @@ public enum IconRenderer {
         }
     }
 
+    /// A plain grey app tile with no artwork, used instead of Claude's icon in the documentation pictures.
+    public static func placeholderBase() -> NSImage {
+        render { rect in
+            let s = rect.width
+            let tile = NSRect(x: s * 0.1, y: s * 0.1, width: s * 0.8, height: s * 0.8)
+            let path = NSBezierPath(roundedRect: tile, xRadius: s * 0.18, yRadius: s * 0.18)
+            NSGradient(starting: NSColor(hex: "#D5D8DE"), ending: NSColor(hex: "#AEB3BC"))!.draw(in: path, angle: -90)
+        }
+    }
+
     /// Baton's own icon: a stack of three windows, one per subscription. Contains no third-party artwork.
     public static func appIcon() -> NSImage {
         render { rect in

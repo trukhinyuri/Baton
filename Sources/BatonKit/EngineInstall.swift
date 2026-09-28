@@ -14,6 +14,7 @@ enum EngineInstall {
         case sourceChanged
         case exchangeFailed(String)
         case rollbackFailed(backup: URL, reason: String)
+        case wouldDowngrade(installed: String, source: String)
 
         var errorDescription: String? {
             switch self {
@@ -23,6 +24,8 @@ enum EngineInstall {
             case let .exchangeFailed(reason): "Could not replace the Claude engine: \(reason)"
             case let .rollbackFailed(backup, reason):
                 "Could not restore the previous Claude engine. Its backup is at \(backup.path). \(reason)"
+            case let .wouldDowngrade(installed, source):
+                "The Claude engine is version \(installed), newer than Claude Desktop \(source); it is kept as it is."
             }
         }
     }
@@ -53,6 +56,10 @@ enum EngineInstall {
         else { throw InstallError.overlappingPaths }
 
         let identity = try bundleIdentity(at: source)
+        // Never replace an engine with an older Claude: versions compared part by part as numbers.
+        if let current = try? bundleIdentity(at: destination), isOlder(identity.version, than: current.version) {
+            throw InstallError.wouldDowngrade(installed: current.version, source: identity.version)
+        }
         try validate(source)
         let parent = destination.deletingLastPathComponent()
         try fm.createDirectory(at: parent, withIntermediateDirectories: true)
@@ -99,6 +106,9 @@ enum EngineInstall {
             }
         }
     }
+
+    /// Whether version `a` is older than `b`, part by part as numbers: 2.9939.9 is older than 2.9939.10.
+    static func isOlder(_ a: String, than b: String) -> Bool { ClaudeVersion.Version(a) < ClaudeVersion.Version(b) }
 
     private static func bundleIdentity(at app: URL) throws -> BundleIdentity {
         let fm = FileManager.default
@@ -147,8 +157,12 @@ enum EngineInstall {
 /// The Claude Desktop versions this release of Baton was tested with, and a warning outside them.
 public enum ClaudeVersion {
     public static let bundleIdentifier = "com.anthropic.claudefordesktop"
-    /// Move the upper end after testing a newer Claude Desktop: card fields, preference keys and links can change.
-    public static let tested: ClosedRange<Version> = "2.9939.2"..."2.9939.2"
+    /// The only list of tested versions, by major.minor: every patch build of a tested minor counts as tested
+    /// (2.9939.4 as well as 2.9939.2). Move the upper end after testing a newer Claude Desktop: card fields,
+    /// preference keys and links can change.
+    public static let tested: ClosedRange<Version> = "2.9939"..."2.9939"
+    /// Exact versions known not to work with this release, warned about even inside the tested minors.
+    public static let knownIncompatible: Set<String> = []
 
     /// A dotted version compared part by part as numbers, so 2.10000 is newer than 2.9939.
     public struct Version: Comparable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
@@ -158,6 +172,8 @@ public enum ClaudeVersion {
         public var description: String { text }
 
         var parts: [Int] { text.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 } }
+        /// Major and minor only: 2.9939.4 → 2.9939.
+        public var minor: Version { Version(parts.prefix(2).map(String.init).joined(separator: ".")) }
 
         private static func compare(_ a: Version, _ b: Version) -> Int {
             let x = a.parts, y = b.parts
@@ -181,16 +197,21 @@ public enum ClaudeVersion {
         bundleInfo(at: app)?["CFBundleShortVersionString"] as? String
     }
 
-    static var testedText: String {
-        tested.lowerBound == tested.upperBound ? tested.lowerBound.text : "\(tested.lowerBound)–\(tested.upperBound)"
+    /// Such as `2.9939.x`, or `2.9939.x–2.9940.x`.
+    public static var testedText: String {
+        tested.lowerBound == tested.upperBound ? "\(tested.lowerBound).x" : "\(tested.lowerBound).x–\(tested.upperBound).x"
     }
 
-    /// nil inside the tested range; otherwise one sentence for the window list, `doctor` and the start-up check.
+    /// nil for any build of a tested major.minor; otherwise one sentence for the window list, `doctor` and the
+    /// start-up check.
     public static func warning(for version: String?) -> String? {
         guard let version, !version.isEmpty else {
             return "Couldn't read which version of Claude Desktop is installed; Baton was tested with \(testedText)."
         }
-        let installed = Version(version)
+        let installed = Version(version).minor
+        if knownIncompatible.contains(version) {
+            return "Claude Desktop \(version) is known not to work with this release of Baton. Update Claude Desktop or Baton."
+        }
         if installed < tested.lowerBound {
             return "Claude Desktop \(version) is older than the versions Baton was tested with (\(testedText)). Update Claude Desktop."
         }

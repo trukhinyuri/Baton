@@ -17,8 +17,9 @@ let usage = """
       baton remove <profile>              Move a closed profile's copy and sign-in to the Trash
       baton sync [--dry-run]              Share local Code sessions; inspect Cowork without copying it
       baton refresh                       Rebuild app copies and launchers after a Claude Desktop update
-      baton migrate                       Rename ~/Applications/Claude Profiles to Baton once no Claude window
-                                          is open. Exit 3: kept for now; the printed line says why.
+      baton migrate                       Rename ~/Applications/Claude Profiles to Baton, with Baton quit and
+                                          every Claude window closed. Exit 3: kept for now; the printed line
+                                          says why
       baton doctor [--json]               Read-only session and folder checks
       baton local-only on|off|status [PROFILE|main] [--json]
                                           Keep new Claude Code sessions off Remote Control; on by
@@ -42,13 +43,13 @@ let usage = """
                                           you've closed it there), --fork copies
                                           If the session's window resets within 15 minutes and
                                           continues it by itself, nothing happens (exit 3) unless --now
-      baton pass <session|last> --to <profile>
-                                          Same as `continue`, easier to shout across the track.
+      baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
+                                          Same as `continue`, easier to shout across the track
       baton rules                         Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
                                           Let only these accounts continue work in the folder and
                                           inside it, or drop the folder's rule
-      baton carry [--dry-run]             Bring sub-agents, Workflow runs, tool outputs and the scratchpad
+      baton carry [--dry-run]             Bring sub-agents, Workflow history, tool outputs and the scratchpad
                                           into sessions Claude Desktop continued as a new copy itself
       baton report [--save PATH] [--open] Print a redacted problem report; --save writes it to a file,
                                           --open opens a prefilled GitHub issue to review and submit.
@@ -57,6 +58,13 @@ let usage = """
     """
 
 func fail(_ message: String) -> Never {
+    // The log keeps the folders it was given in curly quotes, so a report hides them whole, spaces and all.
+    let given = CommandLine.arguments.dropFirst().filter { $0.contains("/") || $0.hasPrefix("~") || $0 == "." || $0 == ".." }
+    let paths = given.flatMap { argument -> [String] in
+        let full = URL(fileURLWithPath: (argument as NSString).expandingTildeInPath).standardizedFileURL.path
+        return [argument, full, (full as NSString).abbreviatingWithTildeInPath]
+    }
+    Log.error("cli", Log.quoting(paths: paths, in: message))
     FileHandle.standardError.write(Data("error: \(message)\n".utf8))
     exit(1)
 }
@@ -79,6 +87,7 @@ case .early:
     if !answer.output.isEmpty { print(answer.output) }
     exit(answer.exitCode)
 case .migrate:
+    if let unreachable = Paths.unreachableFolder(home: home) { fail(unreachable) }
     // Only `baton migrate` renames the launchers folder, before any path is resolved; every other command uses it
     // where it is.
     if let migration = LegacyMigration.command(args, home: home, cli: cli) {
@@ -87,6 +96,9 @@ case .migrate:
         exit(migration.exitCode)
     }
 case .manager(let sharedLock):
+    // A folder of the earlier name that links nowhere right now: stop before anything creates a new, empty one.
+    if let unreachable = Paths.unreachableFolder(home: home) { fail(unreachable) }
+    Log.enableFile(in: Paths.stateRoot(home: home))
     // Held until this command exits, so the launchers folder isn't renamed while it opens windows or builds launchers.
     if sharedLock, let busy = LegacyMigration.holdShared(home: home) { fail(busy) }
 }
@@ -288,7 +300,7 @@ do {
             for note in LegacyMigration.notes(paths: manager.paths, cli: cli) { print(note) }
             let installed = ClaudeVersion.installed(at: manager.paths.claudeApp) ?? "unknown"
             print(
-                "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.tested.lowerBound)–\(ClaudeVersion.tested.upperBound))"
+                "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.testedText))"
             )
             if let warning = manager.claudeVersionWarning { print("  \(warning)") }
             switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
@@ -426,7 +438,7 @@ do {
     case "carry":
         let dryRun = args.dropFirst().contains("--dry-run")
         let reports = try NativeForkCarry.run(paths: manager.paths, dataDirs: manager.dataDirs, dryRun: dryRun)
-        if reports.isEmpty { print("Nothing to carry: every copy Claude Desktop made already has its old session’s files.") }
+        if reports.isEmpty { print("Nothing to carry: every copy Claude Desktop made already has its old session's files.") }
         for report in reports {
             print(
                 "\(report.lineage.old.prefix(8)) → \(report.lineage.new.prefix(8)): \(dryRun ? "would add" : "added") \(report.added.count) files, kept \(report.kept) the new session already had"
@@ -439,7 +451,7 @@ do {
             }
         }
         if !reports.isEmpty {
-            print("Rewind to points before Claude Desktop’s copy works only in the old session; its checkpoints are kept there.")
+            print("Rewind to points before Claude Desktop's copy works only in the old session; its checkpoints are kept there.")
         }
     case "report":
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? manager.paths.home

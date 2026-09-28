@@ -47,7 +47,7 @@ public struct CoworkSync: Sendable {
             for url in try FileManager.default.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil) {
                 let name = url.lastPathComponent
                 guard name.hasPrefix("local_"), name.hasSuffix(".json") else { continue }
-                let data = try Data(contentsOf: url)
+                let data = try ScanCache.shared.value("data", of: url) { try Data(contentsOf: $0) }
                 report.cardsPreserved += 1
                 scopes[name, default: []].insert(SessionSync.scope(of: pair))
                 if SessionSync.isAccountBound(data) { native.insert(name) }

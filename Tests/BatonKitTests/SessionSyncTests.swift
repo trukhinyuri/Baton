@@ -57,9 +57,11 @@ struct SessionSyncTests {
 
         #expect(report.pairs == 2)
         #expect(report.cardsWritten == 2)
+        #expect(report.wroteInto == [box.main.standardizedFileURL.path, box.work.standardizedFileURL.path], "each window got a card")
         #expect(box.read(b.appending(path: "local_1.json")) == #"{"title":"one"}"#)
         #expect(box.read(a.appending(path: "local_2.json")) == #"{"title":"two"}"#)
-        #expect(try box.sync().changes == 0, "a second run has nothing to do")
+        let again = try box.sync()
+        #expect(again.changes == 0 && again.wroteInto.isEmpty, "a second run has nothing to do")
     }
 
     @Test func newestCardWinsAndOldCopyIsBackedUp() throws {

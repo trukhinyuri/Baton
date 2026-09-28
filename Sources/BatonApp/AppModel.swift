@@ -54,14 +54,24 @@ final class AppModel: ObservableObject {
         if !isDemo { Self.handOverToRunningCopy() }
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/baton")
         let cliPath = FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        // A folder of the earlier name that links nowhere right now (a disk not connected): nothing may write, or a
+        // new, empty Baton folder would win for good. The window shows why; open Baton again once it is connected.
+        let unreachable = isDemo ? nil : Paths.unreachableFolder(home: home)
         // Before any path is resolved, timer runs, launcher is rebuilt or session is shared: the manager's paths are
         // whichever folders exist once this is done. Skipped while Baton runs from inside the old launchers folder,
         // and in demo mode, which changes nothing.
-        let migration = LegacyMigration.atAppStart(
-            home: FileManager.default.homeDirectoryForCurrentUser, app: Bundle.main.bundleURL, cli: cliPath,
-            variables: ProcessInfo.processInfo.environment)
-        manager = ProfileManager(cliPath: cliPath, readOnly: isDemo)
+        let migration =
+            unreachable != nil
+            ? nil
+            : LegacyMigration.atAppStart(home: home, app: Bundle.main.bundleURL, cli: cliPath, variables: ProcessInfo.processInfo.environment)
+        manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil)
         reload()
+        if !isDemo, unreachable == nil { Log.enableFile(in: manager.paths.stateDir) }
+        if let unreachable {
+            setupWarning = unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;")
+            return
+        }
         // Documentation screenshots: BATON_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
         // …_DEMO_SHEET=continue opens "Continue work…", …=report "Report a problem…" and …=status a window's status.
         // With …_DEMO_SNAPSHOT=<file.png> it draws the window into that file and quits (see DemoSnapshot).
@@ -318,6 +328,7 @@ final class AppModel: ObservableObject {
                     self.syncError = nil
                 }
             } catch {
+                Log.error("sync", "Sync failed: \(error.localizedDescription)")
                 await MainActor.run { self.syncError = error.localizedDescription }
             }
         }
@@ -398,6 +409,18 @@ enum DemoData {
             Conversation(
                 kind: .cowork, sessionID: "5", title: "Compare three vendors", folders: [],
                 lastActivity: now.addingTimeInterval(-90_000), transcript: none, ownerID: "work"),
+            Conversation(
+                kind: .code, sessionID: "6", title: "Add rate limiting to the webhook handler", folders: ["/Users/alex/src/billing"],
+                lastActivity: now.addingTimeInterval(-110_000), transcript: none),
+            Conversation(
+                kind: .code, sessionID: "7", title: "Fix flaky login test", folders: ["/Users/alex/src/web"],
+                lastActivity: now.addingTimeInterval(-150_000), transcript: none),
+            Conversation(
+                kind: .cowork, sessionID: "8", title: "Plan the team offsite", folders: [],
+                lastActivity: now.addingTimeInterval(-200_000), transcript: none, ownerID: "lab"),
+            Conversation(
+                kind: .code, sessionID: "9", title: "Write the release notes", folders: ["/Users/alex/src/web"],
+                lastActivity: now.addingTimeInterval(-260_000), transcript: none),
         ]
     }
 
@@ -423,8 +446,8 @@ enum DemoData {
                     isSignedIn: $0.isSignedIn, claudeCodeVersion: "2.1.281")
             },
             diagnostics: [], lastSync: nil, lastSyncDate: nil,
-            errors: ["Can’t read /Users/alex/src/billing/.claude: permission denied"],
-            log: ["sync: 4 session folders for alex@acme.dev"], home: "/Users/alex", user: "alex",
+            errors: ["Can't read /Users/alex/src/billing/.claude: permission denied"],
+            log: ["sync: 4 session folders for alex@work.example"], home: "/Users/alex", user: "alex",
             profiles: statuses.compactMap(\.profile).map { [$0.label, $0.id] })
     }
 
@@ -435,8 +458,8 @@ enum DemoData {
                 profile: nil, accountID: "demo-main", email: "alex@example.com",
                 usage: Usage(fiveHour: 64, week: 92, sampledAt: now.addingTimeInterval(-600)), isRunning: true),
             ProfileStatus(
-                profile: Profile(id: "work", label: "WORK", email: "alex@acme.dev", color: "#1971C2"),
-                accountID: "demo-work", email: "alex@acme.dev",
+                profile: Profile(id: "work", label: "WORK", email: "alex@work.example", color: "#1971C2"),
+                accountID: "demo-work", email: "alex@work.example",
                 usage: Usage(fiveHour: 12, week: 31, sampledAt: now.addingTimeInterval(-300)), isRunning: true),
             ProfileStatus(
                 profile: Profile(id: "lab", label: "LAB", email: "alex.lab@example.org", color: "#2F9E44"),

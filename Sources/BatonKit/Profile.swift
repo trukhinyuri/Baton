@@ -36,7 +36,7 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     public static let mainColor = "#D97757"
     public static let maxLabelLength = 8
 
-    /// Suggests a label from an email: `jane.doe@acme.com` → `JANE`.
+    /// Suggests a label from an email: `jane.doe@example.com` → `JANE`.
     public static func suggestedLabel(for email: String, taken: Set<String>) -> String {
         let local = email.split(separator: "@").first.map(String.init) ?? email
         let word = local.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).first.map(String.init) ?? "acct"

@@ -1,14 +1,16 @@
 #!/bin/sh
 # Installs build/Baton.app next to the profile launchers.
 # Usage: scripts/install-app.sh [DEST] [--dry-run]    scripts/install-app.sh --where [DEST]
-# For tests: --home DIR, --system-apps DIR and --bin-dirs A:B stand in for your home folder, /Applications and
-# /usr/local/bin:/opt/homebrew/bin; --app PATH installs another build.
+# For tests only: --home DIR, --system-apps DIR and --bin-dirs A:B stand in for your home folder, /Applications and
+# /usr/local/bin:/opt/homebrew/bin; --app PATH installs another build. They are refused unless --dry-run is given or
+# BATON_INSTALL_TEST=1 is set, because a real run's baton refresh and migrate still work on your real home folder.
 #
 # Stages and verifies the new app in ~/Applications before replacing anything and refuses while Baton (or Claude
-# Profiles, its earlier name) runs. An old Claude Profiles.app goes into a dated ZIP, then to the Trash; so does the
-# Baton.app it replaces. When the app goes into ~/Applications/Claude Profiles, the installed baton migrate then renames
-# that folder to Baton, or, with a Claude window open, keeps its old name and this script prints the command that
-# renames it later. --dry-run prints the plan and changes nothing; --where prints the folder it would use.
+# Profiles, its earlier name) runs. An old Claude Profiles.app goes into a dated ZIP in AppBackups, then to the Trash.
+# The Baton.app it replaces is kept only as a dated ZIP in AppBackups (the three newest ZIPs are kept). When the app
+# goes into ~/Applications/Claude Profiles, the installed baton migrate then renames that folder to Baton, or, with a
+# Claude window open, keeps its old name and prints why and what renames it later. --dry-run prints the plan and
+# changes nothing; --where prints the folder it would use.
 set -eu
 cd "$(dirname "$0")/.."
 . scripts/install-lib.sh
@@ -21,12 +23,14 @@ HOME_DIR="$HOME"
 SYSTEM_APPS="/Applications"
 BIN_DIRS="/usr/local/bin:/opt/homebrew/bin"
 BUILT="build/Baton.app"
+TEST_OPTION=""
 while [ $# -gt 0 ]; do
     case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --where) WHERE=1 ;;
     --home | --system-apps | --bin-dirs | --app)
         [ $# -ge 2 ] || { echo "$1 needs a value. $usage" >&2; exit 2; }
+        TEST_OPTION="$1"
         case "$1" in
         --home) HOME_DIR="$2" ;;
         --system-apps) SYSTEM_APPS="$2" ;;
@@ -40,24 +44,28 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+if [ -n "$TEST_OPTION" ] && [ "$DRY_RUN" = 0 ] && [ "${BATON_INSTALL_TEST:-}" != 1 ]; then
+    echo "$TEST_OPTION is for tests: use it with --dry-run (or BATON_INSTALL_TEST=1). A real run's baton refresh and migrate work on your real home folder." >&2
+    exit 2
+fi
 
 APPLICATIONS="$HOME_DIR/Applications"
 SUPPORT="$HOME_DIR/Library/Application Support"
 NEW_FOLDER="$APPLICATIONS/Baton"
 OLD_FOLDER="$APPLICATIONS/Claude Profiles"
 
-# Baton's data folder as the app resolves it, never renamed: Baton's if it exists, else Claude Profiles' if it leads to
-# a folder, else Baton's.
+# Baton's data folder as the app resolves it, never renamed: Baton's if it exists, else Claude Profiles' if anything
+# is there (a link that leads nowhere right now included), else Baton's.
 support_root() {
     if [ -d "$SUPPORT/Baton" ]; then echo "$SUPPORT/Baton"
-    elif [ -d "$SUPPORT/Claude Profiles" ]; then echo "$SUPPORT/Claude Profiles"
+    elif [ -e "$SUPPORT/Claude Profiles" ] || [ -L "$SUPPORT/Claude Profiles" ]; then echo "$SUPPORT/Claude Profiles"
     else echo "$SUPPORT/Baton"; fi
 }
 # DEST if given, else the launchers folder Baton uses: its own, the Claude Profiles one until it is renamed, or a new one.
 choose_dest() {
     if [ -n "$EXPLICIT" ]; then echo "$EXPLICIT"
     elif [ -d "$NEW_FOLDER" ]; then echo "$NEW_FOLDER"
-    elif [ -d "$OLD_FOLDER" ]; then echo "$OLD_FOLDER"
+    elif [ -e "$OLD_FOLDER" ] || [ -L "$OLD_FOLDER" ]; then echo "$OLD_FOLDER"
     else echo "$NEW_FOLDER"; fi
 }
 # Every old Claude Profiles.app with Baton's bundle id: in DEST, in the Claude Profiles folder next to it, and in
@@ -67,23 +75,35 @@ old_apps() { # old_apps <dest>
         [ -d "$old" ] && [ "$(bundle_id "$old")" = "$BUNDLE_ID" ] && echo "$old"
     done | awk '!seen[$0]++'
 }
-# A dated ZIP of an app in AppBackups, checked before the app is touched. Prints the ZIP's name.
+# A dated ZIP of an app in AppBackups, named after the app and the folder it is in, checked before the app is
+# touched; never overwrites another ZIP. Prints the ZIP's name.
 backup() { # backup <app> <name>
     backups="$(support_root)/AppBackups"
-    zip="$2 $(date +%Y-%m-%d-%H%M%S).zip"
-    mkdir -p "$backups" && chmod 700 "$backups" && ditto -c -k --keepParent "$1" "$backups/$zip" \
-        && unzip -tq "$backups/$zip" >/dev/null && echo "$zip"
-}
-# macOS 14 has no trash command; then the item is moved into ~/.Trash with the time added before its extension.
-to_trash() {
-    if command -v trash >/dev/null 2>&1; then trash "$1"
-    else
-        name="$(basename "$1")"
-        mkdir -p "$HOME_DIR/.Trash" && mv "$1" "$HOME_DIR/.Trash/${name%.*} $(date +%Y-%m-%d-%H%M%S).${name##*.}"
-    fi
+    mkdir -p "$backups" && chmod 700 "$backups" || return 1
+    zip="$(unique_path "$backups" "$2 ($(basename "$(dirname "$1")")) $(date +%Y-%m-%d-%H%M%S)" zip)"
+    ditto -c -k --keepParent "$1" "$zip" && unzip -tq "$zip" >/dev/null && basename "$zip"
 }
 
+# DEST given as the folder of the earlier name that baton migrate has renamed since: Baton.app is in Baton's now.
+if [ -n "$EXPLICIT" ] && [ "${EXPLICIT%/}" = "$OLD_FOLDER" ] && [ -d "$NEW_FOLDER" ] \
+    && ! [ -e "$OLD_FOLDER" ] && ! [ -L "$OLD_FOLDER" ]; then
+    EXPLICIT="$NEW_FOLDER"
+fi
 if [ "$WHERE" = 1 ]; then choose_dest; exit 0; fi
+
+# A folder of Baton's earlier name that is a link leading nowhere right now: stop rather than start a new, empty one.
+for pair in "$SUPPORT/Claude Profiles:$SUPPORT/Baton" "$OLD_FOLDER:$NEW_FOLDER"; do
+    old="${pair%%:*}"
+    if dangling "$old" && ! [ -d "${pair#*:}" ]; then
+        echo "$old links to $(readlink "$old"), which isn't there right now. Connect it and try again; nothing was installed." >&2
+        exit 1
+    fi
+done
+# Installing into the old folder while the Baton one exists would leave Baton.app in the folder Baton no longer uses.
+if [ -n "$EXPLICIT" ] && [ "${EXPLICIT%/}" = "$OLD_FOLDER" ] && [ -d "$NEW_FOLDER" ]; then
+    echo "Both $NEW_FOLDER and $OLD_FOLDER exist, and Baton uses $NEW_FOLDER: install there (leave out DEST), not into $OLD_FOLDER." >&2
+    exit 2
+fi
 
 DEST="$(choose_dest)"
 # Where Baton.app is once the installed baton migrate has renamed the folder.

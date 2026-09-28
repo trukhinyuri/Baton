@@ -53,7 +53,7 @@ public enum NativeForkCarry {
         var found: Set<Lineage> = []
         for dataDir in dataDirs {
             for card in cards(in: dataDir.appending(path: SessionSync.sessionsFolder, directoryHint: .isDirectory)) {
-                guard let data = try? Data(contentsOf: card),
+                guard let data = try? ScanCache.shared.value("data", of: card, read: { try Data(contentsOf: $0) }),
                     let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                     let new = (json["cliSessionId"] as? String)?.lowercased(), transcripts[new] != nil
                 else { continue }

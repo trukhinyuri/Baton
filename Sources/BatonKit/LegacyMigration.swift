@@ -180,7 +180,7 @@ public enum LegacyMigration {
                 )
             }
         }
-        Log.logger("migration").notice("Renamed the launchers folder from its old name")
+        Log.notice("migration", "Renamed the launchers folder from its old name")
         return .migrated(moved)
     }
 
@@ -321,12 +321,33 @@ public enum LegacyMigration {
     ///   - app: the running app's bundle, `nil` for the CLI.
     ///   - cli: the running `baton`, links resolved: when it is inside the old folder, the line names it.
     public static func notes(paths: Paths, app: URL? = nil, cli: URL? = nil, environment: Environment = .live) -> [String] {
+        launcherNotes(paths: paths, app: app, cli: cli, environment: environment) + dataFolderNote(home: paths.home)
+    }
+
+    /// A line when both data folders exist and the one of the earlier name still has profiles: Baton uses the Baton
+    /// one, so those profiles don't show. Nothing otherwise.
+    static func dataFolderNote(home: URL) -> [String] {
+        let new = Paths.newStateDir(home: home), legacy = Paths.legacyStateDir(home: home)
+        guard Paths.isDirectory(new), FileManager.default.fileExists(atPath: legacy.appending(path: "profiles.json").path) else { return [] }
+        let (shown, old) = (display(new, home: home), display(legacy, home: home))
+        return [
+            "Both \(shown) and \(old) exist, and \(old) still has profiles. Baton uses \(shown) and leaves the other alone; with Baton quit, move whichever you don't need to the Trash."
+        ]
+    }
+
+    private static func launcherNotes(paths: Paths, app: URL?, cli: URL?, environment: Environment) -> [String] {
         let home = paths.home
         switch settled(home: home) {
         case .bothExist(let new, let legacy)?: return [bothLine(new: new, legacy: legacy, home: home)]
         case .some: return []
         case nil:
             let reason = blocker(home: home, app: app, environment: environment)
+            // Inside the app `baton migrate` always refuses (this Baton is running): starting again does the rename.
+            if reason == nil, let app, !isInside(app.path, Paths.legacyLaunchersDir(home: home).path) {
+                return [
+                    "Baton's folder in ~/Applications still has the Claude Profiles name. Quit Baton and open it again: with every Claude window closed it renames the folder as it starts."
+                ]
+            }
             return [line(for: reason, home: home, insideApp: insideApp(cli: cli, home: home))]
         }
     }
@@ -377,7 +398,7 @@ public enum LegacyMigration {
     static func bothLine(new: URL, legacy: URL, home: URL) -> String {
         let (new, legacy) = (display(new, home: home), display(legacy, home: home))
         return
-            "Both \(new) and \(legacy) exist. Baton uses \(new) and leaves the other alone: move anything you still need out of \(legacy), then move that folder to the Trash."
+            "Both \(new) and \(legacy) exist. Baton uses \(new) and leaves the other alone: with every Claude window closed, move anything you still need out of \(legacy), then move that folder to the Trash."
     }
 
     /// The result line `baton migrate` prints and the app shows after a rename.
@@ -390,7 +411,10 @@ public enum LegacyMigration {
             let count = moved.rewrittenLaunchers
             var text = "Renamed ~/Applications/Claude Profiles to \(display(moved.launchersDir, home: home))"
             text += count == 0 ? "." : " and updated its \(count) launcher\(count == 1 ? "" : "s") in place, so Dock items keep working."
-            if moved.trashedOldApp { text += " The old \(legacyAppName) went to the Trash: Baton.app replaces it." }
+            if moved.trashedOldApp {
+                text += " The old \(legacyAppName) went to the Trash: Baton.app replaces it. If Claude Profiles is in your Dock, remove it and add Baton."
+            }
+            text += " Relink any command link you made into ~/Applications/Claude Profiles."
             return ([text] + moved.problems).joined(separator: " ")
         case .kept(let reason): return line(for: reason, home: home, insideApp: insideApp)
         case .failed(let message): return message

@@ -10,7 +10,7 @@ struct ReportSharingTests {
             build: BuildInfo(version: "1.0.0", commit: "abc1234"), macOS: "Version 15.1 (Build 24B83)",
             architecture: "arm64", claudeVersion: "0.14.1",
             windows: [.init(id: "main", label: "MAIN", isMain: true, isRunning: true, isSignedIn: true)],
-            diagnostics: [], lastSync: nil, lastSyncDate: nil, errors: ["Can’t open \(home)/src/app"],
+            diagnostics: [], lastSync: nil, lastSyncDate: nil, errors: ["Can't open \(home)/src/app"],
             log: (0..<logLines).map { "sync: pass \($0) wrote 3 cards and left 12 alone in 41 ms" },
             home: home, user: "robin.k", profiles: [])
     }

@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Only to publish a tag without signing secrets on purpose: run it for the tag with allow_unsigned ticked.
+  workflow_dispatch:
+    inputs:
+      allow_unsigned:
+        description: Publish an ad-hoc signed, not notarized build if the signing secrets are missing
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -15,7 +22,13 @@ jobs:
     env:
       # Set for every step, so an empty one means the secret is missing and the build stays ad hoc.
       MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      ALLOW_UNSIGNED: ${{ inputs.allow_unsigned == true }}
     steps:
+      - name: Stop without signing secrets
+        if: env.MACOS_CERTIFICATE == '' && env.ALLOW_UNSIGNED != 'true'
+        run: |
+          echo "::error::Signing secrets are missing; a release is published only when it can be notarized (docs/RELEASING.md). To publish an ad-hoc build anyway, run this workflow by hand for the tag with allow_unsigned."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.3.app && swift --version
@@ -91,7 +104,7 @@ jobs:
         run: scripts/notarize.sh
       - name: Package
         run: scripts/package.sh "$(cat VERSION)" && scripts/verify-build.sh
-      - name: Say when the build is not notarized
+      - name: Say when the build is not notarized (allow_unsigned)
         if: env.MACOS_CERTIFICATE == ''
         run: |
           {
@@ -118,3 +131,14 @@ jobs:
       - name: Remove the signing keychain
         if: always() && env.NOTARY_KEYCHAIN != ''
         run: security delete-keychain "$NOTARY_KEYCHAIN"
+
+  # Points the Homebrew tap at this release; skipped with a warning without HOMEBREW_TAP_PAT. A release published with
+  # GITHUB_TOKEN starts no other workflow, so this can't wait for a release event.
+  tap:
+    needs: release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/bump-cask.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

@@ -126,13 +126,14 @@ struct AddProfileSheet: View {
     }
 }
 
-/// Shows the Dock icon the new profile will get, drawn from the locally installed Claude app.
+/// Shows the Dock icon the new profile will get, drawn from the locally installed Claude app. Demo mode, which takes
+/// the README's pictures, draws it on a neutral placeholder instead, so no published picture shows Claude's icon.
 struct DockIconPreview: View {
     let label: String
     let color: String
 
     var body: some View {
-        let base = NSWorkspace.shared.icon(forFile: "/Applications/Claude.app")
+        let base = DemoMode.isOn() ? IconRenderer.placeholderBase() : NSWorkspace.shared.icon(forFile: "/Applications/Claude.app")
         Image(nsImage: IconRenderer.profileIcon(base: base, label: label, color: NSColor(hex: color)))
             .resizable()
             .interpolation(.high)

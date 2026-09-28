@@ -30,6 +30,21 @@ struct WindowStatusTests {
         #expect(!status(running: false, live: 0).canRestart, "a closed window applies changes when it next opens")
     }
 
+    /// Claude reads session cards as it starts, so an open window that got cards from another window afterwards
+    /// isn't in step until it restarts; the footer's "everyone's in step" waits for that.
+    @Test func sharedSessionsWaitForARestart() throws {
+        let now = Date()
+        #expect(WindowStatus.sessionsWaitForRestart(shared: now, windowStarted: now.addingTimeInterval(-60)))
+        #expect(!WindowStatus.sessionsWaitForRestart(shared: now.addingTimeInterval(-60), windowStarted: now), "restarted since")
+        #expect(!WindowStatus.sessionsWaitForRestart(shared: nil, windowStarted: now), "nothing shared into it")
+        #expect(WindowStatus.sessionsWaitForRestart(shared: now, windowStarted: nil), "start time unknown")
+        let box = try Sandbox()
+        let manager = ProfileManager(paths: box.paths)
+        #expect(manager.lastCardShared(into: box.work) == nil)
+        manager.noteCardsShared(into: [box.work.standardizedFileURL.path], at: now)
+        #expect(manager.lastCardShared(into: box.work) == now)
+    }
+
     @Test func collectsScopeSkipReasonsAndPendingChanges() throws {
         let box = try Sandbox()
         try ProfileRegistry(paths: box.paths).save([Profile(id: "work", label: "WORK", email: "w@example.com", color: "#123456")])
@@ -51,11 +66,11 @@ struct WindowStatusTests {
     }
 
     @Test func alertTitlesNameTheErrorType() {
-        #expect(WindowStatus.alertTitle(for: ProfileError.claudeNotInstalled("/Applications/Claude.app")) == "Claude Desktop isn’t installed")
+        #expect(WindowStatus.alertTitle(for: ProfileError.claudeNotInstalled("/Applications/Claude.app")) == "Claude Desktop isn't installed")
         #expect(WindowStatus.alertTitle(for: ProfileError.duplicateLabel("WORK")) == "Check the subscription details")
-        #expect(WindowStatus.alertTitle(for: ProfileError.notAllowed(folders: [], accounts: [], label: "W", email: nil)) == "A folder rule doesn’t allow this")
-        #expect(WindowStatus.alertTitle(for: ProfileError.windowDidNotAppear(label: "W", links: 1)) == "The window didn’t appear")
-        #expect(WindowStatus.alertTitle(for: CocoaError(.fileReadNoPermission)) == "Couldn’t read or write a file")
+        #expect(WindowStatus.alertTitle(for: ProfileError.notAllowed(folders: [], accounts: [], label: "W", email: nil)) == "A folder rule doesn't allow this")
+        #expect(WindowStatus.alertTitle(for: ProfileError.windowDidNotAppear(label: "W", links: 1)) == "The window didn't appear")
+        #expect(WindowStatus.alertTitle(for: CocoaError(.fileReadNoPermission)) == "Couldn't read or write a file")
         #expect(WindowStatus.alertTitle(for: URLError(.badURL)) == "Something went wrong")
         #expect(WindowStatus.alertTitle(for: WindowStatus.RestartError.liveSessions(label: "WORK", count: 2)) == "Claude Code is still working")
     }

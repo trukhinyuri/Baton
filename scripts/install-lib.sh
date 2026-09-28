@@ -1,5 +1,5 @@
-# Functions scripts/install-app.sh uses, kept apart so tests can run them in a temporary folder.
-# Sourced, never run. Reads nothing outside the paths it is given and changes nothing.
+# Functions scripts/install-app.sh and the Makefile use, kept apart so tests can run them in a temporary folder.
+# Sourced, never run. Reads nothing outside the paths it is given; only to_trash changes anything.
 
 OLD_APP="Claude Profiles.app"
 BUNDLE_ID="io.github.trukhinyuri.claudeprofiles"
@@ -46,19 +46,55 @@ print_link_fixes() { # print_link_fixes <bin dirs> <old launchers folder> <app> 
     done
 }
 
+# Whether baton migrate moved <old> to <new>, read from the folders: it also exits 0 when both already existed.
+renamed() { # renamed <old> <new>
+    ! [ -e "$1" ] && ! [ -L "$1" ] && [ -d "$2/Baton.app" ]
+}
+
 # What to say after the installed baton migrate exited with <status>, for Baton.app installed in <dest>, the old
-# launchers folder; <new> is the folder's new name.
+# launchers folder; <new> is the folder's new name. baton migrate has already printed why a rename was kept.
 follow_up() { # follow_up <status> <dest> <new>
+    if [ "$1" = 0 ] && renamed "$2" "$3"; then
+        echo "Baton.app is now in $3/Baton.app: its folder has the Baton name."
+        return 0
+    fi
     case "$1" in
-    0) echo "Baton.app is now in $3/Baton.app: its folder has the Baton name." ;;
-    3) echo "Baton.app is installed in $2/Baton.app. That folder keeps its old name until you quit Baton, close every Claude window and run: \"$2/Baton.app/Contents/Helpers/baton\" migrate" ;;
+    0) echo "Baton.app is installed in $2/Baton.app, but $3 exists too, so Baton uses that folder; the line above says what to do." ;;
+    3) echo "Baton.app is installed in $2/Baton.app and works from there; the line above says why the folder keeps its old name." ;;
     *) echo "baton migrate failed (exit $1). Baton.app is installed in $2/Baton.app and works from there. To rename the folder later, quit Baton, close every Claude window and run: \"$2/Baton.app/Contents/Helpers/baton\" migrate" ;;
     esac
 }
 
 # Where Baton.app ends up: in the renamed folder once baton migrate renamed it, else where it was installed.
 final_app() { # final_app <status> <dest> <old launchers folder> <new>
-    if [ "$1" = 0 ] && [ "$2" = "$3" ]; then echo "$4/Baton.app"; else echo "$2/Baton.app"; fi
+    if [ "$1" = 0 ] && [ "$2" = "$3" ] && renamed "$3" "$4"; then echo "$4/Baton.app"; else echo "$2/Baton.app"; fi
+}
+
+# <dir>/<stem>.<ext>, or with " 2", " 3"… after the stem while that name is taken: never overwrites anything.
+unique_path() { # unique_path <dir> <stem> <ext>
+    path="$1/$2.$3"
+    n=2
+    while [ -e "$path" ] || [ -L "$path" ]; do
+        path="$1/$2 $n.$3"
+        n=$((n + 1))
+    done
+    echo "$path"
+}
+
+# A link that leads nowhere right now, say to a disk that isn't connected.
+dangling() { # dangling <path>
+    [ -L "$1" ] && ! [ -e "$1" ]
+}
+
+# Moves <item> to the Trash. macOS 14 has no trash command; then it goes into ~/.Trash under a name no other item
+# there has, with the time added before its extension. HOME_DIR stands in for the home folder, as in install-app.sh.
+to_trash() { # to_trash <item>
+    if command -v trash >/dev/null 2>&1; then trash "$1"
+    else
+        name="$(basename "$1")"
+        mkdir -p "${HOME_DIR:-$HOME}/.Trash" \
+            && mv "$1" "$(unique_path "${HOME_DIR:-$HOME}/.Trash" "${name%.*} $(date +%Y-%m-%d-%H%M%S)" "${name##*.}")"
+    fi
 }
 
 # The app bundle's identifier, empty if it has none.

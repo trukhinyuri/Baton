@@ -4,7 +4,7 @@ Status: accepted
 
 ## Context
 
-Anthropic does not allow third parties to offer Claude sign-in in their own apps, or to collect, store or intermediate Claude credentials or session tokens; sign-in must complete through Anthropic's own flow. It does allow an end user to sign in to the unmodified Claude software with their own subscription.
+Baton's own rule is that sign-in belongs to Claude: Baton offers no Claude sign-in of its own and never collects, stores or passes on Claude credentials or session tokens. You sign in yourself, with your own subscription, inside the unmodified Claude app's own flow. For what Anthropic allows, its [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) and [Usage Policy](https://www.anthropic.com/legal/aup) are the source; this record does not restate them.
 
 Google sign-in in Claude Desktop finishes in the browser and returns through a `claude://` link. macOS delivers that link to the registered copy of Claude, which is the main app, so a new profile window never receives it.
 
