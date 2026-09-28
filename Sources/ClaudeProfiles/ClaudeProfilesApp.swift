@@ -19,7 +19,10 @@ struct ClaudeProfilesApp: App {
             CommandGroup(after: .newItem) {
                 Button("Share Sessions Now") { model.syncNow() }.keyboardShortcut("r")
                 Button("Continue work…") { model.isContinuing = true }
-                Button("Check sessions") { model.checkSessions() }
+                Button("Check sessions…") { model.checkSessions() }
+            }
+            CommandGroup(replacing: .help) {
+                Button("Report a problem…") { model.isReporting = true }
             }
         }
 
@@ -27,6 +30,7 @@ struct ClaudeProfilesApp: App {
             MenuBarContent(model: model)
         } label: {
             Image(systemName: "square.stack.3d.up.fill")
+                .accessibilityLabel("Claude Profiles")
         }
     }
 }
@@ -59,6 +63,11 @@ struct MenuBarContent: View {
             openWindow(id: "main")
             NSApp.activate()
             model.isContinuing = true
+        }
+        Button("Report a problem…") {
+            openWindow(id: "main")
+            NSApp.activate()
+            model.isReporting = true
         }
         Divider()
         Button("Quit Claude Profiles") { NSApp.terminate(nil) }.keyboardShortcut("q")

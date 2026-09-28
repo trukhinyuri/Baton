@@ -7,10 +7,19 @@ final class AppModel: ObservableObject {
     @Published private(set) var statuses: [ProfileStatus] = []
     @Published private(set) var lastSync: Date?
     @Published private(set) var lastSyncChanges = 0
-    @Published private(set) var syncError: String?
-    @Published private(set) var registryError: String?
+    @Published private(set) var syncError: String? { didSet { remember(syncError) } }
+    @Published private(set) var registryError: String? { didSet { remember(registryError) } }
     @Published var busyMessage: String?
-    @Published var errorMessage: String?
+    @Published var errorMessage: String? { didSet { remember(errorMessage) } }
+    @Published var isReporting = false
+    /// Says what kind of problem `errorMessage` is about.
+    @Published private(set) var errorTitle = "Something went wrong"
+    /// The window whose status panel is open, and every window's status as of opening it.
+    @Published var statusWindow: String?
+    @Published private(set) var windowStatuses: [WindowStatus] = []
+    /// Errors and warnings the window showed, newest last, for a problem report. Kept only in memory.
+    private(set) var recentErrors: [String] = []
+    private var lastSyncReport: SyncReport?
     @Published var isAdding = false
     @Published var isContinuing = false
     @Published private(set) var conversations: [Conversation] = []
@@ -21,8 +30,10 @@ final class AppModel: ObservableObject {
     private var noticeTask: Task<Void, Never>?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
-    @Published private(set) var setupWarning: String?
+    @Published private(set) var setupWarning: String? { didSet { remember(setupWarning) } }
     @Published var pendingRemoval: ProfileStatus?
+    /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
+    @Published private(set) var installWarning: String?
     /// Which accounts may continue work in which folders; `nil` if the rules file can't be read.
     @Published private(set) var folderRules: [FolderRule]? = []
 
@@ -35,15 +46,18 @@ final class AppModel: ObservableObject {
     private var launchObserver: NSObjectProtocol?
 
     init() {
+        if !isDemo { Self.handOverToRunningCopy() }
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/claude-profiles")
         manager = ProfileManager(cliPath: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil)
         reload()
         // Documentation screenshots: CLAUDE_PROFILES_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
-        // and …_DEMO_SHEET=continue opens "Continue work…".
+        // …_DEMO_SHEET=continue opens "Continue work…", …=report "Report a problem…" and …=status a window's status.
         guard !isDemo else {
             let sheet = ProcessInfo.processInfo.environment["CLAUDE_PROFILES_DEMO_SHEET"]
             isAdding = sheet == "1"
             isContinuing = sheet == "continue"
+            isReporting = sheet == "report"
+            if sheet == "status" { showStatus(of: "work") }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 NSApp.windows.first { $0.identifier?.rawValue == "main" }?.setContentSize(NSSize(width: 900, height: 530))
             }
@@ -60,6 +74,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.syncNow() }
         }
         Task.detached { [manager] in try? manager.refresh() }
+        installWarning = AppInstances.duplicateWarning(AppInstances.installedCopies())
         syncNow()
         launchObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
@@ -70,6 +85,55 @@ final class AppModel: ObservableObject {
         }
         // macOS reopens windows at login by starting each app copy without its arguments, possibly before this app.
         manager.recentlyStartedWithoutDataDir(within: 120).forEach(reopenIfStartedWithoutProfile)
+    }
+
+    /// Only one copy may sync at a time: a second one brings the first forward and quits before touching anything.
+    private static func handOverToRunningCopy() {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: AppInstances.bundleID)
+        guard let other = AppInstances.otherInstance(running: running.map(\.processIdentifier), me: ProcessInfo.processInfo.processIdentifier),
+              let app = running.first(where: { $0.processIdentifier == other }) else { return }
+        app.activate()
+        exit(0)
+    }
+
+    func show(_ error: Error) {
+        errorTitle = WindowStatus.alertTitle(for: error)
+        errorMessage = error.localizedDescription
+    }
+
+    func showStatus(of id: String) {
+        statusWindow = id
+        refreshStatus()
+    }
+
+    func refreshStatus() {
+        guard !isDemo else { windowStatuses = DemoData.windowStatuses; return }
+        let manager = manager
+        Task {
+            windowStatuses = await Task.detached {
+                WindowStatus.collect(manager: manager, diagnostics: (try? Diagnostics.inspect(paths: manager.paths)) ?? [])
+            }.value
+        }
+    }
+
+    /// Restarts a window so it applies pending changes; refused while a Claude Code session runs in it.
+    func restart(_ id: String) {
+        let manager = manager
+        run("Restarting \(id == "main" ? "Claude" : "Claude \(label(of: id))")…") { try await manager.restart(id) }
+    }
+
+    private func remember(_ message: String?) {
+        guard let message, recentErrors.last != message else { return }
+        recentErrors = Array((recentErrors + [message]).suffix(20))
+    }
+
+    /// The problem report for the preview sheet, from what the app already knows. Nothing is sent.
+    func makeReport() async -> FeedbackReport {
+        guard !isDemo else { return FeedbackReport(facts: DemoData.reportFacts) }
+        let (paths, errors, sync, date) = (manager.paths, recentErrors, lastSyncReport, lastSync)
+        return await Task.detached {
+            FeedbackReport(facts: .collect(paths: paths, errors: errors, log: LogTail.read(), lastSync: sync, lastSyncDate: date))
+        }.value
     }
 
     var profiles: [ProfileStatus] { statuses }
@@ -177,6 +241,7 @@ final class AppModel: ObservableObject {
                 guard let report = try manager.syncSessions() else { return }
                 await MainActor.run {
                     self.lastSync = Date()
+                    self.lastSyncReport = report
                     self.lastSyncChanges = report.changes
                     self.syncError = nil
                 }
@@ -200,7 +265,7 @@ final class AppModel: ObservableObject {
             do {
                 diagnostics = try await Task.detached { try Diagnostics.inspect(paths: paths) }.value
                 isCheckingSessions = true
-            } catch { errorMessage = error.localizedDescription }
+            } catch { show(error) }
         }
     }
 
@@ -234,9 +299,10 @@ final class AppModel: ObservableObject {
             do {
                 try await work()
                 setupWarning = manager.lastOpenWarning
-            } catch { errorMessage = error.localizedDescription }
+            } catch { show(error) }
             busyMessage = nil
             reload()
+            if statusWindow != nil { refreshStatus() }
         }
     }
 }
@@ -254,6 +320,28 @@ enum DemoData {
             Conversation(kind: .cowork, sessionID: "5", title: "Compare three vendors", folders: [],
                          lastActivity: now.addingTimeInterval(-90_000), transcript: none, ownerID: "work"),
         ]
+    }
+
+    static var windowStatuses: [WindowStatus] {
+        statuses.map { status in
+            WindowStatus(id: status.id, label: status.label, isMain: status.isMain, isRunning: status.isRunning, account: status.email,
+                         scope: status.isSignedIn ? "account 5c1e8a42 · 1 organization" : nil,
+                         scopeSource: status.isSignedIn ? "config.json (lastKnownAccountUuid)" : "not signed in yet",
+                         skipReasons: status.isSignedIn ? [] : ["Not signed in: sign in inside this window to share its sessions."],
+                         pendingChanges: status.id == "work" ? ["Claude Desktop was updated; this window runs the previous version until it restarts."] : [],
+                         liveSessions: status.id == "main" ? 1 : 0)
+        }
+    }
+
+    static var reportFacts: FeedbackReport.Facts {
+        FeedbackReport.Facts(build: .current, macOS: ProcessInfo.processInfo.operatingSystemVersionString, architecture: "arm64",
+                             claudeVersion: "0.14.1",
+                             windows: statuses.map { .init(id: $0.id, label: $0.label, isMain: $0.isMain, isRunning: $0.isRunning,
+                                                           isSignedIn: $0.isSignedIn, claudeCodeVersion: "2.1.281") },
+                             diagnostics: [], lastSync: nil, lastSyncDate: nil,
+                             errors: ["Can’t read /Users/alex/src/billing/.claude: permission denied"],
+                             log: ["sync: 4 session folders for alex@acme.dev"], home: "/Users/alex", user: "alex",
+                             profiles: statuses.compactMap(\.profile).map { [$0.label, $0.id] })
     }
 
     static var statuses: [ProfileStatus] {

@@ -1,3 +1,4 @@
+import AppKit
 import ClaudeProfilesKit
 import Foundation
 
@@ -35,6 +36,9 @@ USAGE
                                                  inside it, or drop the folder's rule
   claude-profiles carry [--dry-run]             Bring sub-agents, Workflow runs, tool outputs and the scratchpad
                                                  into sessions Claude Desktop continued as a new copy itself
+  claude-profiles report [--save PATH] [--open]  Print a redacted problem report; --save writes it to a file,
+                                                 --open opens a prefilled GitHub issue to review and submit.
+                                                 Nothing is sent
   claude-profiles --version                     Print the version and commit
 """
 
@@ -350,6 +354,12 @@ do {
         if !reports.isEmpty {
             print("Rewind to points before Claude Desktop’s copy works only in the old session; its checkpoints are kept there.")
         }
+    case "report":
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? manager.paths.home
+        print(try FeedbackReport.command(args, paths: manager.paths, log: LogTail.read(), downloads: downloads, copy: { text in
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }, open: { NSWorkspace.shared.open($0) }))
     case "--version", "version":
         print(BuildInfo.current.description)
     case "help", "-h", "--help":
