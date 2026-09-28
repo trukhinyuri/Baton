@@ -6,6 +6,12 @@ struct BatonApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
 
+    init() {
+        // First, before the model starts anything: Claude or Anthropic settings from whatever started Baton (a
+        // terminal, a Claude Code session) must not reach the Claude windows it opens.
+        InheritedEnvironment.scrub()
+    }
+
     var body: some Scene {
         Window("Baton", id: "main") {
             ContentView(model: model)

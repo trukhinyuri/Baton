@@ -2,6 +2,10 @@ import AppKit
 import BatonKit
 import Foundation
 
+// First: whatever Claude or Anthropic settings the terminal or a Claude Code session passed along must not reach the
+// windows this command opens.
+InheritedEnvironment.scrub()
+
 let usage = """
     baton — several Claude Desktop accounts on one Mac, and a clean handover between your own windows.
 
@@ -13,8 +17,8 @@ let usage = """
       baton remove <profile>              Quit it and move its copy and sign-in to the Trash
       baton sync [--dry-run]              Share local Code sessions; inspect Cowork without copying it
       baton refresh                       Rebuild app copies after a Claude Desktop update
-      baton migrate                       Move Baton's folders from their earlier name, Claude Profiles, once
-                                           nothing runs from them. Exit 3: kept for now, see the line
+      baton migrate                       Rename ~/Applications/Claude Profiles to Baton once no Claude window
+                                           is open. Exit 3: kept for now; the printed line says why.
       baton doctor [--json]               Read-only session and folder checks
       baton local-only on|off|status [PROFILE|main] [--json]
                                            Keep new Claude Code sessions off Remote Control; on by
@@ -36,7 +40,8 @@ let usage = """
                                            process or with a message in the last 10 minutes continue
                                            as a copy; --same keeps the same session (add --anyway once
                                            you've closed it there), --fork copies
-      baton pass <session|last> --to <profile>    Same as `continue`, easier to shout across the track.
+      baton pass <session|last> --to <profile>
+                                           Same as `continue`, easier to shout across the track.
       baton rules                         Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
                                            Let only these accounts continue work in the folder and
@@ -60,27 +65,30 @@ func value(of flag: String, in args: [String]) -> String? {
 }
 
 let args = CommandAliases.resolve(Array(CommandLine.arguments.dropFirst()))
+let home = FileManager.default.homeDirectoryForCurrentUser
+// Launchers call this path, so it is the real file, not whatever name the shell found it by.
+let cli = RunningExecutable.url() ?? URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
 
-// Answered before anything reads or changes the profiles.
-switch args.first {
-case "--version", "version":
-    print(BuildInfo.current.description)
-    exit(0)
-case "help", "-h", "--help":
-    print(usage)
-    exit(0)
-default: break
+switch CLIDispatch.stage(for: args) {
+case .early:
+    // Answered before anything reads or changes the profiles.
+    let answer = CLIDispatch.runEarly(args, usage: usage)
+    if let error = answer.error { fail(error) }
+    if !answer.output.isEmpty { print(answer.output) }
+    exit(answer.exitCode)
+case .migrate:
+    // Only `baton migrate` renames the launchers folder, before any path is resolved; every other command uses it
+    // where it is.
+    if let migration = LegacyMigration.command(args, home: home, cli: cli) {
+        if migration.exitCode == 1 { fail(migration.message) }
+        print(migration.message)
+        exit(migration.exitCode)
+    }
+case .manager(let sharedLock):
+    // Held until this command exits, so the launchers folder isn't renamed while it opens windows or builds launchers.
+    if sharedLock, let busy = LegacyMigration.holdShared(home: home) { fail(busy) }
 }
 
-// Only `baton migrate` moves Baton's folders from their earlier name, before any path is resolved; every other
-// command uses them where they are.
-if let migration = LegacyMigration.command(args, home: FileManager.default.homeDirectoryForCurrentUser) {
-    if migration.exitCode == 1 { fail(migration.message) }
-    print(migration.message)
-    exit(migration.exitCode)
-}
-
-let cli = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
 let manager = ProfileManager(cliPath: cli)
 
 // Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a Claude Desktop version
@@ -269,7 +277,7 @@ do {
             print(String(decoding: try encoder.encode(entries), as: UTF8.self))
         } else {
             print("Read-only local inventory. Cloud access and feature availability are not tested.")
-            for note in LegacyMigration.notes(paths: manager.paths) { print(note) }
+            for note in LegacyMigration.notes(paths: manager.paths, cli: cli) { print(note) }
             let installed = ClaudeVersion.installed(at: manager.paths.claudeApp) ?? "unknown"
             print(
                 "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.tested.lowerBound)–\(ClaudeVersion.tested.upperBound))"
@@ -405,14 +413,6 @@ do {
     case "refresh":
         try manager.refresh()
         print("Profiles are up to date with Claude Desktop.")
-    case "__render-app-icon":  // used by scripts/build-app.sh
-        guard args.count >= 2 else { fail("__render-app-icon needs an output path") }
-        let url = URL(fileURLWithPath: args[1])
-        if url.pathExtension == "png" {
-            try IconRenderer.pngData(IconRenderer.appIcon(), pixels: 1024)?.write(to: url)
-        } else {
-            try IconRenderer.icnsData(for: IconRenderer.appIcon()).write(to: url)
-        }
     case "carry":
         let dryRun = args.dropFirst().contains("--dry-run")
         let reports = try NativeForkCarry.run(paths: manager.paths, dataDirs: manager.dataDirs, dryRun: dryRun)

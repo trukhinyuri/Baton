@@ -10,26 +10,29 @@ public struct Paths: Sendable, Equatable {
     /// Where Claude Code keeps each session's scratchpad and background task output
     /// (`<claudeTempDir>/<folder>/<session>/{scratchpad,tasks}`). The system may clear it at restart.
     public var claudeTempDir: URL
-    /// Baton's own state: profile registry and backups. `~/Library/Application Support/Baton`, or the folder of
-    /// its earlier name, Claude Profiles, until `LegacyMigration` moves it (see `resolveRoot`).
+    /// Baton's own state: profile registry, every profile's data and backups. `~/Library/Application Support/Baton`,
+    /// or for people upgrading from Claude Profiles the folder of that name, used where it is and never moved
+    /// (see `stateRoot(home:)` and docs/adr/0007-baton-rename.md).
     public var stateDir: URL
     /// Launchers are visible in Finder, Spotlight and Launchpad and can be kept in the Dock. `~/Applications/Baton`,
-    /// or the Claude Profiles folder until `LegacyMigration` moves it.
+    /// or the Claude Profiles folder until `LegacyMigration` renames it (see `launchersRoot(home:)`).
     public var launchersDir: URL
 
-    /// Resolves `stateDir` and `launchersDir` now, each on its own: build `Paths` after `LegacyMigration` has run.
+    /// Resolves `stateDir` and `launchersDir` now: build `Paths` after `LegacyMigration` has run.
     /// - Parameter claudeTempDir: by default a folder inside `home`, so a sandboxed `home` never reaches the real one.
     public init(home: URL, claudeApp: URL, claudeTempDir: URL? = nil) {
         self.home = home
         self.claudeApp = claudeApp
         self.claudeTempDir = claudeTempDir ?? home.appending(path: "tmp/claude", directoryHint: .isDirectory)
-        stateDir = Self.resolveRoot(new: Self.newStateDir(home: home), legacy: Self.legacyStateDir(home: home))
-        launchersDir = Self.resolveRoot(new: Self.newLaunchersDir(home: home), legacy: Self.legacyLaunchersDir(home: home))
+        stateDir = Self.stateRoot(home: home)
+        launchersDir = Self.launchersRoot(home: home)
     }
 
-    public static var standard: Paths {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return Paths(
+    public static var standard: Paths { standard(home: FileManager.default.homeDirectoryForCurrentUser) }
+
+    /// This Mac's Claude Desktop and Claude Code temporary folder, with Baton's folders under `home`.
+    public static func standard(home: URL) -> Paths {
+        Paths(
             home: home,
             claudeApp: findClaude(home: home, lookup: launchServicesApps),
             claudeTempDir: URL(fileURLWithPath: "/private/tmp/claude-\(getuid())", isDirectory: true))
@@ -66,7 +69,7 @@ public struct Paths: Sendable, Equatable {
 
     // MARK: Baton's own folders under both names
 
-    /// The folder name before 1.0 (see docs/adr/0007-baton-rename.md). Only `LegacyMigration` and path resolution use it.
+    /// The folder name before 1.0 (see docs/adr/0007-baton-rename.md).
     public static let legacyFolderName = "Claude Profiles"
     public static let folderName = "Baton"
 
@@ -76,24 +79,28 @@ public struct Paths: Sendable, Equatable {
     public static func newLaunchersDir(home: URL) -> URL { home.appending(path: "Applications/\(folderName)", directoryHint: .isDirectory) }
     public static func legacyLaunchersDir(home: URL) -> URL { home.appending(path: "Applications/\(legacyFolderName)", directoryHint: .isDirectory) }
 
-    /// The new folder if it exists; else the legacy one if it is a real directory (a symbolic link, such as the one
-    /// `LegacyMigration` leaves behind, doesn't count); else the new one, for a fresh install.
-    static func resolveRoot(new: URL, legacy: URL) -> URL {
+    /// Baton's data folder: the Baton one if it exists; else, for someone upgrading from Claude Profiles, the folder of
+    /// that name if it leads to a folder, a link included (say to another disk); else the Baton one, for a fresh install.
+    /// Never renamed: absolute paths inside it live in Claude's own data, session cards and Claude Code's project keys.
+    public static func stateRoot(home: URL) -> URL { resolve(new: newStateDir(home: home), legacy: legacyStateDir(home: home)) }
+
+    /// The launchers folder: the Baton one if it exists; else the Claude Profiles one if it is a folder, until
+    /// `LegacyMigration` renames it; else the Baton one.
+    public static func launchersRoot(home: URL) -> URL { resolve(new: newLaunchersDir(home: home), legacy: legacyLaunchersDir(home: home)) }
+
+    static func resolve(new: URL, legacy: URL) -> URL {
+        if isDirectory(new) { return new }
+        return isDirectory(legacy) ? legacy : new
+    }
+
+    /// A folder, or a link that leads to one.
+    static func isDirectory(_ url: URL) -> Bool {
         var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: new.path, isDirectory: &isDirectory), isDirectory.boolValue { return new }
-        return isRealDirectory(legacy) ? legacy : new
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
-    /// A directory itself, not a symbolic link to one.
-    static func isRealDirectory(_ url: URL) -> Bool {
-        var info = stat()
-        return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR
-    }
-
-    /// Whether Baton still uses a folder of its earlier name because it hasn't been moved yet.
-    public var usesLegacyFolders: Bool {
-        stateDir == Self.legacyStateDir(home: home) || launchersDir == Self.legacyLaunchersDir(home: home)
-    }
+    /// Whether Baton still uses the launchers folder of its earlier name because it hasn't been renamed yet.
+    public var usesLegacyLaunchersFolder: Bool { launchersDir == Self.legacyLaunchersDir(home: home) }
 
     /// Data directory of the main Claude Desktop app (the one you open from /Applications).
     public var mainDataDir: URL { applicationSupport.appending(path: "Claude", directoryHint: .isDirectory) }
