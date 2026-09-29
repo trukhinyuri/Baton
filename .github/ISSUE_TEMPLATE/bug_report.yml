@@ -8,7 +8,8 @@ body:
         Tell us where the baton got dropped: what you did, what you expected, and what happened instead.
 
         **Report a problem** in Baton (the footer, the menu bar or Help) or `baton report`
-        fills in the Diagnostics field below. It replaces your home folder, user name, emails, account ids,
+        fills in the Diagnostics field below. If Baton won't install or open, there is no report: leave Diagnostics
+        empty and fill in the versions instead. It replaces your home folder, user name, emails, account ids,
         profile labels and folder names, and leaves out session titles, transcripts and anything shaped like a
         token. Your own description is not changed, so leave out anything you would not post in public.
         Security problems go to a [private advisory](https://github.com/trukhinyuri/Baton/security/advisories/new), not here.
@@ -26,6 +27,23 @@ body:
       placeholder: |
         1. Continue a Code session from WORK in LAB
         2. …
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed Baton
+      options:
+        - The ZIP from Releases
+        - Homebrew
+        - From source (make install)
+        - It didn't install
+    validations:
+      required: true
+  - type: checkboxes
+    id: upgrade
+    attributes:
+      label: Upgrade
+      options:
+        - label: I upgraded from Claude Profiles.
   - type: textarea
     id: diagnostics
     attributes:
@@ -33,9 +51,13 @@ body:
       description: |
         The report from Report a problem: Environment, Windows, Sessions check, Last sync, Recent errors and Log.
         If it was too long for the link, it is on your clipboard and in the file you saved; paste it here or
-        attach the file.
-    validations:
-      required: true
+        attach the file. If you couldn't make one, say why and fill in the versions below.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions, without a report
+      description: Only if Diagnostics is empty.
+      placeholder: macOS 15.6, Baton 1.0.0-rc.1, Claude Desktop 1.2.3
   - type: checkboxes
     id: reviewed
     attributes:
