@@ -42,6 +42,23 @@ struct ContrastTests {
         }
     }
 
+    /// The details line and time of a Continue sheet row that is selected, in a focused list (blue) and in one that
+    /// isn't (grey), in both appearances. The grey text alone was 1.15:1 on the blue.
+    @Test func rowDetailsStayReadableOnASelectedRow() {
+        let selected = TextColors.rowDetail(isSelected: true)
+        let light = zip(TextColors.selectedRowText.light, TextColors.selectedRows.light).map { (selected?.light ?? $0, $1) }
+        let dark = zip(TextColors.selectedRowText.dark, TextColors.selectedRows.dark).map { (selected?.dark ?? $0, $1) }
+        for (text, row) in light + dark {
+            #expect(Contrast.ratio(text, row) >= Contrast.minimum, "\(text) on \(row)")
+        }
+    }
+
+    /// On the other rows they keep the secondary colour, 4.5:1 or more on every row background.
+    @Test func rowDetailsAreSecondaryOnOtherRows() {
+        #expect(TextColors.rowDetail(isSelected: false)?.light == TextColors.secondary.light)
+        #expect(TextColors.rowDetail(isSelected: false)?.dark == TextColors.secondary.dark)
+    }
+
     /// What the colours replace: black at 50% (the system's secondary text) and system orange on a light list row.
     @Test func systemColoursFallShortOnLightRows() {
         #expect(Contrast.ratio("#7C7C7C", "#F8F8F8") < Contrast.minimum)

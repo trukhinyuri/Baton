@@ -104,8 +104,11 @@ struct ContinueWorkSheet: View {
 
             List(selection: $form.selection) {
                 ForEach(filtered) { conversation in
-                    ConversationRow(conversation: conversation, owner: conversation.ownerID.map(model.buttonLabel(of:)))
-                        .tag(conversation.id)
+                    ConversationRow(
+                        conversation: conversation, owner: conversation.ownerID.map(model.buttonLabel(of:)),
+                        isSelected: conversation.id == form.selection
+                    )
+                    .tag(conversation.id)
                 }
             }
             .listStyle(.bordered(alternatesRowBackgrounds: true))
@@ -460,6 +463,13 @@ struct ContinueWorkSheet: View {
 struct ConversationRow: View {
     let conversation: Conversation
     let owner: String?
+    let isSelected: Bool
+
+    /// The details and time: on a selected row in the title's colour, which the system keeps readable on the blue of a
+    /// focused list and the grey of an unfocused one (`TextColors.rowDetail`).
+    private var detailStyle: AnyShapeStyle {
+        TextColors.rowDetail(isSelected: isSelected).map { AnyShapeStyle(Color(nsColor: .adaptive($0))) } ?? AnyShapeStyle(.primary)
+    }
 
     private var icon: String {
         switch conversation.kind {
@@ -488,11 +498,11 @@ struct ConversationRow: View {
             Image(systemName: icon).foregroundStyle(.secondary).frame(width: 20).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(conversation.title).lineLimit(1).truncationMode(.tail)
-                Text(details).font(.caption).foregroundStyle(Color.secondaryText).lineLimit(1).truncationMode(.middle)
+                Text(details).font(.caption).foregroundStyle(detailStyle).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
             Text(conversation.lastActivity, format: .relative(presentation: .named))
-                .font(.caption).foregroundStyle(Color.secondaryText)
+                .font(.caption).foregroundStyle(detailStyle)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
