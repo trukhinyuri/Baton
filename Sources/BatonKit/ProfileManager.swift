@@ -245,23 +245,29 @@ public final class ProfileManager: @unchecked Sendable {
     /// A warning when the installed Claude Desktop is outside the versions this release was tested with.
     public var claudeVersionWarning: String? { ClaudeVersion.warning(for: ClaudeVersion.installed(at: paths.claudeApp)) }
 
+    /// The organization's managed policies that concern Baton, one line each; empty when none is set.
+    public var managedPolicyWarnings: [String] { ManagedPolicy.warnings(in: managedPreferences, user: NSUserName()) }
+
     /// Run once when the app or the CLI starts. Gives `claude://` links back to the main app after an abandoned
-    /// sign-in, and says when Claude Desktop is missing or outside the tested versions.
+    /// sign-in, and says when Claude Desktop is missing, not Anthropic's, outside the tested versions or limited by a
+    /// managed policy.
+    /// - Parameter restoringLinks: `false` for a command that only reads: every check still runs, but Launch Services
+    ///   is left as it is.
     /// - Returns: warnings to show; empty when all is well.
-    public func startUpChecks() -> [String] {
+    public func startUpChecks(restoringLinks: Bool = true) -> [String] {
         guard !isReadOnly else { return [] }
         guard fm.fileExists(atPath: paths.claudeApp.path) else {
-            return ["Claude Desktop wasn't found in Applications. Install it, then open Baton again."]
+            return ["Claude Desktop wasn't found in Applications. Install it, then open Baton again."] + managedPolicyWarnings
         }
         var warnings: [String] = []
         // `Paths.findClaude` names an unsigned /Applications/Claude.app only when no Claude Anthropic signed is found.
-        if isSignedByAnthropic(paths.claudeApp) {
-            do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) } catch { warnings.append(error.localizedDescription) }
-        } else {
+        if !isSignedByAnthropic(paths.claudeApp) {
             warnings.append(ProfileError.claudeNotFromAnthropic(paths.claudeApp.path).localizedDescription)
+        } else if restoringLinks {
+            do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) } catch { warnings.append(error.localizedDescription) }
         }
         if let warning = claudeVersionWarning { warnings.append(warning) }
-        warnings += ManagedPolicy.warnings(in: managedPreferences, user: NSUserName())
+        warnings += managedPolicyWarnings
         return warnings + Self.reservedIDWarnings(profiles)
     }
 
@@ -1305,6 +1311,14 @@ enum ManagedPolicy {
             for (key, value) in values where (value as? Bool) == true { keys.insert(key) }
         }
         return keys
+    }
+
+    /// The managed preferences that concern Baton, each with a line in `warnings`.
+    static let concerningBaton = ["disableDeepLinkRegistration", "disableMultiAccount"]
+
+    /// The keys of `concerningBaton` set to true for the whole Mac or for `user`, sorted.
+    static func concerning(in folder: URL, user: String) -> [String] {
+        concerningBaton.filter(enabled(in: folder, user: user).contains)
     }
 
     /// A line for each managed preference that concerns Baton; empty when none is set.

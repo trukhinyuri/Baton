@@ -134,10 +134,10 @@ case .manager(let sharedLock):
 
 let manager = ProfileManager(cliPath: cli)
 
-// Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a Claude Desktop version
-// outside the tested range. Informational only: it never blocks the command that follows. A command that only reads
-// leaves Launch Services as it is, so `baton doctor` never changes what it looks into.
-let startUpNotes = CLIDispatch.isReadOnly(args) ? [manager.claudeVersionWarning].compactMap { $0 } : manager.startUpChecks()
+// Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a missing or unsigned Claude Desktop, a
+// version outside the tested range and managed policies. Informational only: it never blocks the command that follows.
+// A command that only reads leaves Launch Services as it is, so `baton doctor` never changes what it looks into.
+let startUpNotes = manager.startUpChecks(restoringLinks: !CLIDispatch.isReadOnly(args))
 for warning in startUpNotes { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
 
 func resolve(_ name: String) -> Profile {
@@ -346,17 +346,24 @@ do {
         } else {
             print("Read-only local inventory. Cloud access and feature availability are not tested.")
             for note in LegacyMigration.notes(paths: manager.paths, cli: cli) { print(note) }
-            let installed = ClaudeVersion.installed(at: manager.paths.claudeApp) ?? "unknown"
-            print(
-                "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.testedText))"
-            )
-            if let warning = manager.claudeVersionWarning { print("  \(warning)") }
-            for note in ClaudeSource.notes(paths: manager.paths) { print("  \(note)") }
-            switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
-            case nil: print("Local only: Claude.app unreadable, can't check its settings")
-            case []: print("Local only keys present: ccRemoteControlDefaultEnabled, remoteControlStayReachable")
-            case let missing?: print("Local only: missing in this Claude Desktop: \(missing.joined(separator: ", "))")
+            if FileManager.default.fileExists(atPath: manager.paths.claudeApp.path) {
+                let installed = ClaudeVersion.installed(at: manager.paths.claudeApp) ?? "unknown"
+                print(
+                    "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.testedText))"
+                )
+                if let warning = manager.claudeVersionWarning { print("  \(warning)") }
+                for note in ClaudeSource.notes(paths: manager.paths) { print("  \(note)") }
+                switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
+                case nil: print("Local only: Claude.app unreadable, can't check its settings")
+                case []: print("Local only keys present: ccRemoteControlDefaultEnabled, remoteControlStayReachable")
+                case let missing?: print("Local only: missing in this Claude Desktop: \(missing.joined(separator: ", "))")
+                }
+            } else {
+                print("Claude Desktop: not installed (looked for \(manager.paths.claudeApp.path)). Install it from claude.ai/download.")
             }
+            let policies = manager.managedPolicyWarnings
+            print(policies.isEmpty ? "Managed policies: none that concern Baton" : "Managed policies:")
+            for policy in policies { print("  \(policy)") }
             for row in manager.localOnlyStatus() { print("\(row.label): \(describe(row.status))") }
             print(describe(manager.cloudMoveLock.status()))
             for change in manager.autoResume.changes() {

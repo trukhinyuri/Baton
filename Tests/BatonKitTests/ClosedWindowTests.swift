@@ -52,4 +52,25 @@ struct ClosedWindowTests {
         try write(["disableDeepLinkRegistration": true, "disableMultiAccount": false], to: folder.appending(path: "com.anthropic.claudefordesktop.plist"))
         #expect(ManagedPolicy.warnings(in: folder, user: "alex").count == 2)
     }
+
+    /// A command that only reads leaves Launch Services alone but still says what is wrong: no Claude Desktop, or a
+    /// managed policy that stops Continue, in `baton doctor`, in its start-up notes and in the problem report.
+    @Test func readOnlyChecksNameMissingClaudeAndManagedPolicies() throws {
+        let box = try Sandbox()
+        try? FileManager.default.removeItem(at: box.paths.claudeApp)
+        let folder = box.root.appending(path: "Library/Managed Preferences", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["disableDeepLinkRegistration": true], format: .binary, options: 0)
+            .write(to: folder.appending(path: "com.anthropic.claudefordesktop.plist"))
+        let manager = ProfileManager(paths: box.paths)
+
+        let notes = manager.startUpChecks(restoringLinks: false)
+        #expect(notes.first == "Claude Desktop wasn't found in Applications. Install it, then open Baton again.")
+        #expect(notes.contains { $0.contains("turned off claude:// links") })
+        #expect(manager.managedPolicyWarnings.count == 1)
+
+        let report = FeedbackReport(facts: .collect(paths: box.paths, errors: [], log: [])).markdown
+        #expect(report.contains("- Managed policies: disableDeepLinkRegistration"))
+        #expect(report.contains("- Claude Desktop not found"))
+    }
 }
