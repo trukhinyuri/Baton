@@ -468,14 +468,20 @@ public struct SettingsSync: Sendable {
     /// config or another window's, which may be open while this profile's is closed. Such a file is left as it is, and
     /// the log says so.
     static func mayWrite(_ url: URL, in dataDir: URL) -> Bool {
-        let target = LocalOnly.writeTarget(url)
-        let folder = dataDir.resolvingSymlinksInPath().path
-        let resolved = target.deletingLastPathComponent().resolvingSymlinksInPath().appending(path: target.lastPathComponent).path
-        guard resolved.hasPrefix(folder + "/") else {
+        guard leadsInside(url, dataDir) else {
             Log.notice("settings", "Left \(url.lastPathComponent) of window \(dataDir.lastPathComponent) as it is: it links to a file outside its data folder")
             return false
         }
         return true
+    }
+
+    /// Whether a write to `url` lands inside `dataDir`: `url` is a file there, or a link to a file inside that folder.
+    /// Local only and Auto-continue follow the same rule for a window's settings file (`LocalOnly.Failure.linkedOutside`).
+    static func leadsInside(_ url: URL, _ dataDir: URL) -> Bool {
+        let target = LocalOnly.writeTarget(url)
+        let folder = dataDir.resolvingSymlinksInPath().path
+        let resolved = target.deletingLastPathComponent().resolvingSymlinksInPath().appending(path: target.lastPathComponent).path
+        return resolved.hasPrefix(folder + "/")
     }
 
     /// Copies theme, zoom and language into the profile's `config.json`, leaving everything else in it untouched.

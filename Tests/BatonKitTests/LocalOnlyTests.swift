@@ -242,28 +242,28 @@ struct LocalOnlyTests {
         #expect(box.read(box.desktopConfig(box.work)) == #"{"preferences": {"ccRemoteControlDefaultEnabled": tru"#)
     }
 
-    /// A config linked into place from a dotfiles folder stays a link: the file it leads to gets the change and keeps
-    /// its permissions, and the backup holds its content, not another link to it.
+    /// A config linked to a file inside its window's data folder stays a link: the file it leads to gets the change and
+    /// keeps its permissions, and the backup holds its content, not another link to it.
     @Test func aLinkedConfigStaysALink() throws {
         let box = try Sandbox()
         try box.installClaude()
         let fm = FileManager.default
-        let dotfiles = box.root.appending(path: "dotfiles/claude_desktop_config.json")
+        let dotfiles = box.work.appending(path: "kept/claude_desktop_config.json")
         try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
         try box.write(Self.config, to: dotfiles)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dotfiles.path)
         try fm.createSymbolicLink(at: box.desktopConfig(box.work), withDestinationURL: dotfiles)
         // The main window's, by a relative link.
-        let shared = box.main.deletingLastPathComponent().appending(path: "Shared/config.json")
+        let shared = box.main.appending(path: "Shared/config.json")
         try fm.createDirectory(at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
         try box.write(#"{"preferences":{"keepAwakeEnabled":true}}"#, to: shared)
-        try fm.createSymbolicLink(atPath: box.desktopConfig(box.main).path, withDestinationPath: "../Shared/config.json")
+        try fm.createSymbolicLink(atPath: box.desktopConfig(box.main).path, withDestinationPath: "Shared/config.json")
 
         #expect(try closed(box).apply(window: "work") == .on)
         #expect(try closed(box).apply(window: "main") == .on)
 
         #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.work).path) == dotfiles.path, "still a link")
-        #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.main).path) == "../Shared/config.json")
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.main).path) == "Shared/config.json")
         #expect(try preferences(dotfiles)["ccRemoteControlDefaultEnabled"] as? Bool == false, "the linked file got the change")
         #expect(try preferences(shared)["ccRemoteControlDefaultEnabled"] as? Bool == false)
         #expect(try fm.attributesOfItem(atPath: dotfiles.path)[.posixPermissions] as? Int == 0o600, "its own permissions, not the link's")
@@ -276,6 +276,36 @@ struct LocalOnlyTests {
         #expect(try closed(box).disable(window: "work") == .off)
         #expect(box.read(dotfiles) == Self.config, "put back in the linked file")
         #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.work).path) == dotfiles.path)
+    }
+
+    /// One settings file shared by an open and a closed window, such as a dotfiles file both link to, belongs to the open
+    /// one too: Local only for the closed window leaves it as it is, says so, and reports it once, not after every sync.
+    @Test func aConfigSharedWithAnOpenWindowIsLeftAsItIs() throws {
+        let box = try Sandbox()
+        try box.installClaude()
+        let fm = FileManager.default
+        let dotfiles = box.root.appending(path: "dotfiles/claude_desktop_config.json")
+        try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try box.write(Self.config, to: dotfiles)
+        for window in [box.main, box.work] { try fm.createSymbolicLink(at: box.desktopConfig(window), withDestinationURL: dotfiles) }
+        let mainOpen = LocalOnly(paths: box.paths, isRunning: { $0 == "main" })
+
+        #expect(throws: LocalOnly.Failure.linkedOutside) { try mainOpen.apply(window: "work") }
+        let all = try mainOpen.setEnabled(true, window: nil, windows: ["main", "work"])
+        #expect(all == ["main": .pending, "work": .pending], "the choice is kept and every window is tried")
+
+        #expect(box.read(dotfiles) == Self.config, "the open window's file is left as it is")
+        #expect(!box.exists(box.paths.backupsDir))
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.work).path) == dotfiles.path)
+
+        // After every sync and every quit of a Claude window, the app tries each closed window again.
+        try ProfileRegistry(paths: box.paths).save([Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")])
+        let manager = ProfileManager(paths: box.paths)
+        manager.runningCopies = { [RunningClaude(bundlePath: box.paths.claudeApp.path, arguments: [box.paths.claudeApp.path])] }
+        let problems = manager.applyLocalOnlyToClosedWindows()
+        #expect(problems.count == 1 && problems.first?.contains("Claude WORK") == true && problems.first?.contains("outside") == true)
+        #expect(manager.applyLocalOnlyToClosedWindows().isEmpty, "reported once")
+        #expect(box.read(dotfiles) == Self.config)
     }
 
     /// A closed window whose Local only fails every time is tried again after every sync, and its problem is reported
