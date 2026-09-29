@@ -39,6 +39,14 @@ extension Sandbox {
         }
         return manager
     }
+
+    /// Makes sharing sessions before a start fail, so opening a closed window gives a warning.
+    func failSharingSessions() throws {
+        let main = try pair(self.main, account: Sandbox.accountA)
+        try pair(work, account: Sandbox.accountB)
+        try write(#"{"title":"New since the last start"}"#, to: main.appending(path: "local_new.json"))
+        try write("broken", to: paths.stateDir.appending(path: "code-native-session-scopes.json"))
+    }
 }
 
 /// Waits for `group` off the cooperative pool, so a test that deadlocks fails instead of hanging.
@@ -161,6 +169,61 @@ struct OpenLockOrderTests {
         #expect(manager.lastOpenWarning == nil)
     }
 
+    /// A window found running only once open.lock is taken, started from its Dock icon meanwhile, is brought forward
+    /// without the warning from its earlier start.
+    @Test func aWindowFoundRunningUnderTheLockHasNoWarning() async throws {
+        let box = try Sandbox()
+        let windows = FakeWindows()
+        let manager = try box.closedWorkWindow(windows)
+        try box.failSharingSessions()
+        try await manager.open("work")
+        #expect(manager.openWarning(of: "work") != nil)
+        // The first look finds it closed; by the time open.lock is taken, it runs.
+        let looks = Counter()
+        manager.runningCopies = { looks.next() == 1 ? [] : windows.running }
+
+        try await manager.open("work")
+
+        #expect(windows.started == 1, "brought forward, not started again")
+        #expect(manager.openWarning(of: "work") == nil)
+        #expect(manager.lastOpenWarning == nil)
+    }
+
+    /// The same for the main window.
+    @Test func theMainWindowFoundRunningUnderTheLockHasNoWarning() async throws {
+        let box = try Sandbox()
+        let windows = FakeWindows()
+        let manager = try box.closedWorkWindow(windows)
+        let broughtForward = Counter()
+        manager.appActivator = { _, _ in _ = broughtForward.next() }
+        try box.failSharingSessions()
+        try await manager.openMain()
+        #expect(manager.openWarning(of: "main") != nil)
+        let looks = Counter()
+        manager.runningCopies = { looks.next() == 1 ? [] : windows.running }
+
+        try await manager.openMain()
+
+        #expect(windows.started == 1 && broughtForward.next() == 2, "brought forward, not started again")
+        #expect(manager.openWarning(of: "main") == nil)
+    }
+
+    /// Finishing the first sign-in of a window that is closed already opens nothing, so no earlier warning is shown.
+    @Test func finishingTheSignInOfAClosedWindowHasNoWarning() async throws {
+        let box = try Sandbox()
+        let windows = FakeWindows()
+        let manager = try box.closedWorkWindow(windows)
+        try box.failSharingSessions()
+        try await manager.open("work")
+        #expect(manager.openWarning(of: "work") != nil)
+
+        // No process on this Mac runs the sandbox's app copy, so it counts as closed.
+        try await manager.finishFirstSignIn("work")
+
+        #expect(windows.started == 1)
+        #expect(manager.openWarning(of: "work") == nil)
+    }
+
     /// A second click while the window is still starting brings it forward instead of starting a second copy on the
     /// same data.
     @Test func openingAWindowThatIsStartingStartsItOnce() async throws {
@@ -187,6 +250,18 @@ struct OpenLockOrderTests {
         try await manager.open("work")
 
         #expect(windows.started == 1, "only the start from elsewhere")
+    }
+}
+
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    /// Counts one more and returns the count.
+    func next() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
     }
 }
 

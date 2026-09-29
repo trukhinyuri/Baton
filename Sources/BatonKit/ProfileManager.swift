@@ -406,6 +406,9 @@ public final class ProfileManager: @unchecked Sendable {
     var runningCopies: (@Sendable () -> [RunningClaude])?
     /// Starts a new copy of an app with these arguments and links; tests replace it so nothing is started.
     var appLauncher: (@Sendable (_ app: URL, _ arguments: [String], _ links: [URL]) async throws -> Void)?
+    /// Hands links to a running copy of an app, or brings it forward without any; tests replace it so nothing reaches
+    /// Launch Services.
+    var appActivator: (@Sendable (_ app: URL, _ links: [URL]) async throws -> Void)?
     /// Called while a window is prepared to start, under open.lock; tests use it to overlap other work with it.
     var whilePreparing: (@Sendable (String) -> Void)?
 
@@ -453,7 +456,10 @@ public final class ProfileManager: @unchecked Sendable {
         let startedMeanwhile =
             try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) { () -> RunningClaude? in
                 // Started while this call waited, from its Dock icon or by another Baton: its data is in use now.
-                if let window = runningClaudes().first(where: { window(of: profile.id, is: $0) }) { return window }
+                if let window = runningClaudes().first(where: { window(of: profile.id, is: $0) }) {
+                    noteOpened(profile.id, warning: nil)
+                    return window
+                }
                 whilePreparing?(id)
                 // Auto-continue entries a Continue had to leave on in windows open at the time: this window stays
                 // closed until it starts below, so its own are turned off now, app or no app (`AutoResumeNote.stillOn`).
@@ -577,6 +583,7 @@ public final class ProfileManager: @unchecked Sendable {
                 // Started while this call waited, from the Dock for instance: its data is in use now.
                 if runningClaudes().contains(where: isMain) {
                     startedMeanwhile = true
+                    noteOpened("main", warning: nil)
                     return
                 }
                 whilePreparing?("main")
@@ -595,6 +602,7 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     private func bringMainForward(links: [URL]) async throws {
+        if let appActivator { return try await appActivator(paths.claudeApp, links) }
         if !links.isEmpty {
             try await deliver(links, to: paths.claudeApp)
         } else {
@@ -605,6 +613,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// Hands a `claude://` link to the running window of the app at `app`. macOS delivers it to that exact copy,
     /// so no other window sees it and no permission is needed.
     private func deliver(_ links: [URL], to app: URL) async throws {
+        if let appActivator { return try await appActivator(app, links) }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         _ = try await NSWorkspace.shared.open(links, withApplicationAt: app, configuration: configuration)
@@ -1064,6 +1073,8 @@ public final class ProfileManager: @unchecked Sendable {
     public func finishFirstSignIn(_ id: String) async throws {
         try ensureWritable()
         guard profiles.contains(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
+        // Nothing is prepared unless the window is opened again below, so a warning from an earlier start is not shown.
+        noteOpened(id, warning: nil)
         _ = try? syncSessions()
         let engine = paths.engine(for: id).standardizedFileURL
         let running = claudeProcesses().filter { $0.bundleURL?.standardizedFileURL == engine }
