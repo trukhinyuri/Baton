@@ -8,10 +8,10 @@ body:
         Tell us where the baton got dropped: what you did, what you expected, and what happened instead.
 
         **Report a problem** in Baton (the footer, the menu bar or Help) or `baton report`
-        fills in the Diagnostics field below. If Baton won't install or open, there is no report: leave Diagnostics
-        empty and fill in the versions instead. It replaces your home folder, user name, emails, account ids,
+        fills in the Diagnostics field below. The report replaces your home folder, user name, emails, account ids,
         profile labels and folder names, and leaves out session titles, transcripts and anything shaped like a
-        token. Your own description is not changed, so leave out anything you would not post in public.
+        token. Nothing else you type is changed, so leave out anything you would not post in public.
+        If Baton won't install or open, there is no report: leave Diagnostics empty and fill in the versions instead.
         Security problems go to a [private advisory](https://github.com/trukhinyuri/Baton/security/advisories/new), not here.
   - type: textarea
     id: what-happened
