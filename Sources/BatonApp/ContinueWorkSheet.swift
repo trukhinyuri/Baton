@@ -33,8 +33,11 @@ struct ContinueWorkSheet: View {
 
     private var filtered: [Conversation] { listing.shown }
 
-    /// Only a listed conversation: one the search has hidden is never what Continue acts on.
-    private var selected: Conversation? { filtered.first { $0.id == form.selection } }
+    /// Only a listed conversation: one the search has hidden is never what Continue acts on. Found by id, since the
+    /// sheet reads it many times per update.
+    private var selected: Conversation? {
+        ConversationIndex.listedConversation(form.selection, in: model.conversations, query: form.search)
+    }
 
     /// The window the selected conversation belongs to or last ran in: never offered for it.
     private var source: String? { selected.flatMap { $0.ownerID ?? $0.runningIn } }
@@ -94,6 +97,8 @@ struct ContinueWorkSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Filtered once per update: with thousands of sessions each pass takes milliseconds.
+            let listing = self.listing
             Text("Continue work").font(.title2.bold())
                 .accessibilityAddTraits(.isHeader)
             Text("Pick a session and the window that runs the next leg. That window opens it for you; nothing is sent on your behalf.")
@@ -103,9 +108,12 @@ struct ContinueWorkSheet: View {
                 .textFieldStyle(.roundedBorder)
 
             List(selection: $form.selection) {
-                ForEach(filtered) { conversation in
-                    ConversationRow(conversation: conversation, owner: conversation.ownerID.map(model.buttonLabel(of:)))
-                        .tag(conversation.id)
+                ForEach(listing.shown) { conversation in
+                    ConversationRow(
+                        conversation: conversation, owner: conversation.ownerID.map(model.buttonLabel(of:)),
+                        isSelected: conversation.id == form.selection
+                    )
+                    .tag(conversation.id)
                 }
             }
             .listStyle(.bordered(alternatesRowBackgrounds: true))
@@ -114,7 +122,7 @@ struct ContinueWorkSheet: View {
             .overlay {
                 if model.isLoadingConversations && model.conversations.isEmpty {
                     ProgressView("Looking for conversations…")
-                } else if filtered.isEmpty {
+                } else if listing.shown.isEmpty {
                     Text(form.search.isEmpty ? "Nothing to hand off yet: there are no local conversations." : "Nothing matches “\(form.search)”.")
                         .foregroundStyle(Color.secondaryText)
                 }
@@ -123,28 +131,35 @@ struct ContinueWorkSheet: View {
                 Text(note).font(.caption).foregroundStyle(Color.secondaryText)
             }
 
-            HStack(spacing: 8) {
-                Text("Continue in")
-                Picker("Continue in", selection: $form.destination) {
-                    ForEach(destinations) { status in
-                        Text(destinationTitle(status)).tag(status.id)
+            // Every window it can go to, each with its usage or the limit it is at: nothing to open to compare them.
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 10) {
+                if !destinations.isEmpty {
+                    GridRow(alignment: .firstTextBaseline) {
+                        Text("Continue in")
+                        Picker("Continue in", selection: $form.destination) {
+                            ForEach(destinations) { status in
+                                Text(destinationTitle(status)).tag(status.id)
+                            }
+                        }
+                        .pickerStyle(.radioGroup)
+                        .labelsHidden()
                     }
                 }
-                .labelsHidden()
-                .frame(maxWidth: 360)
-                Spacer()
                 if let selected, selected.kind != .cowork {
-                    Picker("How", selection: $form.mode) {
-                        Text("Automatic").tag(ContinueMode.auto)
-                        Text("Same session").tag(ContinueMode.same)
-                        Text("As a copy").tag(ContinueMode.fork)
+                    GridRow(alignment: .firstTextBaseline) {
+                        Text("How")
+                        Picker("How", selection: $form.mode) {
+                            Text("Automatic").tag(ContinueMode.auto)
+                            Text("Same session").tag(ContinueMode.same)
+                            Text("As a copy").tag(ContinueMode.fork)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize()
+                        .help(
+                            "Automatic continues sessions still open in a running Claude Code process and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session."
+                        )
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .help(
-                        "Automatic continues sessions still open in a running Claude Code process and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session."
-                    )
                 }
             }
 
@@ -248,12 +263,14 @@ struct ContinueWorkSheet: View {
             }
         }
         .padding(22)
-        .frame(minWidth: 700, idealWidth: 780, minHeight: 540, idealHeight: 590)
+        .frame(minWidth: 700, idealWidth: 780, minHeight: 540, idealHeight: 660)
         .interactiveDismissDisabled(form.working)
         .onAppear {
             model.loadConversations()
             chooseDefaults()
             refreshPlan()
+            // Demo mode's picture of the offer to wait: it never looks at real limits, so it is handed one.
+            if let offer = model.demoOffer { form.offer = offer }
         }
         .onDisappear { form.isGone = true }
         .onChange(of: form.search) { form.selection = ConversationIndex.selection(form.selection, in: filtered) }
@@ -460,6 +477,13 @@ struct ContinueWorkSheet: View {
 struct ConversationRow: View {
     let conversation: Conversation
     let owner: String?
+    let isSelected: Bool
+
+    /// The details and time: on a selected row in the title's colour, which the system keeps readable on the blue of a
+    /// focused list and the grey of an unfocused one (`TextColors.rowDetail`).
+    private var detailStyle: AnyShapeStyle {
+        TextColors.rowDetail(isSelected: isSelected).map { AnyShapeStyle(Color(nsColor: .adaptive($0))) } ?? AnyShapeStyle(.primary)
+    }
 
     private var icon: String {
         switch conversation.kind {
@@ -488,11 +512,11 @@ struct ConversationRow: View {
             Image(systemName: icon).foregroundStyle(.secondary).frame(width: 20).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(conversation.title).lineLimit(1).truncationMode(.tail)
-                Text(details).font(.caption).foregroundStyle(Color.secondaryText).lineLimit(1).truncationMode(.middle)
+                Text(details).font(.caption).foregroundStyle(detailStyle).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
             Text(conversation.lastActivity, format: .relative(presentation: .named))
-                .font(.caption).foregroundStyle(Color.secondaryText)
+                .font(.caption).foregroundStyle(detailStyle)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)

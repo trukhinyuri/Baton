@@ -51,4 +51,16 @@ public enum TextColors {
         light: ["#FFFFFF", "#FBFBFB", "#F8F8F8", "#F6F6F6", "#F4F5F5", "#F7E9DD", "#ECECEC"],
         dark: ["#1E1E1E", "#282828", "#323232", "#3C3C3C"]
     )
+
+    /// A selected list row as macOS draws it with the default blue accent (measured): the accent colour while the list
+    /// has focus, grey while it hasn't. `secondary` is 1.15:1 and 2.89:1 on the blue, and 4.35:1 on the dark grey.
+    public static let selectedRows = (light: ["#0064E1", "#DCDCDC"], dark: ["#0059D1", "#464646"])
+    /// What the system draws a selected row's title in on each of `selectedRows`: white on the blue, and black or
+    /// white at 85% on the grey.
+    public static let selectedRowText = (light: ["#FFFFFF", "#222222"], dark: ["#FFFFFF", "#E3E3E3"])
+
+    /// Secondary text in a list row, such as the details line and time in the Continue sheet: `secondary` on an
+    /// unselected row; `nil` on a selected one, for the system's colour of the row's title (`selectedRowText`), which
+    /// follows the selection as it turns blue and back.
+    public static func rowDetail(isSelected: Bool) -> (light: String, dark: String)? { isSelected ? nil : secondary }
 }

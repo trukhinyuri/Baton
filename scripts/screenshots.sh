@@ -16,7 +16,7 @@ mkdir -p docs/images
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/baton-screenshots.XXXXXX")"
 failed=0
 
-capture() { # capture <file name> [sheet]: sheet is 1 (Add Subscription) or continue (Continue work…)
+capture() { # capture <file name> [sheet]: 1 (Add Subscription), continue (Continue work…) or wait (its offer to wait)
     picture="$WORK/$1"
     # Only what the app needs: no Claude or Anthropic settings, nothing else from this shell.
     env -i HOME="$HOME" USER="$USER" PATH=/usr/bin:/bin BATON_DEMO=1 BATON_DEMO_SNAPSHOT="$picture" \
@@ -49,5 +49,6 @@ capture() { # capture <file name> [sheet]: sheet is 1 (Add Subscription) or cont
 capture main-window.png
 capture add-subscription.png 1
 capture continue-work.png continue
+capture continue-wait.png wait
 rmdir "$WORK" 2>/dev/null || true
 exit "$failed"

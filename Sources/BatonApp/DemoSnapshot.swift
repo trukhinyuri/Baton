@@ -2,8 +2,8 @@ import AppKit
 import BatonKit
 
 /// Documentation screenshots without screen capture. With `BATON_DEMO=1` and `BATON_DEMO_SNAPSHOT=<file.png>`, the
-/// app draws its main window, title bar included, and the sheet `BATON_DEMO_SHEET` opened on it, in the light
-/// appearance into a PNG at 2x, writes it and quits. AppKit draws the app's own views into a bitmap
+/// app draws its main window, title bar included, and the sheet `BATON_DEMO_SHEET` opened on it (with the alert on
+/// that sheet, if it shows one), in the light appearance into a PNG at 2x, writes it and quits. AppKit draws the app's own views into a bitmap
 /// (`cacheDisplay(in:to:)` on each window's frame view), so no screen-recording permission is involved and nothing
 /// else on the screen can end up in the picture. `scripts/screenshots.sh` takes the README's images this way.
 @MainActor
@@ -23,8 +23,9 @@ enum DemoSnapshot {
     }
 
     /// Called before any window appears: light appearance from the first frame, then the picture once the window
-    /// (and the sheet, if one was asked for) has settled. Gives up after 15 seconds with exit status 1.
-    static func take(to file: URL, withSheet: Bool) {
+    /// and `sheets` levels of sheets on it (a sheet, then an alert on that sheet) have settled. Gives up after 15
+    /// seconds with exit status 1.
+    static func take(to file: URL, sheets: Int) {
         NSApplication.shared.appearance = NSAppearance(named: .aqua)
         Task { @MainActor in
             let deadline = Date().addingTimeInterval(15)
@@ -35,7 +36,7 @@ enum DemoSnapshot {
                 // that state), and a sheet waits until its window is on screen.
                 if !window.isVisible { window.orderFrontRegardless() }
                 guard window.contentRect(forFrameRect: window.frame).size == contentSize else { continue }
-                guard !withSheet || window.attachedSheet != nil else { continue }
+                guard stack(window).count > sheets else { continue }
                 do {
                     try await settle(window)
                     try write(window, to: file)
@@ -54,18 +55,18 @@ enum DemoSnapshot {
     /// the picture, room for a sheet taller than the window, and the end of the sheet's animation.
     private static func settle(_ window: NSWindow) async throws {
         // Activation is cooperative on macOS 14 and later, so a copy started from a shell may stay inactive: ask again
-        // until the window (or its sheet) is key, and draw nothing with inactive, grey traffic lights.
+        // until the window (or a sheet on it) is key, and draw nothing with inactive, grey traffic lights.
+        let windows = stack(window)
         for _ in 0..<20 {
             NSApp.activate(ignoringOtherApps: true)
             NSApp.activate()
             window.orderFrontRegardless()
             window.makeKeyAndOrderFront(nil)
-            window.attachedSheet?.makeKey()
-            if window.isKeyWindow || window.attachedSheet?.isKeyWindow == true { break }
+            windows.last?.makeKey()
+            if windows.contains(where: \.isKeyWindow) { break }
             try? await Task.sleep(for: .milliseconds(250))
         }
-        guard window.isKeyWindow || window.attachedSheet?.isKeyWindow == true else { throw SnapshotError.notActive }
-        let windows = [window, window.attachedSheet].compactMap { $0 }
+        guard windows.contains(where: \.isKeyWindow) else { throw SnapshotError.notActive }
         for shown in windows { shown.makeFirstResponder(nil) }
         try? await Task.sleep(for: .milliseconds(800))
         // A sheet hangs from the title bar; a tall one gets a taller window, so the footer still shows below it.
@@ -77,18 +78,26 @@ enum DemoSnapshot {
         try? await Task.sleep(for: .milliseconds(200))
     }
 
+    /// The window, its sheet and the sheet's own sheet (an alert on it), as far as they go.
+    private static func stack(_ window: NSWindow) -> [NSWindow] {
+        var windows = [window]
+        while let sheet = windows.last?.attachedSheet { windows.append(sheet) }
+        return windows
+    }
+
     /// The main window, not the menu bar extra or a sheet.
     static func mainWindow() -> NSWindow? {
         NSApp.windows.first { $0.identifier?.rawValue == "main" }
             ?? NSApp.windows.first { $0.isVisible && $0.sheetParent == nil && $0.styleMask.contains(.titled) }
     }
 
-    /// The window and its attached sheet, each with its shadow, on a transparent canvas large enough for both.
+    /// The window and its sheets, each with its shadow, on a transparent canvas large enough for all of them.
     private static func write(_ window: NSWindow, to file: URL) throws {
         guard let windowImage = image(of: window) else { throw SnapshotError.nothingDrawn }
         let windowRect = NSRect(origin: .zero, size: window.frame.size)
         var parts = [(windowImage, windowRect, radius(of: window))]
-        if let sheet = window.attachedSheet, let sheetImage = image(of: sheet) {
+        for sheet in stack(window).dropFirst() {
+            guard let sheetImage = image(of: sheet) else { break }
             let origin = NSPoint(x: sheet.frame.minX - window.frame.minX, y: sheet.frame.minY - window.frame.minY)
             parts.append((sheetImage, NSRect(origin: origin, size: sheet.frame.size), radius(of: sheet)))
         }

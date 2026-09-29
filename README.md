@@ -125,7 +125,7 @@ Each row shows the account signed in to that window and its five-hour and weekly
 Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue**; the button names the window, as in **Continue in Claude WORK**. When an open subscription reaches its limit, a banner under the header opens the same sheet ([Limits and resets](#limits-and-resets)). The signed-in subscription with the most room left (by the higher of its five-hour and weekly usage) is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may have changed since*.
 
 <p align="center">
-  <img src="docs/images/continue-work.png" width="820" alt="Continue work sheet listing local Code sessions and Cowork tasks, with the window to continue in, the choice between Automatic, Same session and As a copy, and Continue All for the session's folder">
+  <img src="docs/images/continue-work.png" width="820" alt="Continue work sheet listing local Code sessions and Cowork tasks; the windows to continue in, each with its five-hour and weekly usage or, for one at its limit, when it resets; the choice between Automatic, Same session and As a copy; and Continue All for the session's folder">
 </p>
 
 | Conversation | What happens in the other window |
@@ -156,6 +156,10 @@ Each row shows the five-hour and weekly usage that Claude Desktop records for th
 A window counts as free again when its reset time passes, when a newer sample is below the limit, or when Claude answers a request sent in one of its sessions at least a minute after the limit (shown as *Claude answered since*, because extra usage may be what paid for it). An estimate never frees a window. Once a window that was at its limit has stayed free for a minute, Baton says it has room again, in its own window and, if you allow it, as a macOS notification. macOS asks about notifications once; if you decline, the notice stays in Baton's window.
 
 **Auto-continue.** Claude Desktop can continue a session by itself once its limit resets. When you continue such a session in another window, Baton turns off Auto-continue for that one session in the window it left, so the session is not worked on in two windows. It changes only that session's `optedIn` value in the window's `claude_desktop_config.json`, only while that window is closed (at once if it is; otherwise as soon as it closes while the Baton app runs, or when it is next opened from Baton), and after a dated backup. `baton doctor` lists what Baton turned off; to turn it back on, tick **Auto-continue when limits reset** on that session's limit message in Claude. When the window a session came from resets within 15 minutes and would continue it by itself, **Continue work…** and `baton continue` offer to wait instead.
+
+<p align="center">
+  <img src="docs/images/continue-wait.png" width="820" alt="The limit resets soon: Claude WORK resets in a few minutes and picks the session up by itself, with the buttons Wait and Continue Now over the Continue work sheet">
+</p>
 
 ## What follows and what stays
 

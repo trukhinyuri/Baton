@@ -56,4 +56,4 @@ To try the app without real accounts, launch it with sample data; it changes not
 open -n --env BATON_DEMO=1 "build/Baton.app"
 ```
 
-`BATON_DEMO_SHEET=1` also opens **Add Subscription**, `continue` **Continue work…**. After `make app`, `scripts/screenshots.sh` redraws the README's images in `docs/images` from the same sample data; the app draws its own window into each file, so no screen-recording permission is needed.
+`BATON_DEMO_SHEET=1` also opens **Add Subscription**, `continue` **Continue work…**, and `wait` the same sheet with its offer to wait for a reset. After `make app`, `scripts/screenshots.sh` redraws the README's images in `docs/images` from the same sample data; the app draws its own window into each file, so no screen-recording permission is needed.

@@ -27,10 +27,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var isLoadingConversations = false
     /// Selected when the continue sheet opens, if still available.
     @Published var preselectedConversation: String?
-    /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed or
-    /// replaced; any other goes after 20 seconds.
-    @Published private(set) var notice: String?
-    @Published private(set) var noticeIsWarning = false
+    /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed;
+    /// any other goes after 20 seconds, and a warning it covered shows again.
+    @Published private(set) var notices = Notices()
+    var notice: String? { notices.current?.text }
+    var noticeIsWarning: Bool { notices.current?.isWarning == true }
     private var noticeTask: Task<Void, Never>?
     /// Brings the Baton window forward; set by the menu bar icon at launch, by the window and by the menu bar's items.
     /// An error while the window is closed (from the menu bar, or from a copy reopened from its own Dock icon) would
@@ -63,6 +64,8 @@ final class AppModel: ObservableObject {
 
     let manager: ProfileManager
     let isDemo = DemoMode.isOn()
+    /// In demo mode with `BATON_DEMO_SHEET=wait`, the offer to wait that the Continue sheet shows at once.
+    private(set) var demoOffer: AutoResumeOffer?
     private var refreshTimer: Timer?
     private var syncTimer: Timer?
     /// Profiles whose window was open and not yet signed in at the last check.
@@ -102,16 +105,21 @@ final class AppModel: ObservableObject {
             return
         }
         // Documentation screenshots: BATON_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
-        // …_DEMO_SHEET=continue opens "Continue work…", …=report "Report a problem…" and …=status a window's status.
+        // …_DEMO_SHEET=continue opens "Continue work…", …=wait the same with its offer to wait for a reset,
+        // …=report "Report a problem…" and …=status a window's status.
         // With …_DEMO_SNAPSHOT=<file.png> it draws the window into that file and quits (see DemoSnapshot).
         // Everything below this guard (checks, timers, sync, launchers, the launch observer) never runs in demo mode.
         guard !isDemo else {
             let sheet = ProcessInfo.processInfo.environment["BATON_DEMO_SHEET"]
             isAdding = sheet == "1"
-            isContinuing = sheet == "continue"
+            isContinuing = sheet == "continue" || sheet == "wait"
             isReporting = sheet == "report"
+            if sheet == "wait" { demoOffer = DemoData.autoResumeOffer }
             if sheet == "status" { showStatus(of: "work") }
-            if let file = DemoSnapshot.file() { DemoSnapshot.take(to: file, withSheet: isAdding || isContinuing || isReporting || statusWindow != nil) }
+            if let file = DemoSnapshot.file() {
+                let sheets = demoOffer != nil ? 2 : isAdding || isContinuing || isReporting || statusWindow != nil ? 1 : 0
+                DemoSnapshot.take(to: file, sheets: sheets)
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 guard let window = DemoSnapshot.mainWindow() else { return }
                 // The demo's size and state are not remembered for the real app, which shares its preferences.
@@ -337,14 +345,13 @@ final class AppModel: ObservableObject {
     /// - Parameter isWarning: the text asks for something (choose a model, stop another window continuing a
     ///   session), so it stays until dismissed.
     func show(notice text: String, isWarning: Bool = false) {
-        notice = text
-        noticeIsWarning = isWarning
+        notices.show(text, isWarning: isWarning)
         noticeTask?.cancel()
         noticeTask = nil
         if !isWarning {
             noticeTask = Task {
                 try? await Task.sleep(for: .seconds(20))
-                if !Task.isCancelled { dismissNotice() }
+                if !Task.isCancelled { notices.expire(text) }
             }
         }
         Self.announce(text)
@@ -354,8 +361,7 @@ final class AppModel: ObservableObject {
     func dismissNotice() {
         noticeTask?.cancel()
         noticeTask = nil
-        notice = nil
-        noticeIsWarning = false
+        notices.dismiss()
     }
 
     func reload() {
@@ -526,6 +532,14 @@ final class AppModel: ObservableObject {
 }
 
 enum DemoData {
+    /// When WORK's five-hour limit resets, from now.
+    static let workResetsIn: TimeInterval = 9 * 60
+
+    /// WORK picks the first session up by itself after its reset: what the Continue sheet offers to wait for.
+    static var autoResumeOffer: AutoResumeOffer {
+        AutoResumeOffer(label: "WORK", resetsAt: Date().addingTimeInterval(workResetsIn), sessions: ["1"], titles: [conversations[0].title])
+    }
+
     static var conversations: [Conversation] {
         let now = Date(), none = URL(fileURLWithPath: "/nonexistent.jsonl")
         return [
@@ -585,14 +599,14 @@ enum DemoData {
 
     /// WORK is at its five-hour limit with a reset time Claude named, so the pictures show the limit banner, the reset
     /// beside the meters and the at-limit entry in the Continue sheet; LAB's sample is four hours old, so its usage
-    /// "may have changed since".
+    /// "may have changed since". WORK resets within `AutoResumeOffer.within`, so its offer to wait is one Baton makes.
     static var statuses: [ProfileStatus] {
         let now = Date()
         let workUsage = Usage(fiveHour: 100, week: 31, sampledAt: now.addingTimeInterval(-300))
         var workLimits = Limits(usage: workUsage)
         workLimits.fiveHour = LimitState(
             kind: .fiveHour, percent: 100, sampledAt: workUsage.sampledAt, reachedAt: now.addingTimeInterval(-2_400),
-            reset: LimitReset(at: now.addingTimeInterval(5_700), source: .exact))
+            reset: LimitReset(at: now.addingTimeInterval(workResetsIn), source: .exact))
         return [
             ProfileStatus(
                 profile: nil, accountID: "demo-main", email: "alex@example.com",

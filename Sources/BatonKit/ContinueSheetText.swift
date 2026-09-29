@@ -11,10 +11,22 @@ extension ConversationIndex {
     public static func listed(_ conversations: [Conversation], query: String, limit: Int = listLimit) -> (shown: [Conversation], matching: Int) {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return (Array(conversations.prefix(max(limit, 0))), conversations.count) }
-        let matching = conversations.filter { conversation in
-            conversation.title.localizedCaseInsensitiveContains(query) || conversation.folders.contains { $0.localizedCaseInsensitiveContains(query) }
-        }
+        let matching = conversations.filter { matches($0, query: query) }
         return (matching, matching.count)
+    }
+
+    /// The conversation `id` if `listed(_:query:limit:)` lists it, found without filtering the whole list again: the
+    /// sheet reads its selection many times per update, and with thousands of sessions that made typing lag.
+    public static func listedConversation(_ id: String?, in conversations: [Conversation], query: String, limit: Int = listLimit) -> Conversation? {
+        guard let id, let index = conversations.firstIndex(where: { $0.id == id }) else { return nil }
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard query.isEmpty ? index < limit : matches(conversations[index], query: query) else { return nil }
+        return conversations[index]
+    }
+
+    /// By title or folder, ignoring case; `query` is trimmed already.
+    private static func matches(_ conversation: Conversation, query: String) -> Bool {
+        conversation.title.localizedCaseInsensitiveContains(query) || conversation.folders.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 
     /// The selection once the list shows only `shown`: kept while it is listed, otherwise the first listed one, so the
