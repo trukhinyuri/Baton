@@ -66,6 +66,48 @@ struct SessionSyncDurabilityTests {
         #expect(try box.sync(propagateDeletions: true).changes == 0)
     }
 
+    /// For a title cut inside an emoji `JSON.stringify` writes a lone surrogate escape, which Claude's `JSON.parse`
+    /// reads. Such a card is whole: it is shared, and never replaced by an older copy once its window is closed.
+    @Test func aCardWithALoneSurrogateIsWhole() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountA)
+        let old = #"{"sessionId":"local_x","cliSessionId":"11111111-2222-4333-8444-555555555555","title":"old","isArchived":false}"#
+        let new = #"{"sessionId":"local_x","cliSessionId":"11111111-2222-4333-8444-555555555555","title":"Fix build \ud83d","isArchived":true}"#
+        try box.write(old, to: a.appending(path: "local_x.json"), modified: Date().addingTimeInterval(-600))
+        try box.write(new, to: b.appending(path: "local_x.json"))
+
+        let report = try box.sync(propagateDeletions: true)
+
+        #expect(report.cardsWritten == 1)
+        #expect(box.read(b.appending(path: "local_x.json")) == new)
+        #expect(box.read(a.appending(path: "local_x.json")) == new)
+        #expect(try box.sync(propagateDeletions: true).changes == 0)
+    }
+
+    /// A newer card that ends as an object does is left alone in a closed window even when Baton can't read it, here
+    /// for a number `JSON.parse` reads as Infinity: only a card cut short is replaced by an older one.
+    @Test func aWholeCardBatonCantReadIsNotRolledBack() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountA)
+        let old = #"{"sessionId":"local_x","cliSessionId":"11111111-2222-4333-8444-555555555555","title":"old"}"#
+        let new = #"{"sessionId":"local_x","cliSessionId":"11111111-2222-4333-8444-555555555555","title":"new","n":1e400}"#
+        try box.write(old, to: a.appending(path: "local_x.json"), modified: Date().addingTimeInterval(-600))
+        try box.write(new, to: b.appending(path: "local_x.json"))
+
+        #expect(try box.sync(propagateDeletions: true).changes == 0)
+        #expect(box.read(b.appending(path: "local_x.json")) == new)
+        #expect(box.read(a.appending(path: "local_x.json")) == old, "a card Baton can't read is never copied")
+    }
+
+    @Test func loneSurrogatesReadAsReplacementCharacters() {
+        let text = #"{"t":"a\ud83d","u":"\uDE00b","p":"\ud83d\ude00","e":"\\ud83d","k":"\u00e9"}"#
+        #expect(SessionSync.json(Data(text.utf8)) as? [String: String] == ["t": "a\u{FFFD}", "u": "\u{FFFD}b", "p": "😀", "e": #"\ud83d"#, "k": "é"])
+        #expect(SessionSync.withoutLoneSurrogates(Data(#"{"p":"\ud83d\ude00","e":"\\ud83d"}"#.utf8)) == nil, "nothing to change")
+        #expect(SessionSync.json(Data(#"{"t":"a\ud83d""#.utf8)) == nil, "still not whole")
+    }
+
     @Test func everyOverwriteKept() throws {
         let box = try Sandbox()
         let file = box.main.appending(path: "claude-code-sessions/card.json")

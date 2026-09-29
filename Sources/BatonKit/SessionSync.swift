@@ -375,8 +375,9 @@ public struct SessionSync: Sendable {
                     let behind = here.transcript.map(card.facts.priors.contains) == true
                     let asNew = current >= card.modified.addingTimeInterval(-1) && !behind
                     // A copy that isn't whole and is newer than every whole one may be one Claude is still writing:
-                    // left alone while its window is open, replaced by the newest whole copy once it is closed.
-                    if !here.valid, asNew, windowOpen { continue }
+                    // left alone while its window is open, replaced by the newest whole copy once it is closed. One that
+                    // ends as an object does but that Baton can't read is left alone too: Claude may read it.
+                    if !here.valid, asNew, windowOpen || JSONMembers.parse([UInt8](own)) != nil { continue }
                     if asNew, here.valid {
                         // This copy is as new as any; it may still need this window's scratch folder path.
                         data = native ? own : shared(own, losing: leaked)
@@ -580,7 +581,7 @@ public struct SessionSync: Sendable {
 
     /// The value of grant field `field` without the items `grants` names, or `nil` if nothing is left of it.
     private static func remaining(_ bytes: ArraySlice<UInt8>, of field: String, without grants: Set<String>) -> ArraySlice<UInt8>? {
-        func decoded(_ bytes: ArraySlice<UInt8>) -> Any? { try? JSONSerialization.jsonObject(with: Data(bytes), options: .fragmentsAllowed) }
+        func decoded(_ bytes: ArraySlice<UInt8>) -> Any? { json(Data(bytes), fragments: true) }
         guard let value = decoded(bytes) else { return bytes }
         if grants.contains(field + " " + grantDigest(value)) { return nil }
         if value is [Any], let elements = JSONMembers.elements(bytes) {
@@ -784,7 +785,7 @@ public struct SessionSync: Sendable {
     static func isAccountBound(_ data: Data) -> Bool { facts(of: data).accountBound }
 
     struct CardFacts {
-        /// One whole JSON object; a card cut short by a crash or a full disk is not.
+        /// One whole JSON object, read as Claude reads it (`json`); a card cut short by a crash or a full disk is not.
         var valid = false
         var accountBound = false
         /// The Claude Code conversation the card opens (`cliSessionId`).
@@ -805,8 +806,42 @@ public struct SessionSync: Sendable {
         var grants: [String: Set<String>] = [:]
     }
 
+    /// `data` read as JSON the way Claude reads it. For a string cut inside an emoji `JSON.stringify` writes a lone
+    /// UTF-16 surrogate escape, which `JSON.parse` accepts and Foundation doesn't; here it reads as U+FFFD.
+    static func json(_ data: Data, fragments: Bool = false) -> Any? {
+        let options: JSONSerialization.ReadingOptions = fragments ? .fragmentsAllowed : []
+        if let value = try? JSONSerialization.jsonObject(with: data, options: options) { return value }
+        guard let repaired = withoutLoneSurrogates(data) else { return nil }
+        return try? JSONSerialization.jsonObject(with: repaired, options: options)
+    }
+
+    /// `data` with each `\u` escape of a UTF-16 surrogate that isn't half of a pair written as `\ufffd`, or `nil` if it
+    /// has none. Nothing else moves.
+    static func withoutLoneSurrogates(_ data: Data) -> Data? {
+        var bytes = [UInt8](data), changed = false
+        func unit(at i: Int) -> UInt16? {
+            guard i + 6 <= bytes.count, bytes[i] == UInt8(ascii: "\\"), bytes[i + 1] == UInt8(ascii: "u"),
+                bytes[(i + 2)..<(i + 6)].allSatisfy({ Character(Unicode.Scalar($0)).isHexDigit })
+            else { return nil }
+            return UInt16(String(decoding: bytes[(i + 2)..<(i + 6)], as: UTF8.self), radix: 16)
+        }
+        var i = 0
+        while i < bytes.count {
+            guard bytes[i] == UInt8(ascii: "\\") else { i += 1; continue }
+            // Any other escape, an escaped backslash included, is two bytes.
+            guard let first = unit(at: i) else { i += 2; continue }
+            if (0xD800...0xDBFF).contains(first), let second = unit(at: i + 6), (0xDC00...0xDFFF).contains(second) { i += 12; continue }
+            if (0xD800...0xDFFF).contains(first) {
+                bytes.replaceSubrange((i + 2)..<(i + 6), with: Array("fffd".utf8))
+                changed = true
+            }
+            i += 6
+        }
+        return changed ? Data(bytes) : nil
+    }
+
     static func facts(of data: Data) -> CardFacts {
-        guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return CardFacts() }
+        guard let card = json(data) as? [String: Any] else { return CardFacts() }
         let paths = ["cwd", "originCwd"].compactMap { card[$0] as? String }
         let folders = paths.filter { !$0.isEmpty && !$0.contains(scratchFolder) }
         let made = ["createdAt", "indexedAt"].compactMap { card[$0] as? Double }.max()
@@ -1283,7 +1318,7 @@ enum JSONMembers {
                 let plain = key.dropFirst().dropLast()
                 let decoded =
                     plain.contains(UInt8(ascii: "\\"))
-                    ? (try? JSONSerialization.jsonObject(with: Data(key), options: .fragmentsAllowed)) as? String : String(bytes: plain, encoding: .utf8)
+                    ? SessionSync.json(Data(key), fragments: true) as? String : String(bytes: plain, encoding: .utf8)
                 guard let name = decoded else { return nil }
                 skipSpace()
                 guard i < json.count, json[i] == UInt8(ascii: ":") else { return nil }
