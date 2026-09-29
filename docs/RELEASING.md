@@ -6,7 +6,12 @@ attestation. Its last job, `tap`, then points the Homebrew tap's `Casks/baton.rb
 running `.github/workflows/bump-cask.yml`. That job needs the `HOMEBREW_TAP_PAT` secret; without it the job is skipped
 with a warning. A release published by the workflow starts no other workflow on its own, so `bump-cask.yml` is never
 triggered by the release event: if the `tap` job was skipped or failed, run **Actions → Bump Homebrew cask → Run
-workflow** with the tag.
+workflow** from the tag (**Use workflow from → Tags**) with the tag. Both jobs take their secrets from the `release`
+environment, which only `v*` tags may use, so a run from a branch stops there.
+
+`release.yml` and `bump-cask.yml` must be on the default branch, `main`, before any release tag is pushed: GitHub offers
+**Run workflow** only for a workflow file on the default branch, and the release candidate's `allow_unsigned` run
+needs it. Merge the release branch into `main` through a pull request first.
 
 ## Before the first tag
 
@@ -22,12 +27,14 @@ candidates](#release-candidates).
 2. **The tap exists:** `trukhinyuri/homebrew-tap`, set up by hand as
    [packaging/homebrew/README.md](../packaging/homebrew/README.md#setting-up-the-tap) describes: `cask_renames.json`,
    no `Casks/claude-profiles.rb`, and no `Casks/baton.rb` until the first release adds it with the real sha256.
-3. **Signing and notarization secrets are set** in the repository's Actions secrets: `MACOS_CERTIFICATE` (a
+3. **Signing and notarization secrets are set** in the `release` environment (**Settings → Environments →
+   release**), not as repository secrets: `MACOS_CERTIFICATE` (a
    Developer ID Application certificate as a base64 `.p12`), `MACOS_CERTIFICATE_PWD`, `KEYCHAIN_PASSWORD`,
    `APPLE_TEAM_ID`, `AC_API_KEY_ID`, `AC_API_ISSUER_ID`, `AC_API_KEY` (an App Store Connect API key as a base64
    `.p8`) and `HOMEBREW_TAP_PAT`. `scripts/set-release-secrets.sh <certificate.p12> <AuthKey_KEYID.p8> <team id>
-   <key id> <issuer id>` checks the certificate and sets all of them through the GitHub CLI without showing a value;
-   it asks for the `.p12` password and the tap token. With `MACOS_CERTIFICATE` missing the workflow stops before building and publishes
+   <key id> <issuer id>` checks the certificate and sets all of them in that environment through the GitHub CLI
+   without showing a value; it asks for the `.p12` password and the tap token. It stops if the environment doesn't
+   exist yet and creates nothing but the secrets. With `MACOS_CERTIFICATE` missing the workflow stops before building and publishes
    nothing. Only a run started by hand for the tag with `allow_unsigned` ticked publishes an ad-hoc signed, not
    notarized build, as a prerelease with a note saying so, and leaves the tap unchanged.
 
@@ -50,7 +57,16 @@ Go through the list once, before the first tag, and again after any change to th
       `LevelDB compatibility` and `Docs and repository files`. Update the list when a job in `ci.yml` is renamed.
 - [ ] **Dependabot alerts on** (**Settings → Advanced Security**). Version updates need no switch:
       `.github/dependabot.yml` opens pull requests for the actions pinned by commit SHA.
-- [ ] **Actions secrets** for a signed release, as in step 3 above; a release candidate needs none.
+- [ ] **Environment `release`** (**Settings → Environments → New environment**), with **Deployment branches and
+      tags** set to **Selected branches and tags** and one tag rule, `v*`. Add yourself as a required reviewer if you
+      want to approve each release run by hand. Its secrets for a signed release are in step 3 above; a release
+      candidate needs none. No signing, notary or tap secret stays under **Settings → Secrets and variables →
+      Actions → Repository secrets**.
+- [ ] **Tag ruleset for `v*`** (**Settings → Rules → Rulesets → New tag ruleset**, target `v*`, enforcement Active):
+      restrict creations, updates and deletions, with only yourself in the bypass list, so nobody else can push a
+      release tag or move one.
+- [ ] **Code of Conduct contact**: `CODE_OF_CONDUCT.md` names a working address for conduct reports, not the
+      placeholder `CONDUCT_CONTACT`.
 
 ## Release candidates
 
@@ -68,13 +84,19 @@ before `1.0.0`.
    `Info.plist` holds the full version, which `baton --version`, the About box and the problem report show. The ZIP is
    `Baton-v1.0.0-rc.1.zip`. A copy of a later version asks a running candidate to quit, as it does any older version:
    `1.0.0-rc.1` is below `1.0.0-rc.2`, which is below `1.0.0`.
-3. Run the green bar as for any release (step 4 below), then tag and push the tag: `git tag v1.0.0-rc.1 && git push
-   origin v1.0.0-rc.1`. Without the signing secrets that run stops before building.
+3. Run the green bar as for any release (step 4 below), merge the release branch into `main` through a pull request so
+   the new `release.yml` with its `allow_unsigned` input is on the default branch, then tag and push the tag:
+   `git tag v1.0.0-rc.1 && git push origin v1.0.0-rc.1`. Without the signing secrets that run stops before building.
 4. Run the workflow by hand for the tag: **Actions → Release → Run workflow**, pick the tag, tick `allow_unsigned`.
    It publishes a GitHub prerelease, never marked Latest, titled "Baton 1.0.0-rc.1 — first leg, release candidate",
    with a note on how to open a build that isn't notarized (Open Anyway in System Settings → Privacy & Security, or
    `make install`).
 5. The `tap` job is skipped: the cask follows signed final releases only, and `bump-cask.yml` refuses a `-rc.` tag.
+6. Deal with the old release. The repository's only earlier release, "Claude Profiles v0.2.0", is not a prerelease, so
+   GitHub keeps showing it as Latest next to the release candidate, under the old name and with no security fixes
+   (`SECURITY.md`). Pick one, in **Releases → Claude Profiles v0.2.0 → Edit**: change its title to say it is the
+   old name and superseded by Baton (for example "Claude Profiles v0.2.0 (old name, superseded by Baton)"), or tick
+   **Set as a pre-release** so nothing is Latest until the signed 1.0.0. Leave the tag and the ZIP as they are.
 
 ## Each release
 
@@ -94,7 +116,7 @@ before `1.0.0`.
 4. Run the green bar locally: `make test`, `swift build -Xswiftc -warnings-as-errors`,
    `swift format lint -r --strict Sources Tests Package.swift`, `scripts/check-docs.sh`, `scripts/check-repo.sh` and
    `scripts/check-cask.sh`, then `make app verify`.
-5. Commit, then tag and push the tag: `git tag v1.0.0 && git push origin v1.0.0`.
+5. Commit, merge into `main` through a pull request, then tag and push the tag: `git tag v1.0.0 && git push origin v1.0.0`.
 6. When the workflow finishes, check the release: the ZIP, `SHA256SUMS.txt`, the attestation, the notes and the
    title. Check that the `tap` job ran (not skipped), that the tap's `Casks/baton.rb` has the new `version` and the
    sha256 from `SHA256SUMS.txt`, that its `cask_renames.json` still sends `claude-profiles` to `baton` and that it has

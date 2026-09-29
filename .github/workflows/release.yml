@@ -19,6 +19,8 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
+    # The signing and notary secrets live in this environment, which only v* tags may use (docs/RELEASING.md).
+    environment: release
     env:
       # Only whether the certificate is set, for the steps' conditions: without it the build stays ad hoc. The
       # certificate itself is given to the one step that imports it, not to every step of the job.
@@ -169,6 +171,4 @@ jobs:
     uses: ./.github/workflows/bump-cask.yml
     with:
       tag: ${{ github.ref_name }}
-    # Only the tap token: the signing and notary secrets stay with the release job.
-    secrets:
-      HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
+    # No secrets passed: the bump job reads the tap token from the release environment itself.
