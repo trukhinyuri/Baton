@@ -137,6 +137,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// Each window's warning from the last time this manager prepared it to start, and the latest of them.
     private var openWarnings: [String: String] = [:]
     private var openWarning: String?
+    /// The problems the last `applyLocalOnlyToClosedWindows()` found, reported only when new.
+    private var localOnlyProblems: Set<String> = []
     /// Windows this manager is opening, each with the calls waiting for their turn (see `oneAtATime`).
     private var opening: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// Opening can succeed using the profile's saved settings even if portable setup could not be refreshed.
@@ -862,7 +864,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// Applies Local only to every closed window still waiting for it (`LocalOnly.Status.pending`), so a window started
     /// from the Dock or Spotlight rather than through Baton starts with it too. It takes open.lock, so it never runs
     /// while sync.lock is held (see the lock order).
-    /// - Returns: a line for each window it couldn't apply to.
+    /// - Returns: a line for each window it couldn't apply to, unless the previous call gave the same line: a window
+    ///   that fails every time is tried after every sync but reported once, so the log isn't filled with it.
     @discardableResult
     public func applyLocalOnlyToClosedWindows() -> [String] {
         guard !isReadOnly else { return [] }
@@ -873,7 +876,10 @@ public final class ProfileManager: @unchecked Sendable {
                 problems.append("Local only could not be applied to Claude \(displayLabel(of: window)): \(error.localizedDescription)")
             }
         }
-        return problems
+        return stateLock.withLock {
+            defer { localOnlyProblems = Set(problems) }
+            return problems.filter { !localOnlyProblems.contains($0) }
+        }
     }
 
     /// Each window's Local only status, MAIN first, for the window list and `doctor`.
