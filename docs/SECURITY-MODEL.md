@@ -30,7 +30,7 @@ What Baton can reach, what it does with it, and what it never does. Report a wea
 
 ## Data the app creates
 
-Everything lives in `~/Library/Application Support/Baton`, or, for an install from before 1.0, in `~/Library/Application Support/Claude Profiles`, which keeps that name because Claude's own data points into it (see [ADR 0007](adr/0007-baton-rename.md)). It is readable only by the user: the profile list, folder rules, merge baselines (hashes, not values), backups, copies-and-carry manifests, Local only's previous values, and prepared Cowork continuations (`Handoffs/`, mode `0700`, moved to the Trash after 30 days). Backups can contain MCP definitions and other private setup.
+Everything lives in `~/Library/Application Support/Baton`, or, for an install from before 1.0, in `~/Library/Application Support/Claude Profiles`, which keeps that name because Claude's own data points into it (see [ADR 0007](adr/0007-baton-rename.md)). It is readable only by the user: the profile list, folder rules, merge baselines and sync records (hashes and file stamps, not values), backups, copies-and-carry manifests, Local only's previous values, and prepared Cowork continuations (`Handoffs/`, mode `0700`, moved to the Trash after 30 days). Backups can contain MCP definitions and other private setup.
 
 ## Problem reports
 

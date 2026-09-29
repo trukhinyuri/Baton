@@ -10,8 +10,11 @@ import Foundation
 /// Native Project / Remote Control workers retain their account-and-organization scope; copying a card
 /// does not grant access to its server project or bridge. Ambiguous copies made by old releases are preserved.
 /// A copy for another account leaves out what the first account granted or connected (Remote Control bridges,
-/// connectors, browser and computer-use grants, and the permission mode unless the profile keeps it); copies
-/// between windows of one account are exact.
+/// connectors, browser and computer-use grants, the session's permission rules, and the permission mode unless the
+/// profile keeps it); copies between windows of one account are exact. A grant or rule that copies by older releases
+/// left in two accounts is taken out of every copy, since which account gave it can't be told.
+/// A card that isn't one whole JSON object, such as one a crash cut short, is never copied.
+/// A session deleted in one window stays deleted everywhere, unless a window made a new card for it after that.
 ///
 /// Cards are copied, not symlinked: Claude Desktop creates these directories with `mkdir` and fails on symlinks.
 ///
@@ -41,11 +44,18 @@ public struct SessionSync: Sendable {
         public var keptLive = 0
         /// "Session deleted" markers removed after every window had them for 90 days.
         public var tombstonesExpired = 0
+        /// "Session deleted" markers removed because a window made a new card for that session after it was deleted.
+        public var tombstonesRetired = 0
+        /// Copies that had a grant or rule another account's copy held too, which was taken out of them.
+        public var grantsRemoved = 0
+        /// Copies read to compare with their card. An idle run, in which no card changed, reads none.
+        public var cardsCompared = 0
         /// The data folders (standardized paths) that got a session card in this run. A window that was already open
         /// shows those sessions only after a restart.
         public var wroteInto: Set<String> = []
         public var changes: Int {
             cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten + retiredByRule + tombstonesExpired
+                + tombstonesRetired
         }
     }
 
@@ -69,7 +79,7 @@ public struct SessionSync: Sendable {
     /// Whether copies from other accounts keep `permissionMode` in a data directory's cards: the profile's
     /// “carry permission mode” choice. `nil` reads `carryPermissionMode` from each profile in the registry.
     public var carriesPermissionMode: (@Sendable (URL) -> Bool)?
-    /// Cards already read, kept while each file stays the same, so an idle run reads none of them again.
+    /// What each card says, kept while its file stays the same, so an idle run reads none of them again.
     public var cache: ScanCache = .shared
 
     /// - Parameter dataDirs: every Claude Desktop data directory to keep in sync, main one included.
@@ -106,6 +116,13 @@ public struct SessionSync: Sendable {
         var observed = Set<String>()
         var archiveLists: [String: Set<String>] = [:]  // folder path → archived IDs, for folders that have an index
         var archiveVersion: Any = 1
+        var reads: [String: CardRead] = [:]  // card file path → what it says
+        var deletedAt: [String: Date] = [:]  // marker → when its session was deleted, the latest of its copies
+        // Copies found to match their card by an earlier run, in any process; read again only when it changed.
+        let matchesFile = paths.stateDir.appending(path: "session-sync-matches.json")
+        let savedMatches = cache.value("matches", of: matchesFile, cost: { $0.copies.count * 256 }, read: Matches.load)
+        let readsBefore = cache.reads
+        var newMatches = false
 
         for pair in pairs {
             let scope = Self.scope(of: pair)
@@ -113,21 +130,24 @@ public struct SessionSync: Sendable {
             for url in try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil) {
                 let name = url.lastPathComponent
                 if name.hasPrefix("local_"), name.hasSuffix(".json") {
-                    let (data, facts) = try cache.value("card", of: url) { url in
-                        let data = try Data(contentsOf: url)
-                        return (data, Self.facts(of: data))
-                    }
+                    let read = try Self.read(url, cache: cache)
+                    if let saved = savedMatches.copies[url.path] { read.restore(saved) }
+                    let facts = read.facts
+                    reads[url.path] = read
                     observed.insert(name)
-                    holders[name, default: []].append(pair)
                     cardScopes[name, default: []].insert(scope)
                     if facts.accountBound { accountBound.insert(name) }
+                    // Not a whole card: it stays where it is, and no copy of it is made or relied on.
+                    guard facts.valid else { continue }
+                    holders[name, default: []].append(pair)
                     if let transcript = facts.transcript {
                         transcriptsByFolder[pair.path, default: [:]][name] = transcript
                         if facts.imported, Self.cardName(for: transcript) == name { importedByFolder[pair.path, default: []].insert(name) }
                     }
-                    guard let modified = SyncFolders.modificationDate(url) else { continue }
-                    let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantFuture
-                    let found = Card(modified: modified, data: data, facts: facts, account: Self.account(of: pair), created: created)
+                    guard let time = read.modified else { continue }
+                    let found = Card(
+                        modified: SyncFolders.date(time), time: time, digest: read.digest, facts: facts, account: Self.account(of: pair),
+                        created: read.created, url: url)
                     if let known = cards[name], !found.supersedes(known) { continue }
                     cards[name] = found
                 } else if name.hasPrefix("deleted_") {
@@ -136,6 +156,10 @@ public struct SessionSync: Sendable {
                     let modified = SyncFolders.modificationDate(url) ?? now
                     let known = tombstoneCopies[name] ?? (0, .distantPast)
                     tombstoneCopies[name] = (known.count + 1, max(known.newest, modified))
+                    // Claude writes the time of the deletion into its marker; an empty copy made by an older Baton has
+                    // only its own date, which is later.
+                    let at = cache.value("tombstone", of: url) { Self.deletionTime(in: $0) } ?? modified
+                    deletedAt[name] = max(deletedAt[name] ?? .distantPast, at)
                 } else if name == Self.archiveIndex, let index = readJSON(url) {
                     archiveLists[pair.path] = Set(index["archived"] as? [String] ?? [])
                     archiveVersion = index["v"] ?? archiveVersion
@@ -157,10 +181,21 @@ public struct SessionSync: Sendable {
             guard accountBound.contains(name) else { return true }
             return cardScopes[name]?.count == 1 && cardScopes[name]?.contains(scope) == true
         }
+        // A card a window made after its session was deleted, such as by importing the conversation again, is a new
+        // start: the marker that names it no longer applies, and goes once no window is open.
+        func madeAfter(_ name: String, _ time: Date) -> Bool {
+            guard let card = cards[name], let made = card.facts.made ?? (card.facts.imported ? card.modified : nil) else { return false }
+            return made > time
+        }
+        let retired = tombstones.filter { marker in
+            let name = Self.cardName(for: String(marker.dropFirst("deleted_".count)))
+            return !accountBound.contains(name) && madeAfter(name, deletedAt[marker] ?? .distantFuture)
+        }
         func markers(in scope: String) -> Set<String> {
             Set(
                 tombstones.filter { marker in
                     let name = Self.cardName(for: String(marker.dropFirst("deleted_".count)))
+                    guard !retired.contains(marker) else { return false }
                     return !accountBound.contains(name)
                         || (permitted(name, in: scope) && tombstonesByScope[scope]?.contains(marker) == true)
                 })
@@ -185,23 +220,72 @@ public struct SessionSync: Sendable {
             result.formUnion(baselines.lists[entry.key].map { Set($0).subtracting(entry.value) } ?? [])
         }
         let carriers = carriesPermissionMode == nil ? permissionModeCarriers() : []
+        func keepsPermissionMode(_ pair: URL) -> Bool {
+            let dataDir = dataDir(of: pair)
+            return carriesPermissionMode?(dataDir) ?? carriers.contains(dataDir.standardizedFileURL.path)
+        }
+        // Grants and rules that copies by older releases carried into other accounts. Looked for once, in the first
+        // run of a release that keeps them apart; each is then taken out of every copy of its card.
+        let leakedFile = paths.stateDir.appending(path: "cross-account-grants.json")
+        let savedLeaks = LeakedGrants.load(from: leakedFile)
+        var leaks = savedLeaks ?? LeakedGrants()
+        if savedLeaks == nil {
+            for (name, folders) in holders where !accountBound.contains(name) {
+                var accounts: [String: Set<String>] = [:]  // "field digest" → accounts whose copy has it
+                for pair in folders {
+                    guard let facts = reads[pair.appending(path: name).path]?.facts else { continue }
+                    for (field, digest) in facts.grants where !Self.permissionModeFields.contains(field) || !keepsPermissionMode(pair) {
+                        accounts[field + " " + digest, default: []].insert(Self.account(of: pair))
+                    }
+                }
+                let shared = accounts.filter { $0.value.count > 1 }.keys
+                if !shared.isEmpty { leaks.cards[name] = shared.sorted() }
+            }
+        }
         var live: Set<String>?
         func isLive(_ transcript: String) -> Bool {
             if live == nil { live = liveSessionIDs ?? LiveSessions.ids(claudeDir: paths.claudeDir) }
             return live?.contains(transcript) == true
         }
         let backup = Backup(paths: paths, now: now)
+        // Newest first, so a folder that gets one of two cards for a conversation gets the current one.
+        let newestFirst = cards.sorted(by: { $0.value.modified > $1.value.modified })
+        // A card's bytes are read when a copy has to be compared or written, once per run, and only if the file is
+        // still what the scan found.
+        var loaded: [String: Data] = [:]
+        func bytes(of card: Card) -> Data? {
+            if let data = loaded[card.url.path] { return data }
+            guard let data = try? Data(contentsOf: card.url), Self.hex(SHA256.hash(data: data)) == card.digest else { return nil }
+            loaded[card.url.path] = data
+            return data
+        }
+        // Before a copy is removed: if it is the newest, the other windows still get it in this run.
+        func keepBytes(of name: String, at target: URL) {
+            if let card = cards[name], card.url.path == target.path { _ = bytes(of: card) }
+        }
         for pair in pairs {
             let dataDir = dataDir(of: pair)
             let scope = Self.scope(of: pair), account = Self.account(of: pair)
-            let keepsPermissionMode = carriesPermissionMode?(dataDir) ?? carriers.contains(dataDir.standardizedFileURL.path)
+            let keepsPermissionMode = keepsPermissionMode(pair)
             let windowOpen = isWindowOpen?(dataDir) ?? !propagateDeletions
             let applicableTombstones = markers(in: scope)
-            var deletedNames = Set(applicableTombstones.map { Self.cardName(for: String($0.dropFirst("deleted_".count))) })
+            var deletedBy: [String: Date] = [:]  // card name → the latest deletion that names it
+            for marker in applicableTombstones {
+                let name = Self.cardName(for: String(marker.dropFirst("deleted_".count)))
+                deletedBy[name] = max(deletedBy[name] ?? .distantPast, deletedAt[marker] ?? .distantFuture)
+            }
             // Deleting either card of a conversation that a window imported under its transcript deletes both.
-            let deletedTranscripts = Set(deletedNames.compactMap { cards[$0]?.facts.transcript ?? Self.transcript(inCardName: $0) })
+            var deletedTranscripts: [String: Date] = [:]
+            for (name, time) in deletedBy {
+                guard let transcript = cards[name]?.facts.transcript ?? Self.transcript(inCardName: name) else { continue }
+                deletedTranscripts[transcript] = max(deletedTranscripts[transcript] ?? .distantPast, time)
+            }
             // Project and Remote Control workers stay with their own card and tombstone.
-            deletedNames.formUnion(cards.filter { !accountBound.contains($0.key) && $0.value.facts.transcript.map(deletedTranscripts.contains) == true }.keys)
+            for (name, card) in cards where !accountBound.contains(name) {
+                guard let transcript = card.facts.transcript, let time = deletedTranscripts[transcript] else { continue }
+                deletedBy[name] = max(deletedBy[name] ?? .distantPast, time)
+            }
+            let deletedNames = Set(deletedBy.filter { accountBound.contains($0.key) || !madeAfter($0.key, $0.value) }.keys)
             var present = Set(try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil).map(\.lastPathComponent))
             var held = transcriptsByFolder[pair.path] ?? [:]
             // The window here imported this conversation after launch: its older copy is not loaded and would
@@ -210,6 +294,7 @@ public struct SessionSync: Sendable {
                 guard let transcript = held[imported] else { continue }
                 for (name, other) in held where other == transcript && name != imported && !accountBound.contains(name) {
                     let target = pair.appending(path: name)
+                    keepBytes(of: name, at: target)
                     if !dryRun {
                         if try backup.save(target, everyTime: true) { report.backedUp += 1 }
                         try fm.removeItem(at: target)
@@ -220,15 +305,14 @@ public struct SessionSync: Sendable {
                 }
             }
             var heldTranscripts = Set(held.values)
-            // Newest first, so a folder that gets one of two cards for a conversation gets the current one.
-            for (name, card) in cards.sorted(by: { $0.value.modified > $1.value.modified })
-            where permitted(name, in: scope) && !deletedNames.contains(name) {
+            for (name, card) in newestFirst where permitted(name, in: scope) && !deletedNames.contains(name) {
                 let target = pair.appending(path: name)
                 let native = accountBound.contains(name)
                 if !native, !allows(card, in: pair) {
                     guard present.contains(name) else { report.withheldByRule += 1; continue }
                     // Retire a copy only where Claude can't be holding it, and only once it is safe elsewhere.
                     guard !windowOpen, holders[name, default: []].contains(where: { $0 != pair && allows(card, in: $0) }) else { continue }
+                    keepBytes(of: name, at: target)
                     if !dryRun {
                         if try backup.save(target, everyTime: true) { report.backedUp += 1 }
                         try fm.removeItem(at: target)
@@ -238,18 +322,29 @@ public struct SessionSync: Sendable {
                     continue
                 }
                 if !present.contains(name), let transcript = card.facts.transcript, heldTranscripts.contains(transcript) { continue }
+                // This copy as the scan found it, and what it is compared with. A copy found to match that card in an
+                // earlier run, and unchanged since, still matches.
+                let mine = present.contains(name) ? reads[target.path] : nil
+                let comparison = "\(card.digest)|\(card.modified.timeIntervalSince1970)|\(card.account)|\(native)|\(keepsPermissionMode)"
+                let leaked = native ? [] : Set(leaks.cards[name] ?? [])
+                if let mine, leaked.isEmpty, mine.matches(comparison) { continue }
+                // Changed since the scan: the next run takes the new card.
+                guard let winner = bytes(of: card) else { continue }
                 // A native worker's cwd is coupled to remoteControlSpawn.folder and its server bridge.
                 // Even within one account/organization, preserve the complete card byte-for-byte.
                 let existing = present.contains(name) ? try? Data(contentsOf: target) : nil
-                // What another account granted or connected stays with that account; this window keeps its own.
+                // What another account granted or connected stays with that account; this window keeps its own. A grant
+                // older releases left in two accounts goes from every copy.
                 func shared(_ base: Data) -> Data {
-                    let local = localized(base, for: dataDir, linking: !dryRun)
+                    let local = Self.without(leaked, in: localized(base, for: dataDir, linking: !dryRun))
                     guard card.account != account else { return local }
-                    return Self.withoutAccountFields(local, winner: card.data, existing: existing, keepPermissionMode: keepsPermissionMode)
+                    return Self.withoutAccountFields(
+                        local, winner: winner, existing: existing.map { Self.without(leaked, in: $0) }, keepPermissionMode: keepsPermissionMode)
                 }
-                var data = native ? card.data : shared(card.data), modified = card.modified
+                var data = native ? winner : shared(winner), modified = card.time
                 if present.contains(name) {
                     guard let current = SyncFolders.modificationDate(target), let own = existing else { continue }
+                    report.cardsCompared += 1
                     let here = Self.facts(of: own)
                     if let transcript = here.transcript, transcript != card.facts.transcript {
                         // Already a fork of the incoming conversation: never point the session back.
@@ -258,12 +353,27 @@ public struct SessionSync: Sendable {
                         if isLive(transcript) { report.keptLive += 1; continue }
                     }
                     let behind = here.transcript.map(card.facts.priors.contains) == true
-                    if current >= card.modified.addingTimeInterval(-1), !behind {
+                    let asNew = current >= card.modified.addingTimeInterval(-1) && !behind
+                    // A copy that isn't whole and is newer than every whole one may be one Claude is still writing:
+                    // left alone while its window is open, replaced by the newest whole copy once it is closed.
+                    if !here.valid, asNew, windowOpen { continue }
+                    if asNew, here.valid {
                         // This copy is as new as any; it may still need this window's scratch folder path.
                         data = native ? own : shared(own)
-                        modified = current
+                        guard let time = SyncFolders.modificationTime(target), SyncFolders.date(time) == current else { continue }
+                        modified = time
                     }
-                    guard own != data else { continue }
+                    guard own != data else {
+                        // Remembered for the usual copy only: the same conversation, and no scratch folder to link.
+                        if !dryRun, let mine, leaked.isEmpty, here.transcript == card.facts.transcript, !here.scratch, !card.facts.scratch,
+                            Self.hex(SHA256.hash(data: own)) == mine.digest
+                        {
+                            mine.match(comparison)
+                            newMatches = true
+                        }
+                        continue
+                    }
+                    if !leaked.isEmpty, Self.without(leaked, in: own) != own { report.grantsRemoved += 1 }
                     if !dryRun {
                         if try backup.save(target) { report.backedUp += 1 }
                         // Claude may have just updated this copy; never replace a newer card with an older one.
@@ -272,7 +382,7 @@ public struct SessionSync: Sendable {
                 }
                 if !dryRun {
                     try data.write(to: target, options: .atomic)
-                    try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: target.path)
+                    SyncFolders.setModificationTime(target, modified)
                 }
                 if let transcript = card.facts.transcript { heldTranscripts.insert(transcript) }
                 report.cardsWritten += 1
@@ -280,11 +390,23 @@ public struct SessionSync: Sendable {
             }
             if propagateDeletions {
                 for tombstone in applicableTombstones where !present.contains(tombstone) {
-                    if !dryRun { fm.createFile(atPath: pair.appending(path: tombstone).path, contents: Data()) }
+                    // With the time of the deletion, as Claude writes it.
+                    let time = deletedAt[tombstone].map { Data(String(Int64(($0.timeIntervalSince1970 * 1000).rounded())).utf8) }
+                    if !dryRun { fm.createFile(atPath: pair.appending(path: tombstone).path, contents: time ?? Data()) }
                     report.tombstonesWritten += 1
+                }
+                // As Claude does in the window that imports a deleted conversation again.
+                for tombstone in retired where present.contains(tombstone) {
+                    let target = pair.appending(path: tombstone)
+                    if !dryRun {
+                        if try backup.save(target, everyTime: true) { report.backedUp += 1 }
+                        try fm.removeItem(at: target)
+                    }
+                    report.tombstonesRetired += 1
                 }
                 for name in present where deletedNames.contains(name) && permitted(name, in: scope) {
                     let target = pair.appending(path: name)
+                    keepBytes(of: name, at: target)
                     if !dryRun {
                         if try backup.save(target, everyTime: true) { report.backedUp += 1 }
                         try fm.removeItem(at: target)
@@ -335,10 +457,90 @@ public struct SessionSync: Sendable {
         }
         if !dryRun {
             if nextBaselines.lists != baselines.lists { try nextBaselines.save(to: baselineFile) }
+            // Unchanged when no card was read again and no copy newly found to match.
+            if newMatches || cache.reads != readsBefore {
+                let matches = Matches(copies: reads.compactMapValues(\.saved))
+                if matches != savedMatches { try matches.save(to: matchesFile) }
+            }
+            // A grant stays on the list until a run with every window closed finds no copy that has it: an open window
+            // may still hold it and write it back.
+            if pairs.allSatisfy({ !(isWindowOpen?(dataDir(of: $0)) ?? !propagateDeletions) }) {
+                for (name, grants) in leaks.cards {
+                    let held = Set(
+                        (holders[name] ?? []).flatMap { pair in
+                            (reads[pair.appending(path: name).path]?.facts.grants ?? [:]).map { $0.key + " " + $0.value }
+                        })
+                    leaks.cards[name] = grants.filter(held.contains)
+                    if leaks.cards[name]?.isEmpty == true { leaks.cards[name] = nil }
+                }
+            }
+            if leaks != savedLeaks { try leaks.save(to: leakedFile) }
             removeDeadScratchLinks()
             backup.prune()
         }
         return report
+    }
+
+    /// When a "session deleted" marker says its session was deleted: Claude writes the time in milliseconds.
+    static func deletionTime(in marker: URL) -> Date? {
+        guard let data = try? Data(contentsOf: marker), data.count < 32,
+            let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            let ms = Double(text), ms > 0
+        else { return nil }
+        return Date(timeIntervalSince1970: ms / 1000)
+    }
+
+    /// Copies found to match their card, by path: `session-sync-matches.json` in the state folder, so that a new
+    /// process, such as `baton open`, compares none of them again while they and their cards stay the same. Holds
+    /// file stamps and digests only.
+    struct Matches: Codable, Equatable {
+        var version = 1
+        /// Card file path → its stamp and what it matched.
+        var copies: [String: String] = [:]
+
+        /// Missing, unreadable or of another version: nothing is known to match.
+        static func load(from url: URL) -> Matches {
+            guard let data = try? Data(contentsOf: url), let state = try? JSONDecoder().decode(Matches.self, from: data), state.version == 1
+            else { return Matches() }
+            return state
+        }
+
+        func save(to url: URL) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(self).write(to: url, options: .atomic)
+        }
+    }
+
+    /// Grants and session rules found in copies of one card in two accounts, which older releases copied between
+    /// accounts: `cross-account-grants.json` in the state folder. Card name → "<field> <SHA-256 of its value>".
+    /// Its absence means it was never looked for; a damaged file is looked for again, which only takes more out.
+    struct LeakedGrants: Codable, Equatable {
+        var version = 1
+        var cards: [String: [String]] = [:]
+
+        static func load(from url: URL) -> LeakedGrants? {
+            guard let data = try? Data(contentsOf: url), let state = try? JSONDecoder().decode(LeakedGrants.self, from: data), state.version == 1
+            else { return nil }
+            return state
+        }
+
+        func save(to url: URL) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(self).write(to: url, options: .atomic)
+        }
+    }
+
+    /// `card` without the members `grants` names ("<field> <digest of its value>"); the rest keeps its bytes.
+    static func without(_ grants: Set<String>, in card: Data) -> Data {
+        guard !grants.isEmpty, let members = JSONMembers.parse([UInt8](card)) else { return card }
+        let kept = members.filter { member in
+            guard isGrant(member.name), let value = try? JSONSerialization.jsonObject(with: Data(member.value), options: .fragmentsAllowed)
+            else { return true }
+            return !grants.contains(member.name + " " + grantDigest(value))
+        }
+        return kept.count == members.count ? card : Data(JSONMembers.object(kept))
     }
 
     /// Each session folder's archive list as the last run left it, keyed by the folder's path. Only session IDs.
@@ -365,21 +567,26 @@ public struct SessionSync: Sendable {
     /// The newest copy of a card found so far, and what it says.
     struct Card {
         var modified: Date
-        var data: Data
+        /// `modified` to the nanosecond, which a copy gets exactly.
+        var time: timespec
+        /// Of the bytes the scan found, in hex.
+        var digest: String
         var facts: CardFacts
         /// The account of the folder this copy was found in.
         var account: String
         var created: Date
+        /// The file this copy was found in.
+        var url: URL
 
         /// Newer than `other`. A fork of the other's conversation is newer whatever the dates say, so a window
         /// still holding the card from before the fork can't point the session back. Of copies that are the same
-        /// file, the one written first is where the card was made.
+        /// file, or have the same date as a copy gets it, the one written first is where the card was made.
         func supersedes(_ other: Card) -> Bool {
             if let mine = facts.transcript, let theirs = other.facts.transcript, mine != theirs {
                 if facts.priors.contains(theirs) { return true }
                 if other.facts.priors.contains(mine) { return false }
             }
-            if data == other.data { return created < other.created }
+            if digest == other.digest || modified == other.modified { return created < other.created }
             return modified > other.modified
         }
     }
@@ -398,11 +605,45 @@ public struct SessionSync: Sendable {
             })
     }
 
+    /// Remote Control bridges and messages, connectors and their tools, and browser grants.
+    static let accountFields: Set<String> = ["bridgeSessionIds", "peerReceipts", "remoteMcpServersConfig", "enabledMcpTools", "chromePermissionMode"]
+    /// The permission mode and the choice of it in the app: what a profile that keeps the permission mode keeps.
+    static let permissionModeFields: Set<String> = ["permissionMode", "bypassChosenInApp", "autoChosenInApp"]
+    /// What the session was allowed without asking: its allow rules and added folders, and the prompts answered
+    /// "always allow". Never kept for another account.
+    static let permissionRuleFields: Set<String> = ["sessionPermissionUpdates", "alwaysAllowedReasons"]
+
     /// Card fields that belong to the account a session was used under: Remote Control bridges and messages,
-    /// connectors and their tools, browser and computer-use grants, and the permission mode unless kept.
+    /// connectors and their tools, browser grants, every computer-use field (`cuAllowedApps`, `cuGrantFlags`,
+    /// `cuFlagsGrantedAt` and any later `cu…` one), the session's permission rules, and the permission mode unless
+    /// kept.
     static func isAccountScoped(_ key: String, keepPermissionMode: Bool) -> Bool {
-        ["bridgeSessionIds", "peerReceipts", "remoteMcpServersConfig", "enabledMcpTools", "chromePermissionMode", "cuGrantFlags"].contains(key)
-            || key.hasPrefix("remoteControl") || (key == "permissionMode" && !keepPermissionMode)
+        accountFields.contains(key) || key.hasPrefix("remoteControl") || isComputerUse(key) || permissionRuleFields.contains(key)
+            || (permissionModeFields.contains(key) && !keepPermissionMode)
+    }
+
+    /// The grants and rules older releases copied between accounts: computer-use fields and the permission fields.
+    static func isGrant(_ key: String) -> Bool {
+        isComputerUse(key) || permissionModeFields.contains(key) || permissionRuleFields.contains(key)
+    }
+
+    /// Of a value as JSON with sorted keys, so equal values in differently written cards match.
+    static func grantDigest(_ value: Any) -> String {
+        hex(SHA256.hash(data: (try? JSONSerialization.data(withJSONObject: [value], options: [.sortedKeys])) ?? Data()))
+    }
+
+    static func hex(_ digest: SHA256.Digest) -> String {
+        let digits = Array("0123456789abcdef".utf8)
+        var text: [UInt8] = []
+        text.reserveCapacity(64)
+        for byte in digest { text += [digits[Int(byte >> 4)], digits[Int(byte & 15)]] }
+        return String(decoding: text, as: UTF8.self)
+    }
+
+    /// `cu` followed by a capital letter, as Claude names its computer-use fields.
+    static func isComputerUse(_ key: String) -> Bool {
+        let rest = key.utf8.dropFirst(2)
+        return key.hasPrefix("cu") && rest.first.map { (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains($0) } == true
     }
 
     /// `base` as another account's window gets it: account-scoped fields dropped, local stdio tools (`local:`) kept
@@ -478,6 +719,8 @@ public struct SessionSync: Sendable {
     static func isAccountBound(_ data: Data) -> Bool { facts(of: data).accountBound }
 
     struct CardFacts {
+        /// One whole JSON object; a card cut short by a crash or a full disk is not.
+        var valid = false
         var accountBound = false
         /// The Claude Code conversation the card opens (`cliSessionId`).
         var transcript: String?
@@ -487,18 +730,95 @@ public struct SessionSync: Sendable {
         var folders: [String] = []
         /// The conversations Claude forked this session from (`priorCliSessionIds`).
         var priors: Set<String> = []
+        /// `cwd` or `originCwd` is a "No folder" scratch workspace, which each window's copy names in its own data
+        /// directory.
+        var scratch = false
+        /// When a window made this card, by creating the session or importing it: the later of `createdAt` and
+        /// `indexedAt`.
+        var made: Date?
+        /// A digest of each computer-use and permission field's value (`grantDigest`), by field, for values that allow
+        /// something (`grantsSomething`).
+        var grants: [String: String] = [:]
     }
 
     static func facts(of data: Data) -> CardFacts {
         guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return CardFacts() }
-        let folders = ["cwd", "originCwd"].compactMap { card[$0] as? String }
-            .filter { !$0.isEmpty && !$0.contains(scratchFolder) }
+        let paths = ["cwd", "originCwd"].compactMap { card[$0] as? String }
+        let folders = paths.filter { !$0.isEmpty && !$0.contains(scratchFolder) }
+        let made = ["createdAt", "indexedAt"].compactMap { card[$0] as? Double }.max()
         return CardFacts(
+            valid: true,
             accountBound: isAccountBoundCard(card),
             transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
             imported: card["adoptedFromOtherSurface"] as? Bool == true,
             folders: Array(Set(folders)).sorted(),
-            priors: Set((card["priorCliSessionIds"] as? [String] ?? []).map { $0.lowercased() }))
+            priors: Set((card["priorCliSessionIds"] as? [String] ?? []).map { $0.lowercased() }),
+            scratch: paths.contains { $0.contains(scratchFolder) },
+            made: made.map { Date(timeIntervalSince1970: $0 / 1000) },
+            grants: card.filter { isGrant($0.key) && grantsSomething($0.value) }.mapValues(grantDigest))
+    }
+
+    /// Whether a computer-use or permission value allows anything: not empty, false, zero or `"default"`, the values
+    /// Claude writes into every card.
+    static func grantsSomething(_ value: Any) -> Bool {
+        switch value {
+        case let text as String: return !text.isEmpty && text != "default"
+        case let number as NSNumber: return number.doubleValue != 0
+        case let list as [Any]: return list.contains(where: grantsSomething)
+        case let object as [String: Any]: return object.values.contains(where: grantsSomething)
+        default: return false
+        }
+    }
+
+    /// What a card file says, kept in `cache` while the file stays the same. The sync and the carry share it.
+    static func read(_ url: URL, cache: ScanCache) throws -> CardRead {
+        try autoreleasepool { try cache.value("card", of: url, cost: \CardRead.cost) { url in try CardRead(of: url) } }
+    }
+
+    /// What a run keeps of a card between runs, while its file stays the same: what it says and a digest of its
+    /// bytes, not the bytes. A copy found to match its card is remembered here, so an idle run compares nothing.
+    final class CardRead: @unchecked Sendable {
+        let facts: CardFacts
+        /// SHA-256 of the bytes, in hex.
+        let digest: String
+        /// The modification time, of the link itself for a symbolic link.
+        let modified: timespec?
+        let created: Date
+        /// The file's modification and change times, size and inode when it was read.
+        let stamp: String
+        private let lock = NSLock()
+        private var matched: String?
+
+        init(of url: URL) throws {
+            var info = stat()
+            stamp =
+                stat(url.path, &info) == 0
+                ? "\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec) \(info.st_ctimespec.tv_sec).\(info.st_ctimespec.tv_nsec) \(info.st_size) \(info.st_ino)"
+                : ""
+            let data = try Data(contentsOf: url)
+            facts = SessionSync.facts(of: data)
+            digest = SessionSync.hex(SHA256.hash(data: data))
+            modified = SyncFolders.modificationTime(url)
+            created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantFuture
+        }
+
+        /// Roughly what keeping it takes, in bytes: measured at about 1 KB for a card with one folder and no priors.
+        var cost: Int {
+            let strings = [facts.transcript ?? ""] + facts.folders + Array(facts.priors) + facts.grants.map { $0.key + $0.value }
+            return 640 + strings.reduce(0) { $0 + $1.utf8.count + 48 }
+        }
+
+        /// Whether this copy was found to match a card as `comparison` describes it.
+        func matches(_ comparison: String) -> Bool { lock.withLock { matched == comparison } }
+        func match(_ comparison: String) { lock.withLock { matched = comparison } }
+
+        /// Its stamp and match, for `Matches`.
+        var saved: String? { lock.withLock { matched.map { stamp + "|" + $0 } } }
+        /// A match an earlier process found, if it was found for this very file.
+        func restore(_ saved: String) {
+            guard !stamp.isEmpty, saved.hasPrefix(stamp + "|") else { return }
+            lock.withLock { if matched == nil { matched = String(saved.dropFirst(stamp.count + 1)) } }
+        }
     }
 
     /// `local_<uuid>.json` names the transcript it was imported from; any other name gives `nil`.
@@ -611,8 +931,8 @@ public struct SessionSync: Sendable {
                     let orgPath = root + account + "/" + org
                     for name in (try? fm.contentsOfDirectory(atPath: orgPath)) ?? [] {
                         let link = orgPath + "/" + name
-                        guard (try? fm.attributesOfItem(atPath: link)[.type] as? FileAttributeType) == .typeSymbolicLink,
-                            let folder = try? fm.destinationOfSymbolicLink(atPath: link), folder.hasPrefix("/"),
+                        // Only a link has a destination.
+                        guard let folder = try? fm.destinationOfSymbolicLink(atPath: link), folder.hasPrefix("/"),
                             folder.hasSuffix(Self.scratchFolder + account + "/" + org + "/" + name),
                             !fm.fileExists(atPath: folder)
                         else { continue }
@@ -843,7 +1163,12 @@ enum JSONMembers {
             while true {
                 guard i < json.count, json[i] == UInt8(ascii: "\""), case let keyStart = i, skipString() else { return nil }
                 let key = json[keyStart..<i]
-                guard let name = (try? JSONSerialization.jsonObject(with: Data(key), options: .fragmentsAllowed)) as? String else { return nil }
+                // A key without escapes is its own bytes; one with them is decoded as JSON.
+                let plain = key.dropFirst().dropLast()
+                let decoded =
+                    plain.contains(UInt8(ascii: "\\"))
+                    ? (try? JSONSerialization.jsonObject(with: Data(key), options: .fragmentsAllowed)) as? String : String(bytes: plain, encoding: .utf8)
+                guard let name = decoded else { return nil }
                 skipSpace()
                 guard i < json.count, json[i] == UInt8(ascii: ":") else { return nil }
                 i += 1

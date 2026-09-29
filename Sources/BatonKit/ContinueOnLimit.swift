@@ -318,8 +318,12 @@ public enum TranscriptFork {
 /// Otherwise the source has moved on and a fresh copy is made, so no Continue opens an outdated history.
 struct ContinueCopies: Sendable {
     let file: URL
+    let paths: Paths
 
-    init(paths: Paths) { file = paths.stateDir.appending(path: "continue-copies.json") }
+    init(paths: Paths) {
+        file = paths.stateDir.appending(path: "continue-copies.json")
+        self.paths = paths
+    }
 
     private struct Entry: Codable, Equatable {
         var source: String; var destination: String; var copy: String
@@ -364,11 +368,11 @@ struct ContinueCopies: Sendable {
     }
 
     /// The copy already made of `source` (whose transcript is `transcript`) in `destination`, if its transcript
-    /// is still next to the source's and it is current.
+    /// is still next to the source's, it is current, and the user didn't delete it there.
     func existingCopy(of source: String, transcript: URL, in destination: String) -> String? {
         guard let entry = load().first(where: { $0.source == source && $0.destination == destination }) else { return nil }
         let copy = transcript.deletingLastPathComponent().appending(path: "\(entry.copy).jsonl")
-        guard FileManager.default.fileExists(atPath: copy.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: copy.path), !isDeleted(entry.copy, in: destination) else { return nil }
         if let length = entry.sourceLength, let tail = entry.sourceTail, let now = Self.fingerprint(of: transcript),
             now.length == length, now.tail == tail
         {
@@ -378,6 +382,17 @@ struct ContinueCopies: Sendable {
             return entry.copy
         }
         return nil
+    }
+
+    /// Whether `destination` has a "session deleted" marker for the card Claude made when it opened `copy`, named
+    /// after its transcript. The sync would remove that card again, so a new copy is made instead.
+    private func isDeleted(_ copy: String, in destination: String) -> Bool {
+        let dataDir = destination == "main" ? paths.mainDataDir : paths.dataDir(for: destination)
+        let markers = Set(["deleted_\(copy)", "deleted_local_\(copy)"].map { $0.lowercased() })
+        let pairs = (try? SessionSync.sessionPairs(dataDirs: [dataDir], folder: SessionSync.sessionsFolder)) ?? []
+        return pairs.contains { pair in
+            ((try? FileManager.default.contentsOfDirectory(atPath: pair.path)) ?? []).contains { markers.contains($0.lowercased()) }
+        }
     }
 
     /// Records that `source` now has `copy` in `destination`, replacing any earlier entry for the same pair.

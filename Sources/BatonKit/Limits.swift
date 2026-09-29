@@ -377,7 +377,7 @@ public struct LimitHit: Codable, Equatable, Sendable {
         while let marker = data.range(of: marker, in: from..<data.endIndex) {
             let start = data[..<marker.lowerBound].lastIndex(of: 0x0A).map { $0 + 1 } ?? data.startIndex
             let end = data[marker.upperBound...].firstIndex(of: 0x0A) ?? data.endIndex
-            if let hit = parse(line: data[start..<end]) { found.append(hit) }
+            if let hit = autoreleasepool(invoking: { parse(line: data[start..<end]) }) { found.append(hit) }
             from = end
         }
         return found
@@ -444,7 +444,8 @@ public struct LimitAnswer: Equatable, Sendable {
                 let line = data[start..<end]
                 if var found = reply {
                     if let uuid = wanted, line.range(of: Data(uuid.utf8)) != nil,
-                        let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any], object["uuid"] as? String == uuid
+                        let object = autoreleasepool(invoking: { (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] }),
+                        object["uuid"] as? String == uuid
                     {
                         if let request = found.request, object["requestId"] as? String == request {
                             wanted = object["parentUuid"] as? String
@@ -454,7 +455,7 @@ public struct LimitAnswer: Equatable, Sendable {
                             return found
                         }
                     }
-                } else if let found = parse(line: line) {
+                } else if let found = autoreleasepool(invoking: { parse(line: line) }) {
                     reply = found
                     wanted = found.parent
                     if wanted == nil { return found }

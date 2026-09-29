@@ -49,16 +49,15 @@ public enum NativeForkCarry {
     // MARK: Finding copies
 
     /// Every (old, new) pair that a card in one of `dataDirs` names, with both transcripts on this Mac.
-    public static func candidates(dataDirs: [URL], transcripts: [String: URL]) -> [Lineage] {
+    public static func candidates(dataDirs: [URL], transcripts: [String: URL], cache: ScanCache = .shared) -> [Lineage] {
         var found: Set<Lineage> = []
         for dataDir in dataDirs {
             for card in cards(in: dataDir.appending(path: SessionSync.sessionsFolder, directoryHint: .isDirectory)) {
-                guard let data = try? ScanCache.shared.value("data", of: card, read: { try Data(contentsOf: $0) }),
-                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                    let new = (json["cliSessionId"] as? String)?.lowercased(), transcripts[new] != nil
+                // What the sync keeps of each card, read once for both while the file stays the same.
+                guard let facts = (try? SessionSync.read(card, cache: cache))?.facts, let new = facts.transcript, transcripts[new] != nil
                 else { continue }
-                for old in (json["priorCliSessionIds"] as? [String]) ?? [] where old.lowercased() != new && transcripts[old.lowercased()] != nil {
-                    found.insert(Lineage(old: old.lowercased(), new: new))
+                for old in facts.priors where old != new && transcripts[old] != nil {
+                    found.insert(Lineage(old: old, new: new))
                 }
             }
         }
@@ -79,11 +78,13 @@ public enum NativeForkCarry {
         guard let data = try? Data(contentsOf: transcript, options: .mappedIfSafe) else { return [] }
         var ids: [String] = []
         for line in data.split(separator: UInt8(ascii: "\n")) where ids.count < limit {
-            guard let record = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                let type = record["type"] as? String, ["user", "assistant", "system", "attachment"].contains(type),
-                let uuid = record["uuid"] as? String
-            else { continue }
-            ids.append(uuid)
+            let uuid = autoreleasepool { () -> String? in
+                guard let record = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                    let type = record["type"] as? String, ["user", "assistant", "system", "attachment"].contains(type)
+                else { return nil }
+                return record["uuid"] as? String
+            }
+            if let uuid { ids.append(uuid) }
         }
         return ids
     }
@@ -91,16 +92,24 @@ public enum NativeForkCarry {
     // MARK: Carrying
 
     /// Carries what the old sessions left behind into every session Claude Desktop copied itself.
-    /// Pairs already carried cost a directory listing; pairs found unrelated are remembered and not read again.
-    public static func run(paths: Paths, dataDirs: [URL], dryRun: Bool = false) throws -> [Report] {
+    /// Pairs found unrelated, and pairs with nothing left to carry once the copy is older than `clockSlack`, are
+    /// remembered and not read again: from then on nothing the old session makes counts, so an idle run walks no
+    /// session folder or scratchpad.
+    public static func run(paths: Paths, dataDirs: [URL], dryRun: Bool = false, now: Date = Date()) throws -> [Report] {
         let transcripts = ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)
         var manifest = Manifest.load(paths.carriedFile)
         var changed = false
         var reports: [Report] = []
-        for lineage in candidates(dataDirs: dataDirs, transcripts: transcripts) where !manifest.unrelated.contains(lineage) {
+        func settle(_ lineage: Lineage, _ plan: Plan) {
+            guard !dryRun, plan.madeBy < now else { return }
+            manifest.settled = (manifest.settled ?? []).union([lineage])
+            changed = true
+        }
+        for lineage in candidates(dataDirs: dataDirs, transcripts: transcripts)
+        where !manifest.unrelated.contains(lineage) && manifest.settled?.contains(lineage) != true {
             guard let old = transcripts[lineage.old], let new = transcripts[lineage.new] else { continue }
             let plan = self.plan(lineage, old: old, new: new, paths: paths)
-            guard !plan.copies.isEmpty else { continue }
+            guard !plan.copies.isEmpty else { settle(lineage, plan); continue }
             switch continues(new, from: old) {
             case true?: break
             case false?:
@@ -118,6 +127,8 @@ public enum NativeForkCarry {
                     manifest.carried.append(.init(lineage: lineage, at: Date(), files: report.added))
                     changed = true
                 }
+                // Every file planned is in the new session now.
+                settle(lineage, plan)
             } else {
                 report.added = plan.copies.map { $0.name }
             }
@@ -141,11 +152,14 @@ public enum NativeForkCarry {
         var kept = 0
         var leftBehind: [String] = []
         var worktrees: [String] = []
+        /// What the old session made up to this time is carried; what it made later stays its own.
+        var madeBy: Date = .distantFuture
     }
 
     static func plan(_ lineage: Lineage, old: URL, new: URL, paths: Paths) -> Plan {
         var plan = Plan()
         let forkedAt = created(new).map { $0.addingTimeInterval(clockSlack) } ?? .distantFuture
+        plan.madeBy = forkedAt
         let oldFolder = old.deletingPathExtension(), newFolder = new.deletingPathExtension()
         let project = new.deletingLastPathComponent().lastPathComponent
         for kind in ["subagents", "workflows", "tool-results"] {
@@ -321,7 +335,7 @@ public enum NativeForkCarry {
     // MARK: Manifest
 
     /// `carried.json`: what was added to which session, so each carried file can be found and removed by hand;
-    /// and the pairs found unrelated, so they are not read again.
+    /// and the pairs found unrelated or with nothing left to carry, so they are not read again.
     struct Manifest: Codable {
         struct Entry: Codable, Equatable {
             var lineage: Lineage
@@ -331,6 +345,8 @@ public enum NativeForkCarry {
         var version = 1
         var carried: [Entry] = []
         var unrelated: Set<Lineage> = []
+        /// Missing in files written before it, which read as none.
+        var settled: Set<Lineage>?
 
         static func load(_ url: URL) -> Manifest {
             let decoder = JSONDecoder()

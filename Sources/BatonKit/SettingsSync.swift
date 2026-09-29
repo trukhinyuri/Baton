@@ -352,10 +352,14 @@ public struct SettingsSync: Sendable {
     /// copied, under a temporary name first, so a profile never sees half a build.
     /// Keeps the current Claude Code build and the one before it in the profile: the newest two finished builds
     /// of the main app and the profile together. Older finished builds in the profile go to the Trash; a download
-    /// in progress (no `.verified`) is left alone.
+    /// in progress (no `.verified`) is left alone. A partial copy is removed when the copy fails, and one left by a
+    /// crash or a force quit is removed at the next run.
     private func copyBuilds(into dataDir: URL) throws -> Int {
         let from = paths.mainDataDir.appending(path: Self.builds, directoryHint: .isDirectory)
         let to = dataDir.appending(path: Self.builds, directoryHint: .isDirectory)
+        for name in (try? fm.contentsOfDirectory(atPath: to.path)) ?? [] where Self.isPartialBuild(name) {
+            try? fm.removeItem(at: to.appending(path: name, directoryHint: .isDirectory))
+        }
         func finished(in folder: URL) -> [String] {
             ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).filter {
                 !$0.hasPrefix(".") && fm.fileExists(atPath: folder.appending(path: "\($0)/.verified").path)
@@ -373,11 +377,22 @@ public struct SettingsSync: Sendable {
             guard !fm.fileExists(atPath: to.appending(path: version).path) else { continue }
             try fm.createDirectory(at: to, withIntermediateDirectories: true)
             let partial = to.appending(path: ".\(version)-\(UUID().uuidString)", directoryHint: .isDirectory)
+            defer { try? fm.removeItem(at: partial) }  // nothing left there after the move
             try fm.copyItem(at: build, to: partial)
             try fm.moveItem(at: partial, to: to.appending(path: version, directoryHint: .isDirectory))
             copied += 1
         }
         return copied
+    }
+
+    /// `.<version>-<UUID>`, the temporary name `copyBuilds` copies a build under. `UUID().uuidString` is upper case,
+    /// which tells it apart from a name Claude would make.
+    static func isPartialBuild(_ name: String) -> Bool {
+        guard name.hasPrefix("."), let dash = name.index(name.endIndex, offsetBy: -37, limitedBy: name.startIndex),
+            name[dash] == "-", dash > name.index(after: name.startIndex)
+        else { return false }
+        let id = name[name.index(after: dash)...]
+        return UUID(uuidString: String(id)) != nil && id == id.uppercased()
     }
 
     /// Resolves portable values without retaining their contents (MCP configuration may include secrets).

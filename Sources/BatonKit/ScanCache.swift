@@ -6,6 +6,11 @@ import Foundation
 /// writes with its source's modification date still reads as changed. An idle refresh of the window list, the sync
 /// and the Continue list then reads no card or transcript again; it only looks at each file's attributes.
 /// In memory only, per process; nothing is written.
+///
+/// It holds at most `limit` entries and about `budget` bytes. Past either, a new value is returned but not kept, so
+/// a set of files larger than the cache still finds most of them kept. An entry nobody asked for in an hour goes: its
+/// file was most likely removed or renamed. Callers keep what they found in a file, not the file: a date, a few
+/// facts, a digest. Each entry counts `overhead` bytes for its key and bookkeeping on top of its value.
 public final class ScanCache: @unchecked Sendable {
     public static let shared = ScanCache()
 
@@ -18,14 +23,41 @@ public final class ScanCache: @unchecked Sendable {
         }
     }
 
+    private struct Entry {
+        var stamp: Stamp
+        var value: Any
+        var cost: Int
+        var used: TimeInterval
+    }
+
     private let lock = NSLock()
-    private var entries: [String: (stamp: Stamp, value: Any)] = [:]
+    private var entries: [String: Entry] = [:]
+    private var lastSweep: TimeInterval
     /// How many times a file had to be read: a miss, or a file that changed. For tests and measurements.
     public private(set) var reads = 0
-    /// Past this many entries the cache starts over rather than grow without bound.
+    /// What the kept values cost, in bytes, as counted when each was kept. For tests and measurements.
+    public private(set) var bytes = 0
+    /// At most this many entries.
     let limit: Int
+    /// At most about this many bytes of kept values.
+    let budget: Int
+    /// An entry not asked for in this long goes.
+    static let idle: TimeInterval = 3600
+    /// What an entry takes besides its value, in bytes: its key, the file's stamp and the table's own storage.
+    static let overhead = 512
+    /// Seconds on a clock that only moves forward; a test moves its own by hand.
+    let clock: @Sendable () -> TimeInterval
 
-    public init(limit: Int = 100_000) { self.limit = limit }
+    public convenience init(limit: Int = 100_000, budget: Int = 256 << 20) {
+        self.init(limit: limit, budget: budget, clock: { ProcessInfo.processInfo.systemUptime })
+    }
+
+    init(limit: Int, budget: Int, clock: @escaping @Sendable () -> TimeInterval) {
+        self.limit = limit
+        self.budget = budget
+        self.clock = clock
+        lastSweep = clock()
+    }
 
     private static func stamp(of url: URL) -> Stamp? {
         var info = stat()
@@ -35,21 +67,47 @@ public final class ScanCache: @unchecked Sendable {
 
     /// `read(url)` the first time and whenever the file changed; the kept value otherwise. `kind` keeps different
     /// reads of one file apart. A file that can't be stat'ed is read every time and kept for nothing.
-    public func value<T>(_ kind: String, of url: URL, read: (URL) throws -> T) rethrows -> T {
+    /// - Parameter cost: what keeping a value takes, in bytes, besides `overhead`. By default the size of a `Data`,
+    ///   and nothing more for anything else: pass it for a value larger than a date or a few numbers.
+    public func value<T>(_ kind: String, of url: URL, cost: ((T) -> Int)? = nil, read: (URL) throws -> T) rethrows -> T {
         let key = kind + "\n" + url.path
         guard let before = Self.stamp(of: url) else {
-            lock.withLock { reads += 1 }
+            lock.withLock {
+                reads += 1
+                forget(key)
+            }
             return try read(url)
         }
-        if let hit = lock.withLock({ entries[key] }), hit.stamp == before, let value = hit.value as? T { return value }
+        let now = clock()
+        let hit: T? = lock.withLock {
+            sweep(now: now)
+            guard let entry = entries[key], entry.stamp == before, let value = entry.value as? T else { return nil }
+            entries[key]?.used = now
+            return value
+        }
+        if let hit { return hit }
         let value = try read(url)
+        let size = max(cost?(value) ?? (value as? Data)?.count ?? 0, 0) + Self.overhead
         lock.withLock {
             reads += 1
-            // Kept only if the file didn't change while it was read.
-            guard Self.stamp(of: url) == before else { return }
-            if entries.count >= limit { entries.removeAll(keepingCapacity: true) }
-            entries[key] = (before, value)
+            forget(key)
+            // Kept only if the file didn't change while it was read, and only if it fits.
+            guard Self.stamp(of: url) == before, entries.count < limit, bytes + size <= budget else { return }
+            entries[key] = Entry(stamp: before, value: value, cost: size, used: now)
+            bytes += size
         }
         return value
+    }
+
+    /// Call with `lock` held.
+    private func forget(_ key: String) {
+        if let gone = entries.removeValue(forKey: key) { bytes -= gone.cost }
+    }
+
+    /// Drops what nobody asked for in `idle`, looking at most four times per `idle`. Call with `lock` held.
+    private func sweep(now: TimeInterval) {
+        guard now - lastSweep >= Self.idle / 4 else { return }
+        lastSweep = now
+        for (key, entry) in entries where now - entry.used >= Self.idle { forget(key) }
     }
 }
