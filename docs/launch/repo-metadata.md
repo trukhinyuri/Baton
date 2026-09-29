@@ -23,8 +23,8 @@ preview**. Without it, links to the repository show a card GitHub draws from the
 
 ## Repository settings
 
-GitHub keeps these in the repository's settings, not in a file, so nothing in the repository can check them. Set them
-by hand before the first tag; [RELEASING.md](../RELEASING.md#repository-settings) has the whole list, including
+GitHub keeps these in the repository's settings, not in a file, so only the name is checked, by the release workflow.
+Set them by hand before the first tag; [RELEASING.md](../RELEASING.md#repository-settings) has the whole list, including
 the rename, private vulnerability reporting, branch protection and secrets. The ones that are about how the
 repository looks:
 
