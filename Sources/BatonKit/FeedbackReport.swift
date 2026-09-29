@@ -30,6 +30,8 @@ public struct FeedbackReport: Sendable {
         public var macOS: String
         public var architecture: String
         public var claudeVersion: String?
+        /// Managed preferences an organization set that concern Baton, by key (`ManagedPolicy.concerningBaton`).
+        public var managedPolicies: [String]
         public var windows: [Window]
         public var diagnostics: [Diagnostics.Entry]
         public var lastSync: SyncReport?
@@ -48,12 +50,13 @@ public struct FeedbackReport: Sendable {
         public init(
             build: BuildInfo, macOS: String, architecture: String, claudeVersion: String?, windows: [Window],
             diagnostics: [Diagnostics.Entry], lastSync: SyncReport?, lastSyncDate: Date?, errors: [String],
-            log: [String], home: String, user: String, profiles: [[String]], folders: [String] = []
+            log: [String], home: String, user: String, profiles: [[String]], folders: [String] = [],
+            managedPolicies: [String] = []
         ) {
             self.build = build; self.macOS = macOS; self.architecture = architecture; self.claudeVersion = claudeVersion
             self.windows = windows; self.diagnostics = diagnostics; self.lastSync = lastSync; self.lastSyncDate = lastSyncDate
             self.errors = errors; self.log = log; self.home = home; self.user = user; self.profiles = profiles
-            self.folders = folders
+            self.folders = folders; self.managedPolicies = managedPolicies
         }
 
         /// Reads only what the app already shows: window states, the sessions check and version numbers.
@@ -83,7 +86,8 @@ public struct FeedbackReport: Sendable {
                 windows: windows, diagnostics: diagnostics, lastSync: lastSync, lastSyncDate: lastSyncDate,
                 errors: errors, log: log, home: paths.home.path, user: user,
                 profiles: profiles.map { [$0.label, $0.id] },
-                folders: ((try? FolderRules(paths: paths).load()) ?? []).map(\.folder) + diagnostics.flatMap(\.missingFolders))
+                folders: ((try? FolderRules(paths: paths).load()) ?? []).map(\.folder) + diagnostics.flatMap(\.missingFolders),
+                managedPolicies: ManagedPolicy.concerning(in: manager.managedPreferences, user: user))
         }
     }
 
@@ -101,6 +105,7 @@ public struct FeedbackReport: Sendable {
         head.append("### Environment")
         head.append("- macOS \(r(facts.macOS)), \(facts.architecture)")
         head.append("- Claude Desktop \(facts.claudeVersion ?? "not found")")
+        head.append("- Managed policies: \(facts.managedPolicies.isEmpty ? "none that concern Baton" : facts.managedPolicies.joined(separator: ", "))")
         let running = facts.windows.filter(\.isRunning).count, signedIn = facts.windows.filter(\.isSignedIn).count
         head.append("- \(facts.windows.count) windows: \(running) open, \(signedIn) signed in")
         var lines = head

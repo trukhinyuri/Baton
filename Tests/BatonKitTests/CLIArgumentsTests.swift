@@ -133,4 +133,24 @@ struct CLIArgumentsTests {
         #expect(CLIOutput.moreConversations(shown: 20, of: 20) == nil)
         #expect(CLIOutput.moreConversations(shown: 64, of: 64) == nil)
     }
+
+    /// A script reading `--json` gets every conversation, not a silent first 20.
+    @Test func conversationsAsJSONAreAllOfThem() {
+        #expect(CLIOutput.conversationLimit(for: ["conversations"]) == 20)
+        #expect(CLIOutput.conversationLimit(for: ["conversations", "--all"]) == nil)
+        #expect(CLIOutput.conversationLimit(for: ["conversations", "--json"]) == nil)
+    }
+
+    /// What every window has alike, such as the missing folders of the Code sessions they share, comes once.
+    @Test func doctorSaysSharedFindingsOnce() {
+        let missing = ["3 working folders are missing", "Missing: /src/a"]
+        let findings = CLIOutput.doctorFindings([
+            ("main", missing + ["46 Cowork cards without history"]), ("work", missing), ("home", missing + ["2 ambiguous"]),
+        ])
+        #expect(findings.shared == missing)
+        #expect(findings.windows.map(\.name) == ["main", "work", "home"])
+        #expect(findings.windows.map(\.lines) == [["46 Cowork cards without history"], [], ["2 ambiguous"]])
+        let one = CLIOutput.doctorFindings([("main", missing)])
+        #expect(one.shared.isEmpty && one.windows.map(\.lines) == [missing], "one window has nothing to share")
+    }
 }

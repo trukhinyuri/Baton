@@ -154,6 +154,21 @@ public enum CLIOutput {
         }
     }
 
+    /// How many conversations `baton conversations` shows: the 20 most recent, or every one with `--all` or
+    /// `--json`, so a script never takes the first 20 for all of them.
+    public static func conversationLimit(for args: [String]) -> Int? {
+        args.contains("--all") || args.contains("--json") ? nil : 20
+    }
+
+    /// The findings of `baton doctor`, each window's under its name. What every window has alike, such as the missing
+    /// working folders of the Code sessions they share, comes once first under `shared`, not once per window.
+    /// - Parameter windows: each window's name and its findings, in order.
+    public static func doctorFindings(_ windows: [(name: String, lines: [String])]) -> (shared: [String], windows: [(name: String, lines: [String])]) {
+        guard windows.count > 1, let first = windows.first else { return ([], windows) }
+        let shared = first.lines.filter { line in windows.allSatisfy { $0.lines.contains(line) } }
+        return (shared, windows.map { ($0.name, $0.lines.filter { !shared.contains($0) }) })
+    }
+
     /// The line under `baton conversations` when it shows only the most recent: how many more there are.
     public static func moreConversations(shown: Int, of total: Int) -> String? {
         total > shown ? "Showing the \(shown) most recent of \(total); add --all for every one." : nil

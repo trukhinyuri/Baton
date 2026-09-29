@@ -32,7 +32,7 @@ let usage = """
                                           ~/.claude/settings.json
       baton conversations [--all] [--json]
                                           Recent local Code sessions and Cowork tasks: the 20 most
-                                          recent, or with --all every one
+                                          recent, or with --all or --json every one
       baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                           Continue a conversation in another profile: a Code session
                                           as itself or as a copy, or a new Cowork task with its history
@@ -135,10 +135,10 @@ case .manager(let sharedLock):
 // Run from inside a Baton.app in Downloads or a temporary copy: no profile is added and no launcher points there.
 let manager = ProfileManager(cliPath: cli, misplaced: AppLocation.problem(app: cli, home: home))
 
-// Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a Claude Desktop version
-// outside the tested range. Informational only: it never blocks the command that follows. A command that only reads
-// leaves Launch Services as it is, so `baton doctor` never changes what it looks into.
-let startUpNotes = CLIDispatch.isReadOnly(args) ? [manager.claudeVersionWarning].compactMap { $0 } : manager.startUpChecks()
+// Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a missing or unsigned Claude Desktop, a
+// version outside the tested range and managed policies. Informational only: it never blocks the command that follows.
+// A command that only reads leaves Launch Services as it is, so `baton doctor` never changes what it looks into.
+let startUpNotes = manager.startUpChecks(restoringLinks: !CLIDispatch.isReadOnly(args))
 for warning in startUpNotes { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
 
 func resolve(_ name: String) -> Profile {
@@ -317,17 +317,15 @@ do {
             let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
             let result = try manager.setLocalOnly(args[1] == "on", window: window)
             for (id, status) in result.sorted(by: { manager.label(of: $0.key) < manager.label(of: $1.key) }) {
-                print("\(manager.label(of: id)): \(describe(status))")
+                print("Claude \(manager.displayLabel(of: id)): \(describe(status))")
             }
         case "status":
             let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
             let rows = manager.localOnlyStatus().filter { window == nil || $0.window == window }
             if args.contains("--json") {
-                let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                let payload = rows.map { ["window": $0.window, "label": $0.label, "status": $0.status.rawValue] }
-                print(String(decoding: try encoder.encode(payload), as: UTF8.self))
+                print(try CLIOutput.json(rows.map { ["window": $0.window, "label": $0.label, "status": $0.status.rawValue] }))
             } else {
-                for row in rows { print("\(row.label): \(describe(row.status))") }
+                for row in rows { print("Claude \(manager.displayLabel(of: row.window)): \(describe(row.status))") }
             }
         case "cloud-lock":
             guard args.count >= 3 else { usageError("local-only cloud-lock needs on, off or status") }
@@ -342,23 +340,29 @@ do {
     case "doctor":
         let entries = try Diagnostics.inspect(paths: manager.paths)
         if args.contains("--json") {
-            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            print(String(decoding: try encoder.encode(entries), as: UTF8.self))
+            print(try CLIOutput.json(entries))
         } else {
             print("Read-only local inventory. Cloud access and feature availability are not tested.")
             for note in LegacyMigration.notes(paths: manager.paths, cli: cli) { print(note) }
-            let installed = ClaudeVersion.installed(at: manager.paths.claudeApp) ?? "unknown"
-            print(
-                "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.testedText))"
-            )
-            if let warning = manager.claudeVersionWarning { print("  \(warning)") }
-            for note in ClaudeSource.notes(paths: manager.paths) { print("  \(note)") }
-            switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
-            case nil: print("Local only: Claude.app unreadable, can't check its settings")
-            case []: print("Local only keys present: ccRemoteControlDefaultEnabled, remoteControlStayReachable")
-            case let missing?: print("Local only: missing in this Claude Desktop: \(missing.joined(separator: ", "))")
+            if FileManager.default.fileExists(atPath: manager.paths.claudeApp.path) {
+                let installed = ClaudeVersion.installed(at: manager.paths.claudeApp) ?? "unknown"
+                print(
+                    "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.testedText))"
+                )
+                if let warning = manager.claudeVersionWarning { print("  \(warning)") }
+                for note in ClaudeSource.notes(paths: manager.paths) { print("  \(note)") }
+                switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
+                case nil: print("Local only: Claude.app unreadable, can't check its settings")
+                case []: print("Local only keys present: ccRemoteControlDefaultEnabled, remoteControlStayReachable")
+                case let missing?: print("Local only: missing in this Claude Desktop: \(missing.joined(separator: ", "))")
+                }
+            } else {
+                print("Claude Desktop: not installed (looked for \(manager.paths.claudeApp.path)). Install it from claude.ai/download.")
             }
-            for row in manager.localOnlyStatus() { print("\(row.label): \(describe(row.status))") }
+            let policies = manager.managedPolicyWarnings
+            print(policies.isEmpty ? "Managed policies: none that concern Baton" : "Managed policies:")
+            for policy in policies { print("  \(policy)") }
+            for row in manager.localOnlyStatus() { print("Claude \(manager.displayLabel(of: row.window)): \(describe(row.status))") }
             print(describe(manager.cloudMoveLock.status()))
             for change in manager.autoResume.changes() {
                 print(
@@ -371,15 +375,17 @@ do {
                     "Auto-continue to turn off once Claude \(manager.displayLabel(of: pending.window)) is closed: "
                         + "\(pending.entry) (limit reset \(LimitText.time(pending.resetsAt)))")
             }
-            for entry in entries {
-                print("\(entry.label): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
-                for issue in entry.issues { print("  \(issue)") }
-                for folder in entry.missingFolders { print("  Missing: \(folder)") }
+            let findings = CLIOutput.doctorFindings(entries.map { ($0.id, $0.issues + $0.missingFolders.map { "Missing: \($0)" }) })
+            if !findings.shared.isEmpty { print("Every window:") }
+            for line in findings.shared { print("  \(line)") }
+            for (entry, window) in zip(entries, findings.windows) {
+                print("Claude \(manager.displayLabel(of: entry.id)): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
+                for line in window.lines { print("  \(line)") }
             }
         }
     case "conversations":
         let all = manager.conversations()
-        let shown = args.contains("--all") ? all : Array(all.prefix(20))
+        let shown = CLIOutput.conversationLimit(for: args).map { Array(all.prefix($0)) } ?? all
         if args.contains("--json") {
             print(try CLIOutput.json(CLIOutput.conversations(shown)))
             break
