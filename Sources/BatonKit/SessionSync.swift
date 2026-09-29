@@ -10,8 +10,8 @@ import Foundation
 /// Native Project / Remote Control workers retain their account-and-organization scope; copying a card
 /// does not grant access to its server project or bridge. Ambiguous copies made by old releases are preserved.
 /// A copy for another account leaves out what the first account granted or connected (Remote Control bridges,
-/// connectors, browser and computer-use grants, and the permission mode unless the profile keeps it); copies
-/// between windows of one account are exact.
+/// connectors, browser and computer-use grants, and the permission mode with the session's permission rules unless
+/// the profile keeps it); copies between windows of one account are exact.
 ///
 /// Cards are copied, not symlinked: Claude Desktop creates these directories with `mkdir` and fails on symlinks.
 ///
@@ -398,11 +398,24 @@ public struct SessionSync: Sendable {
             })
     }
 
+    /// Remote Control bridges and messages, connectors and their tools, and browser grants.
+    static let accountFields: Set<String> = ["bridgeSessionIds", "peerReceipts", "remoteMcpServersConfig", "enabledMcpTools", "chromePermissionMode"]
+    /// The permission mode, the choice of it in the app, and what the session was allowed without asking: its
+    /// allow rules and added folders, and the prompts answered "always allow".
+    static let permissionFields: Set<String> = ["permissionMode", "bypassChosenInApp", "autoChosenInApp", "sessionPermissionUpdates", "alwaysAllowedReasons"]
+
     /// Card fields that belong to the account a session was used under: Remote Control bridges and messages,
-    /// connectors and their tools, browser and computer-use grants, and the permission mode unless kept.
+    /// connectors and their tools, browser grants, every computer-use field (`cuAllowedApps`, `cuGrantFlags`,
+    /// `cuFlagsGrantedAt` and any later `cu…` one), and the permission fields unless kept.
     static func isAccountScoped(_ key: String, keepPermissionMode: Bool) -> Bool {
-        ["bridgeSessionIds", "peerReceipts", "remoteMcpServersConfig", "enabledMcpTools", "chromePermissionMode", "cuGrantFlags"].contains(key)
-            || key.hasPrefix("remoteControl") || (key == "permissionMode" && !keepPermissionMode)
+        accountFields.contains(key) || key.hasPrefix("remoteControl") || isComputerUse(key)
+            || (permissionFields.contains(key) && !keepPermissionMode)
+    }
+
+    /// `cu` followed by a capital letter, as Claude names its computer-use fields.
+    static func isComputerUse(_ key: String) -> Bool {
+        let rest = key.utf8.dropFirst(2)
+        return key.hasPrefix("cu") && rest.first.map { (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains($0) } == true
     }
 
     /// `base` as another account's window gets it: account-scoped fields dropped, local stdio tools (`local:`) kept

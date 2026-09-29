@@ -40,6 +40,31 @@ struct SessionSyncAccountTests {
         #expect(try box.sync().changes == 0)
     }
 
+    /// Computer-use app grants and the session's allow rules are what one account granted; another account's window
+    /// starts without them. With the permission mode opt-in the permission fields come along, the grants still don't.
+    @Test func crossAccountCopyDropsComputerUseGrantsAndPermissionRules() throws {
+        let grants =
+            #""cuAllowedApps":[{"bundleId":"com.apple.Terminal","displayName":"Terminal","grantedAt":1790000000000,"tier":"full"}],"cuFlagsGrantedAt":1790000000000,"cuFutureGrant":{"x":1}"#
+        let permissions =
+            #""permissionMode":"acceptEdits","bypassChosenInApp":true,"autoChosenInApp":"auto","sessionPermissionUpdates":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"git push:*"}]},{"type":"addDirectories","destination":"session","directories":["/Users/me/lib"]}],"alwaysAllowedReasons":["r"]"#
+        let card = #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),\#(permissions),"customTitle":"T"}"#
+        for optIn in [false, true] {
+            let box = try Sandbox()
+            let a = try box.pair(box.main, account: Sandbox.accountA)
+            let b = try box.pair(box.work, account: Sandbox.accountB)
+            let same = try box.pair(box.work, account: Sandbox.accountA, org: "org-2")
+            try box.carryPermissionMode(optIn)
+            try box.write(card, to: a.appending(path: "local_1.json"))
+
+            _ = try box.sync()
+
+            let kept = optIn ? #",\#(permissions)"# : ""
+            #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)"\#(kept),"customTitle":"T"}"#)
+            #expect(box.read(same.appending(path: "local_1.json")) == card, "the same account's window gets it all")
+            #expect(try box.sync().changes == 0)
+        }
+    }
+
     @Test func sameAccountCopyIsByteExact() throws {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
