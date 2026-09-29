@@ -60,9 +60,9 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 
 ### Local only
 
-- **Local only**, on by default, turns off two Remote Control settings in every managed window, the main one included: the default for new sessions and, where Claude has it, staying reachable. It writes them only while that window is closed, after a dated backup, and turning it off restores the previous values. A running window shows *pending*, and a Claude version without these settings shows *not supported* and gets no write
+- **Local only**, on by default, turns off two Remote Control settings in every managed window, the main one included: the default for new sessions and, where Claude has it, staying reachable. It writes them only while that window is closed, after a dated backup, and turning it off restores the previous values. A running window gets the change once it is closed while Baton runs or when Baton opens it, and its status lists it under *Waiting for a restart*; a Claude version without these settings gets no write, and `baton local-only status` says *not available*
 - Local only reaches windows started outside Baton too, such as the main Claude opened from the Dock: it is applied to every closed window after each sync and as soon as a Claude window quits. A window it can't be applied to is reported once, not after every sync
-- `baton local-only on|off|status` for every window or one of them; the app's window status shows each window's Local only state
+- Local only is switched with `baton local-only on|off [PROFILE|main]`, and `baton local-only status` shows it; the app's window status shows each window's Local only state but has no switch
 - An optional setting stops the agent from moving a session to the cloud (`permissions.deny` in `~/.claude/settings.json`), written only when you turn it on
 
 ### Report a problem and diagnostics

@@ -30,7 +30,7 @@ Baton runs several Claude Desktop accounts on one Mac, each in its own window of
 - **One window per subscription.** Each account has its own window, Dock icon and label, so you always know which subscription you're in.
 - **Your local work follows you.** Local Claude Code sessions show up in every window. **Continue work…** carries a conversation to another window with its transcript, sub-agents, Workflow history, tool outputs and Rewind checkpoints; a Cowork task continues as a new task with its history and files.
 - **Usage in one place.** Each window's five-hour and weekly usage, as Claude Desktop records it, and when a limit resets.
-- **Local and careful.** No network code, no credentials read, a dated backup before a session card or settings file is replaced (except Claude's `config.json`, edited in place), and a window's settings changed only while that window is closed. Remote Control is off in Baton's windows by default, with one switch to undo it.
+- **Local and careful.** No network code, no credentials read, a dated backup before a session card or settings file is replaced (except Claude's `config.json`, edited in place), and a window's settings changed only while that window is closed. **Local only** turns Remote Control off by default in every Claude window, the main one included; `baton local-only off` puts it back.
 
 Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Before you continue, Baton names what will not follow.
 
@@ -176,13 +176,24 @@ Windows signed in to different accounts can show different Claude features. Bato
 
 ## Local only
 
-**Local only** is on by default. In each window Baton manages, the main one included, it turns off two Remote Control settings: the default for new sessions (`ccRemoteControlDefaultEnabled`) and, where Claude has it, staying reachable (`remoteControlStayReachable`). It writes these keys only while that window is closed, after a dated backup, and records the previous values so turning Local only off restores them. A window that is running shows *pending* and gets the change at its next start.
+**Local only** is on by default. In each window Baton manages, the main one included, it turns off two Remote Control settings: the default for new sessions (`ccRemoteControlDefaultEnabled`) and, where Claude has it, staying reachable (`remoteControlStayReachable`). It writes these keys only while that window is closed, after a dated backup, and records the previous values so turning Local only off restores them. It does this after every sync and whenever a Claude window quits while Baton runs, so the main Claude changes too, even if you never open it through Baton. A window that is running gets the change once it is closed while Baton runs, or when Baton next opens it; until then its **Status…** lists *Local only turns on* under *Waiting for a restart*.
 
-It deliberately leaves alone local scheduled tasks, waking the Mac for them, web search in Cowork and your permission mode. It never touches managed preferences set by an organization, sign-in data or any server. If you turn Remote Control back on inside Claude, Local only turns it off again at that window's next start, and the window's badge reads *Remote Control on* until then. To keep Remote Control in one window, turn Local only off for that profile.
+It deliberately leaves alone local scheduled tasks, waking the Mac for them, web search in Cowork and your permission mode. It never touches managed preferences set by an organization, sign-in data or any server. If you turn Remote Control back on inside Claude, Local only turns it off again the same way, and until then that window's **Status…** lists it under *Waiting for a restart*.
+
+Local only is switched from the command line; Baton's window only shows its state, in each window's **Status…**. To keep Remote Control in one window, turn Local only off for it. Close that window first; a running one changes the same way as above:
+
+```sh
+baton local-only off <profile>      # one subscription's window
+baton local-only off main           # the main Claude app
+baton local-only off                # every window without its own choice
+baton local-only status             # what each window has now
+```
+
+`baton local-only on` with the same arguments turns it back on. From the ZIP, link the command first: see [The `baton` command](#the-baton-command).
 
 Optionally, and only after you turn it on, Local only also stops the agent from moving a session to the cloud, with a `permissions.deny` entry in `~/.claude/settings.json`. That file is shared by every window, so this applies to all of them; it cannot hide Claude's own **Move to cloud** button. The **Cloud move lock** menu in Baton's footer shows and changes this switch.
 
-If a Claude Desktop version no longer has one of these settings, the status reads *not supported by this Claude version* and nothing is written.
+If a Claude Desktop version no longer has one of these settings, nothing is written: `baton local-only status` prints *Local only not available in this Claude Desktop version*, and `baton doctor` names the missing setting.
 
 ## Command line
 
@@ -298,7 +309,7 @@ A report too long for a link opens GitHub with a short summary; the full text is
 
 **A session from another window is missing.** Claude reads its sessions when a window starts. Restart that window, or use **Continue work…**, which opens a session in a running window right away. A folder rule may also keep the session out of that account (`baton rules`). **Check sessions** or `baton doctor` lists what each window has.
 
-**Remote Control came back on.** Local only turns it off again at that window's next start. To keep it on in one window, turn Local only off for that profile.
+**Remote Control came back on.** Local only turns it off again once that window is closed while Baton runs, or when Baton next opens it. To keep it on in one window, close it and run `baton local-only off <profile>` (`baton local-only off main` for the main Claude app); see [Local only](#local-only).
 
 **After a Claude Desktop update.** App copies are rebuilt the next time each window opens, or now with `baton refresh`. `doctor` warns when your Claude Desktop version is outside the range Baton was tested with, and Local only reports a setting it can no longer find instead of writing it.
 
@@ -397,7 +408,7 @@ Technically yes: a profile can sign in to any account. Whether you may use a wor
 Other open-source projects also run several Claude Desktop accounts on one Mac. [odahcam/claude-desktop-profiles](https://github.com/odahcam/claude-desktop-profiles) (a Swift app) and [abnegate/claude-multiprofile](https://github.com/abnegate/claude-multiprofile) (a Node command-line tool) give each account its own `--user-data-dir`, as Baton does, and keep each account's conversations to itself. [Disskaette/claude-desktop-profiles-macos](https://github.com/Disskaette/claude-desktop-profiles-macos) switches one Claude Desktop between accounts by swapping its data folder, carries Code sessions across the switch and shows each account's usage. Baton's focus is carrying local work between windows that run at the same time: a session continues in another window with its sub-agents, Workflow history, tool outputs and Rewind checkpoints, folder rules keep work in the accounts it belongs to, and every change is backed up first.
 
 **Why is Remote Control off?**
-Remote Control ties a window's sessions to its Anthropic account, and Baton 1.0 covers local work only. We have not confirmed whether Remote Control plays a part when Claude forks or hides a session another account opened; Local only keeps it out of the picture and keeps work on your Mac. Turn it off for a profile that needs Remote Control.
+Remote Control ties a window's sessions to its Anthropic account, and Baton 1.0 covers local work only. We have not confirmed whether Remote Control plays a part when Claude forks or hides a session another account opened; Local only keeps it out of the picture and keeps work on your Mac. For a window that needs Remote Control, close it and run `baton local-only off <profile>`, or `baton local-only off main` for the main Claude app.
 
 ## Why Baton?
 
