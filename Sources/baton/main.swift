@@ -316,7 +316,7 @@ do {
             let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
             let result = try manager.setLocalOnly(args[1] == "on", window: window)
             for (id, status) in result.sorted(by: { manager.label(of: $0.key) < manager.label(of: $1.key) }) {
-                print("\(manager.label(of: id)): \(describe(status))")
+                print("Claude \(manager.displayLabel(of: id)): \(describe(status))")
             }
         case "status":
             let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
@@ -324,7 +324,7 @@ do {
             if args.contains("--json") {
                 print(try CLIOutput.json(rows.map { ["window": $0.window, "label": $0.label, "status": $0.status.rawValue] }))
             } else {
-                for row in rows { print("\(row.label): \(describe(row.status))") }
+                for row in rows { print("Claude \(manager.displayLabel(of: row.window)): \(describe(row.status))") }
             }
         case "cloud-lock":
             guard args.count >= 3 else { usageError("local-only cloud-lock needs on, off or status") }
@@ -361,7 +361,7 @@ do {
             let policies = manager.managedPolicyWarnings
             print(policies.isEmpty ? "Managed policies: none that concern Baton" : "Managed policies:")
             for policy in policies { print("  \(policy)") }
-            for row in manager.localOnlyStatus() { print("\(row.label): \(describe(row.status))") }
+            for row in manager.localOnlyStatus() { print("Claude \(manager.displayLabel(of: row.window)): \(describe(row.status))") }
             print(describe(manager.cloudMoveLock.status()))
             for change in manager.autoResume.changes() {
                 print(
@@ -374,10 +374,12 @@ do {
                     "Auto-continue to turn off once Claude \(manager.displayLabel(of: pending.window)) is closed: "
                         + "\(pending.entry) (limit reset \(LimitText.time(pending.resetsAt)))")
             }
-            for entry in entries {
-                print("\(entry.label): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
-                for issue in entry.issues { print("  \(issue)") }
-                for folder in entry.missingFolders { print("  Missing: \(folder)") }
+            let findings = CLIOutput.doctorFindings(entries.map { ($0.id, $0.issues + $0.missingFolders.map { "Missing: \($0)" }) })
+            if !findings.shared.isEmpty { print("Every window:") }
+            for line in findings.shared { print("  \(line)") }
+            for (entry, window) in zip(entries, findings.windows) {
+                print("Claude \(manager.displayLabel(of: entry.id)): \(entry.localCode) local Code, \(entry.localCowork) Cowork cards")
+                for line in window.lines { print("  \(line)") }
             }
         }
     case "conversations":
