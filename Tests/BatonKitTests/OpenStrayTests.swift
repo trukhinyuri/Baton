@@ -98,7 +98,10 @@ struct OpenStrayTests {
         let windows = FakeWindows(), kept = FakeStray()
         let manager = try manager(box, windows: windows, stray: kept, work: 2)
         Task.detached {
-            try await Task.sleep(for: .seconds(0.6))
+            // Ended once it was kept, however long the grace time takes while other tests run.
+            for _ in 0..<400 where !kept.logged.contains(where: { $0.hasPrefix("stray 500 kept") }) {
+                try await Task.sleep(for: .milliseconds(25))
+            }
             kept.end()
         }
         try await manager.open("work")

@@ -91,14 +91,15 @@ struct WindowStatusTests {
         // The tail comes from this app's own subsystem in the unified log.
         let marker = "report-tail-\(UUID().uuidString.prefix(8))"
         Log.logger("tests").notice("\(marker, privacy: .public) for jane@example.com")
-        // The log store takes a moment to show a new entry, longer while other tests are logging.
+        // The log store takes a moment to show a new entry, longer while other tests are logging. Other tests log
+        // meanwhile, so the marker is looked for among the last few thousand entries, not only the last 50.
         var tail: [String] = []
         for _ in 0..<20 {
-            tail = LogTail.read(limit: 50, since: 120)
+            tail = LogTail.read(limit: 5000, since: 120)
             if tail.contains(where: { $0.contains(marker) }) { break }
             try await Task.sleep(for: .milliseconds(250))
         }
-        #expect(tail.count <= 50)
         #expect(tail.contains { $0.contains(marker) && $0.contains("[tests]") }, "\(tail.suffix(5))")
+        #expect(LogTail.read(limit: 50, since: 120).count <= 50)
     }
 }
