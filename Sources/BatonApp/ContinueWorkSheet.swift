@@ -33,8 +33,11 @@ struct ContinueWorkSheet: View {
 
     private var filtered: [Conversation] { listing.shown }
 
-    /// Only a listed conversation: one the search has hidden is never what Continue acts on.
-    private var selected: Conversation? { filtered.first { $0.id == form.selection } }
+    /// Only a listed conversation: one the search has hidden is never what Continue acts on. Found by id, since the
+    /// sheet reads it many times per update.
+    private var selected: Conversation? {
+        ConversationIndex.listedConversation(form.selection, in: model.conversations, query: form.search)
+    }
 
     /// The window the selected conversation belongs to or last ran in: never offered for it.
     private var source: String? { selected.flatMap { $0.ownerID ?? $0.runningIn } }
@@ -94,6 +97,8 @@ struct ContinueWorkSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Filtered once per update: with thousands of sessions each pass takes milliseconds.
+            let listing = self.listing
             Text("Continue work").font(.title2.bold())
                 .accessibilityAddTraits(.isHeader)
             Text("Pick a session and the window that runs the next leg. That window opens it for you; nothing is sent on your behalf.")
@@ -103,7 +108,7 @@ struct ContinueWorkSheet: View {
                 .textFieldStyle(.roundedBorder)
 
             List(selection: $form.selection) {
-                ForEach(filtered) { conversation in
+                ForEach(listing.shown) { conversation in
                     ConversationRow(
                         conversation: conversation, owner: conversation.ownerID.map(model.buttonLabel(of:)),
                         isSelected: conversation.id == form.selection
@@ -117,7 +122,7 @@ struct ContinueWorkSheet: View {
             .overlay {
                 if model.isLoadingConversations && model.conversations.isEmpty {
                     ProgressView("Looking for conversations…")
-                } else if filtered.isEmpty {
+                } else if listing.shown.isEmpty {
                     Text(form.search.isEmpty ? "Nothing to hand off yet: there are no local conversations." : "Nothing matches “\(form.search)”.")
                         .foregroundStyle(Color.secondaryText)
                 }

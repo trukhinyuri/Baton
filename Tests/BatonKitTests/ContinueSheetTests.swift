@@ -29,6 +29,27 @@ struct ContinueSheetTests {
         #expect(ConversationIndex.selection("c1", in: ConversationIndex.listed(all, query: "nothing").shown) == nil)
     }
 
+    /// The sheet looks its selection up by id instead of filtering the list each time: it finds exactly what the
+    /// list shows, never one the search or the limit leaves out.
+    @Test func theSelectionIsFoundOnlyWhenListed() {
+        let all = [
+            conversation("c1", "Refactor auth"), conversation("c2", "billing invoices"),
+            conversation("c3", "Export", folder: "/Users/alex/src/Billing"), conversation("c4", "Billing export"),
+        ]
+        for query in ["", " billing ", "BILLING", "auth", "nothing"] {
+            for limit in [0, 2, 10] {
+                for id in [nil, "c1", "c2", "c3", "c4", "gone"] {
+                    let listed = ConversationIndex.listed(all, query: query, limit: limit).shown.first { $0.id == id }
+                    #expect(
+                        ConversationIndex.listedConversation(id, in: all, query: query, limit: limit) == listed,
+                        "\(id ?? "nil") for “\(query)”, limit \(limit)")
+                }
+            }
+        }
+        #expect(ConversationIndex.listedConversation("c3", in: all, query: "", limit: 2) == nil)
+        #expect(ConversationIndex.listedConversation("c3", in: all, query: "billing", limit: 2)?.id == "c3")
+    }
+
     @Test func searchMatchesFolders() {
         let all = [conversation("c1", "Fix it", folder: "/Users/alex/src/billing"), conversation("c2", "Other", folder: "/Users/alex/web")]
         #expect(ConversationIndex.listed(all, query: "BILLING").shown.map(\.id) == ["c1"])
