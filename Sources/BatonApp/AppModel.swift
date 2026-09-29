@@ -30,7 +30,11 @@ final class AppModel: ObservableObject {
     private var noticeTask: Task<Void, Never>?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
+    /// What the footer shows: the start-up warnings, which stay until Baton quits, then the last open's warning.
     @Published private(set) var setupWarning: String? { didSet { remember(setupWarning) } }
+    private var startUpWarning: String? { didSet { showWarnings() } }
+    /// The warning of the window the last open action started (`ProfileManager.openWarning(of:)`).
+    private var openWarning: String? { didSet { showWarnings() } }
     @Published var pendingRemoval: ProfileStatus?
     /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
     @Published private(set) var installWarning: String?
@@ -50,6 +54,10 @@ final class AppModel: ObservableObject {
     private var awaitingSignIn: Set<String> = []
     private var launchObserver: NSObjectProtocol?
     private var quitObserver: NSObjectProtocol?
+    /// One reload runs at a time, so an older snapshot never lands after a newer one; a reload asked for meanwhile
+    /// runs once this one is done.
+    private var isReloading = false
+    private var reloadAgain = false
 
     init() {
         if !isDemo { Self.handOverToRunningCopy() }
@@ -75,7 +83,7 @@ final class AppModel: ObservableObject {
         manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil)
         reload()
         if let unreachable {
-            setupWarning = unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;")
+            startUpWarning = unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;")
             return
         }
         // Documentation screenshots: BATON_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
@@ -109,7 +117,7 @@ final class AppModel: ObservableObject {
         case .failed(let message)?: startUp.append(message)
         default: break  // kept or both exist: the status panel and `baton doctor` say why
         }
-        if !startUp.isEmpty { setupWarning = startUp.joined(separator: " ") }
+        if !startUp.isEmpty { startUpWarning = startUp.joined(separator: " ") }
         cloudMoveLockOn = manager.cloudMoveLock.status() == .on
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.reload() }
@@ -203,7 +211,12 @@ final class AppModel: ObservableObject {
     func restart(_ id: String) {
         guard !isDemo else { return }
         let manager = manager
-        run("Restarting Claude \(displayLabel(of: id))…") { try await manager.restart(id) }
+        run("Restarting Claude \(displayLabel(of: id))…", opening: id) { try await manager.restart(id) }
+    }
+
+    private func showWarnings() {
+        let shown = [startUpWarning, openWarning].compactMap { $0 }.joined(separator: " ")
+        setupWarning = shown.isEmpty ? nil : shown
     }
 
     private func applyLocalOnlyToClosedWindows() {
@@ -291,6 +304,11 @@ final class AppModel: ObservableObject {
 
     func reload() {
         if isDemo { statuses = DemoData.statuses; lastSync = Date().addingTimeInterval(-14); return }
+        guard !isReloading else {
+            reloadAgain = true
+            return
+        }
+        isReloading = true
         let manager = manager
         Task.detached {
             let fresh = manager.statuses()
@@ -305,6 +323,11 @@ final class AppModel: ObservableObject {
                 if self.folderRules != rules { self.folderRules = rules }
                 if self.cloudMoveLockOn != cloudLock { self.cloudMoveLockOn = cloudLock }
                 self.restartAfterFirstSignIn(fresh)
+                self.isReloading = false
+                if self.reloadAgain {
+                    self.reloadAgain = false
+                    self.reload()
+                }
             }
         }
     }
@@ -325,7 +348,7 @@ final class AppModel: ObservableObject {
                 awaitingSignIn.insert(id)
             } else if awaitingSignIn.remove(id) != nil, status.isRunning, status.isSignedIn {
                 let manager = manager
-                run("Loading your sessions into Claude \(status.label)…") {
+                run("Loading your sessions into Claude \(status.label)…", opening: id) {
                     try await Task.sleep(for: .seconds(3))  // let Claude finish saving the new sign-in
                     try await manager.finishFirstSignIn(id)
                 }
@@ -338,7 +361,7 @@ final class AppModel: ObservableObject {
     private func reopenIfStartedWithoutProfile(_ pid: pid_t) {
         guard let profile = manager.profileStartedWithoutDataDir(pid: pid) else { return }
         let manager = manager
-        run("Opening Claude \(profile.label) with its own account…") { try await manager.open(profile.id) }
+        run("Opening Claude \(profile.label) with its own account…", opening: profile.id) { try await manager.open(profile.id) }
     }
 
     func syncNow() {
@@ -364,7 +387,7 @@ final class AppModel: ObservableObject {
     func open(_ status: ProfileStatus) {
         guard !isDemo else { return }
         let manager = manager
-        run(status.isRunning ? nil : "Opening Claude \(status.displayLabel)…") {
+        run(status.isRunning ? nil : "Opening Claude \(status.displayLabel)…", opening: status.id) {
             if let id = status.profile?.id { try await manager.open(id) } else { try await manager.openMain() }
         }
     }
@@ -382,9 +405,10 @@ final class AppModel: ObservableObject {
     func create(email: String, label: String, color: String) {
         guard !isDemo else { return }
         let manager = manager
-        run("Creating Claude \(label)…") {
+        runOpening("Creating Claude \(label)…") {
             let profile = try await Task.detached { try manager.create(label: label, email: email, color: color) }.value
             try await manager.open(profile.id)
+            return profile.id
         }
     }
 
@@ -405,13 +429,23 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([manager.paths.launcher(for: profile)])
     }
 
-    private func run(_ message: String?, _ work: @escaping @Sendable () async throws -> Void) {
+    /// Runs `work` with `message` in the footer. When it opens a window (`opening`), that window's warning replaces the
+    /// last open's; the start-up warnings stay either way.
+    private func run(_ message: String?, opening window: String? = nil, _ work: @escaping @Sendable () async throws -> Void) {
+        runOpening(message) {
+            try await work()
+            return window
+        }
+    }
+
+    /// The same, for work that says which window it opened once it is done.
+    private func runOpening(_ message: String?, _ work: @escaping @Sendable () async throws -> String?) {
         guard !isDemo else { return }  // demo mode changes nothing on this Mac
         busyMessage = message
         Task {
             do {
-                try await work()
-                setupWarning = manager.lastOpenWarning
+                // Never waits: the manager guards warnings with a lock it holds only while reading or writing them.
+                if let window = try await work() { openWarning = manager.openWarning(of: window) }
             } catch { show(error) }
             busyMessage = nil
             reload()
