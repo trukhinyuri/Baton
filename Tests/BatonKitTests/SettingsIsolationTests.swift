@@ -388,4 +388,22 @@ struct SettingsIsolationTests {
         #expect(throws: LocalStorageError.databaseInUse) { try SettingsSync(paths: box.paths).run(into: box.work) }
         #expect(try Data(contentsOf: target) == original)
     }
+
+    /// A crash or a force quit during an extension or setup copy leaves its stage in the profile's data, where Claude
+    /// finds it. The next merge removes such stages; one kept after a failed restore, and anything else, stays.
+    @Test func stagesLeftByACrashAreRemovedByTheNextMerge() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let leftovers = [".baton-extensions-\(UUID().uuidString)", ".baton-setup-\(UUID().uuidString)"]
+        let kept = [".baton-recovery-\(UUID().uuidString)", ".baton-setup-mine", "Own folder"]
+        for name in leftovers + kept {
+            try fm.createDirectory(at: box.work.appending(path: "\(name)/packages"), withIntermediateDirectories: true)
+        }
+
+        try SettingsSync(paths: box.paths).run(into: box.work)
+
+        let names = Set(try fm.contentsOfDirectory(atPath: box.work.path))
+        #expect(names.isDisjoint(with: leftovers))
+        #expect(names.isSuperset(of: kept))
+    }
 }

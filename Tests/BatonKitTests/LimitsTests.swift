@@ -483,12 +483,12 @@ struct AutoResumeTests {
         #expect(autoResume.changes().isEmpty)
     }
 
-    /// A config linked into place from a dotfiles folder is changed where it leads, and the backup holds the content
-    /// from before the change, not another link to the changed file.
+    /// A config linked to a file inside its window's data folder is changed where it leads, and the backup holds the
+    /// content from before the change, not another link to the changed file.
     @Test func aLinkedConfigIsBackedUpAsItsContent() throws {
         let box = try Sandbox()
         let fm = FileManager.default
-        let dotfiles = box.root.appending(path: "dotfiles/claude_desktop_config.json")
+        let dotfiles = box.work.appending(path: "kept/claude_desktop_config.json")
         try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
         let original = Self.config(Self.armed)
         try box.write(original, to: dotfiles)
@@ -504,6 +504,26 @@ struct AutoResumeTests {
         #expect(saved.count == 1)
         #expect(saved.allSatisfy { (try? fm.destinationOfSymbolicLink(atPath: $0.path)) == nil }, "a copy, not a link")
         #expect(saved.first.flatMap(box.read) == original, "the content before the change")
+    }
+
+    /// A closed window's config that links to the open main window's is main's own file: Auto-continue is not turned off
+    /// through it, and the Continue says it couldn't be.
+    @Test func leavesAConfigSharedWithAnOpenWindowAlone() throws {
+        let box = try Sandbox()
+        let original = Self.config(Self.armed)
+        try box.write(original, to: box.desktopConfig(box.main))
+        try FileManager.default.createSymbolicLink(at: box.desktopConfig(box.work), withDestinationURL: box.desktopConfig(box.main))
+        let entry = try #require(AutoResume.entries(in: box.work, account: Self.account)?.first)
+        let mainOpen = AutoResume(paths: box.paths, isRunning: { $0 == "main" })
+
+        #expect(throws: AutoResume.Failure.linkedOutside) { try mainOpen.turnOff(entry, window: "work", account: Self.account) }
+        try mainOpen.addPending(entry, window: "work", account: Self.account, now: entry.resetsAt.addingTimeInterval(-600))
+        #expect(mainOpen.applyPending(now: entry.resetsAt.addingTimeInterval(-600)).isEmpty)
+        #expect(mainOpen.pending().isEmpty, "reported once, not tried after every look")
+
+        #expect(box.read(box.desktopConfig(box.main)) == original)
+        #expect(!box.exists(box.paths.backupsDir))
+        #expect(mainOpen.changes().isEmpty)
     }
 
     @Test func leavesAnOpenWindowsFileAlone() throws {

@@ -77,8 +77,10 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
             && trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } && !isReservedLabel(trimmed)
     }
 
+    /// One `@`, and a domain ending in a top-level domain of two or more letters in any script (`.com`, `.рф`, `.中国`)
+    /// or its `xn--` form, so an address at an internationalized domain can be added too.
     public static func isValidEmail(_ email: String) -> Bool {
-        email.range(of: #"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$"#, options: .regularExpression) != nil
+        email.range(of: #"^[^@\s]+@[^@\s]+\.(\p{L}{2,}|xn--[A-Za-z0-9-]+)$"#, options: .regularExpression) != nil
     }
 }
 

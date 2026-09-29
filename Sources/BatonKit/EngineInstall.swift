@@ -73,7 +73,9 @@ enum EngineInstall {
         try validate(source)
         let parent = destination.deletingLastPathComponent()
         try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-        let staging = parent.appending(path: ".\(destination.deletingPathExtension().lastPathComponent)-install-\(UUID().uuidString).app")
+        let name = destination.deletingPathExtension().lastPathComponent
+        removeLeftoverStaging(of: name, in: parent)
+        let staging = parent.appending(path: ".\(name)-install-\(UUID().uuidString).app")
         var mayRemoveStaging = true
         defer { if mayRemoveStaging { try? fm.removeItem(at: staging) } }
 
@@ -98,9 +100,12 @@ enum EngineInstall {
                 try validate(destination)
             } catch {
                 do { try exchange(staging, destination) } catch let rollbackError {
-                    // Staging now contains the previous working engine. Never delete it on rollback failure.
+                    // Staging now contains the previous working engine. Never delete it on rollback failure, and give
+                    // it a name the next installation's sweep leaves alone.
                     mayRemoveStaging = false
-                    throw InstallError.rollbackFailed(backup: staging, reason: rollbackError.localizedDescription)
+                    let kept = parent.appending(path: ".\(name)-previous-\(UUID().uuidString).app")
+                    let backup = (try? fm.moveItem(at: staging, to: kept)) != nil ? kept : staging
+                    throw InstallError.rollbackFailed(backup: backup, reason: rollbackError.localizedDescription)
                 }
                 throw error
             }
@@ -114,6 +119,18 @@ enum EngineInstall {
                 try? fm.removeItem(at: destination)
                 throw error
             }
+        }
+    }
+
+    /// Removes the staging copies of engine `name` in `parent` that a crash, a force quit or a power loss left behind,
+    /// each as large as Claude when engines are full copies. The caller serializes installations (engines.lock), so none
+    /// of them is in use. A previous engine kept after a failed rollback has another name and stays.
+    static func removeLeftoverStaging(of name: String, in parent: URL) {
+        let prefix = ".\(name)-install-", fm = FileManager.default
+        for item in (try? fm.contentsOfDirectory(atPath: parent.path)) ?? [] where item.hasPrefix(prefix) && item.hasSuffix(".app") {
+            guard UUID(uuidString: String(item.dropFirst(prefix.count).dropLast(".app".count))) != nil else { continue }
+            guard (try? fm.removeItem(at: parent.appending(path: item, directoryHint: .isDirectory))) != nil else { continue }
+            Log.notice("engine", "Removed \(item), an app copy left unfinished when Baton stopped")
         }
     }
 

@@ -286,6 +286,38 @@ struct OpenLockOrderTests {
 
         #expect(windows.started == 1, "only the start from elsewhere")
     }
+
+    /// Claude keeps only the last link a window receives before that window is on screen. Links for a window that is
+    /// still starting go one first and the rest once its window shows, not all at once, or all but the last are lost.
+    @Test func linksForAWindowStillStartingWaitForItsWindow() async throws {
+        let box = try Sandbox()
+        let windows = FakeWindows()
+        let manager = try box.closedWorkWindow(windows)
+        let shown = Flag()
+        manager.windowShown = { _ in shown.value }
+        let handed = Handed()
+        manager.appActivator = { _, links in handed.add(links) }
+        try await manager.open("work")
+        let links = (1...3).map { URL(string: "claude://claude.ai/claude-code-desktop/local_\($0)")! }
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { shown.set(true) }
+        try await manager.open("work", links: links)
+
+        #expect(windows.started == 1)
+        #expect(handed.links == [[links[0]], Array(links.dropFirst())])
+
+        // A window already on screen gets them all at once.
+        try await manager.open("work", links: links)
+        #expect(handed.links.last == links)
+    }
+}
+
+/// The links handed to running windows, one entry per hand-over.
+final class Handed: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [[URL]] = []
+    var links: [[URL]] { lock.withLock { stored } }
+    func add(_ links: [URL]) { lock.withLock { stored.append(links) } }
 }
 
 final class Counter: @unchecked Sendable {

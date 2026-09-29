@@ -36,6 +36,16 @@ struct ProfileTests {
         #expect(!Profile.isValidEmail("a b@c.com"))
     }
 
+    /// An account at an internationalized domain can be added, in its Unicode or its `xn--` form.
+    @Test func acceptsInternationalizedDomains() {
+        for email in ["user@пример.рф", "user@例子.中国", "user@xn--e1afmkfd.xn--p1ai", "user@mail.example.co.uk"] {
+            #expect(Profile.isValidEmail(email), "\(email)")
+        }
+        for email in ["user@example.c", "user@example.12", "user@example.-", "user@@example.com", "user@example"] {
+            #expect(!Profile.isValidEmail(email), "\(email)")
+        }
+    }
+
     @Test func registryRoundTrips() throws {
         let box = try Sandbox()
         let registry = ProfileRegistry(paths: box.paths)
@@ -223,6 +233,87 @@ struct LauncherTests {
         try tool("echo 'warning: a note' >&2\nexit 0\n", at: cli)
         #expect(try run() == 0)
         #expect(!box.exists(said), "no alert when it opened")
+    }
+
+    /// Without `baton`, a launcher brings forward a window already running on its data instead of starting a second
+    /// copy of it there, which Claude doesn't stop. Only a copy on exactly that data folder counts.
+    @Test func aLauncherWithoutBatonNeverStartsAWindowTwice() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appending(path: "cu-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? fm.removeItem(at: root) }
+        // Characters `pgrep` would take for a pattern, and a quote the shell would take for one of its own.
+        let home = root.appending(path: "It's (a) [home]+{1}.$^|?*", directoryHint: .isDirectory)
+        let manager = ProfileManager(paths: Paths(home: home, claudeApp: home.appending(path: "Applications/Claude.app")))
+        let profile = Profile(id: "work", label: "WORK", email: nil, color: "#000000")
+        let engine = manager.paths.engine(for: "work").path, dataDir = manager.paths.dataDir(for: "work").path
+        // `open` is recorded instead of run, so nothing is ever started.
+        let said = root.appending(path: "open.txt"), open = root.appending(path: "open")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '\(said.path)'\n".utf8).write(to: open)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: open.path)
+        let script = manager.launcherScript(for: profile).replacingOccurrences(of: "/usr/bin/open", with: open.path)
+        func click() throws -> [String] {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", script]
+            try process.run()
+            process.waitUntilExit()
+            return (try? String(contentsOf: said, encoding: .utf8))?.split(separator: "\n").map(String.init) ?? []
+        }
+        /// A process whose command line holds `argument`, as a running window's does.
+        func running(_ argument: String) throws -> Process {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", "sleep 10; :", "claude", argument]
+            try process.run()
+            return process
+        }
+        let starts = ["-n", "-a", engine, "--args", "--user-data-dir=" + dataDir]
+
+        #expect(try click() == starts, "closed: started")
+
+        let other = try running("--user-data-dir=\(dataDir)-2")
+        defer { other.terminate() }
+        #expect(try click() == starts, "another profile's window doesn't count")
+
+        let window = try running("--user-data-dir=\(dataDir)")
+        defer { window.terminate() }
+        #expect(try click() == ["-a", engine], "running: brought forward, never started again")
+    }
+
+    /// Run from Downloads or a temporary copy, Baton adds no subscription, since its launcher couldn't reach a `baton`
+    /// that stays. Add says why and what to do, and leaves nothing behind.
+    @Test func noSubscriptionIsAddedWhileBatonRunsFromDownloads() throws {
+        let box = try Sandbox()
+        try box.claudeBundle(at: box.paths.claudeApp)
+        let problem = try #require(AppLocation.problem(app: box.root.appending(path: "Downloads/Baton.app"), home: box.root))
+        let manager = ProfileManager(paths: box.paths, misplaced: problem)
+        manager.appBuilder = { _ in Issue.record("nothing is built") }
+
+        #expect(throws: ProfileError.misplaced(problem)) { try manager.create(label: "LAB", email: nil) }
+
+        #expect(manager.profiles.isEmpty)
+        #expect(!box.exists(box.paths.dataDir(for: "lab")))
+        let said = ProfileError.misplaced(problem).localizedDescription
+        #expect(said.contains("Downloads") && said.contains("move Baton.app to Applications"), "why, and what to do")
+    }
+
+    /// Meanwhile no launcher is written either, so none points at the `baton` in Downloads.
+    @Test func noLauncherIsWrittenWhileBatonRunsFromDownloads() throws {
+        let box = try Sandbox()
+        try box.claudeBundle(at: box.paths.claudeApp, identifier: "test.baton.not-claude")
+        try box.claudeBundle(at: box.paths.engine(for: "work"), identifier: "test.baton.not-claude")
+        let profile = Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")
+        try ProfileRegistry(paths: box.paths).save([profile])
+        let downloads = box.root.appending(path: "Downloads/Baton.app")
+        let manager = ProfileManager(
+            paths: box.paths, cliPath: downloads.appending(path: "Contents/Helpers/baton"),
+            misplaced: AppLocation.problem(app: downloads, home: box.root))
+        manager.launcherRegistrar = { _ in }
+
+        try manager.refresh()
+
+        #expect(!box.exists(box.paths.launcher(for: profile)))
     }
 
     @Test func launchersNeverPointIntoDownloadsOrATranslocatedCopy() {

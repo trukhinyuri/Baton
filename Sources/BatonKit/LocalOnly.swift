@@ -6,7 +6,9 @@ import Foundation
 /// way the switches in Claude's settings do, and only while the window is closed: Claude writes that file back
 /// when it quits. Every write starts with a dated backup and a record of the values it replaces, changes only
 /// those values and leaves every other byte of the file as it was, and is read back afterwards. Turning Local only
-/// off puts the recorded values back where they are still the ones Local only set.
+/// off puts the recorded values back where they are still the ones Local only set. A settings file that links to a file
+/// outside the window's own data folder, such as a dotfiles file or another window's settings, is left as it is
+/// (`Failure.linkedOutside`): another window may use that file while this one is closed.
 ///
 /// Scheduled tasks, waking the Mac for them, managed preferences and Claude Code's transcripts are never touched.
 public struct LocalOnly: Sendable {
@@ -19,6 +21,19 @@ public struct LocalOnly: Sendable {
         case pending
         /// This Claude Desktop doesn't have the Remote Control preference, so nothing is written.
         case notSupported = "not-supported"
+    }
+
+    public enum Failure: LocalizedError, Equatable {
+        /// The window's settings file links to a file outside its data folder, so it was left as it is.
+        case linkedOutside
+
+        public var errorDescription: String? {
+            switch self {
+            case .linkedOutside:
+                "\(LocalOnly.configName) links to a file outside this window's data folder, which another window may use, "
+                    + "so Local only left it as it is"
+            }
+        }
     }
 
     struct Key: Sendable {
@@ -88,7 +103,13 @@ public struct LocalOnly: Sendable {
         return try locked { state in
             state.enabled = enabled
             var result: [String: Status] = [:]
-            for window in windows { result[window] = try reconcile(window, state: &state) }
+            for window in windows {
+                // One window's linked settings file keeps neither the choice nor the other windows from being applied.
+                do { result[window] = try reconcile(window, state: &state) } catch Failure.linkedOutside {
+                    Log.notice("local-only", "Left \(Self.configName) of window \(window) as it is: it links to a file outside its data folder")
+                    result[window] = status(window: window, state: state)
+                }
+            }
             return result
         }
     }
@@ -241,6 +262,8 @@ public struct LocalOnly: Sendable {
         _ patch: JSONPatch, over original: Data?, to url: URL, window: String, recording own: WindowState,
         state: inout State, check: (JSONPatch) throws -> Bool
     ) throws {
+        // Before anything is recorded or backed up: the rule of the settings merge (`SettingsSync.mayWrite`).
+        guard SettingsSync.leadsInside(url, dataDir(window)) else { throw Failure.linkedOutside }
         // The file itself, not a link to it: a link alone would follow later edits instead of keeping this content.
         if original != nil { _ = try Backup(paths: paths, now: Date()).save(Self.writeTarget(url), everyTime: true) }
         // Record the values being replaced before replacing them: a crash after this still knows what to put back.

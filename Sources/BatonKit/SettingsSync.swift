@@ -42,6 +42,7 @@ public struct SettingsSync: Sendable {
         let source = paths.mainDataDir
         let backup = Backup(paths: paths, now: now)
         guard !LocalStorage(dataDir: dataDir).isInUse else { throw LocalStorageError.databaseInUse }
+        removeLeftoverStages(in: dataDir)
         let stateURL = paths.stateDir.appending(path: "Settings/\(dataDir.lastPathComponent).json")
         var base = try Self.readBaseline(stateURL)
         var changed = 0
@@ -187,7 +188,10 @@ public struct SettingsSync: Sendable {
                 : renamex_np(targetRoot.path, stagedRoot.path, UInt32(RENAME_EXCL))
             if restored != 0 {
                 keepRecovery = true
-                throw LocalStorageError.corrupt("Extension setup could not be restored; recovery files remain at \(stage.path)")
+                // Under a name the next run's sweep of unfinished stages leaves alone.
+                let kept = dataDir.appending(path: ".baton-recovery-\(UUID().uuidString)")
+                let recovery = (try? fm.moveItem(at: stage, to: kept)) != nil ? kept : stage
+                throw LocalStorageError.corrupt("Extension setup could not be restored; recovery files remain at \(recovery.path)")
             }
             throw error
         }
@@ -388,6 +392,24 @@ public struct SettingsSync: Sendable {
         return copied
     }
 
+    /// Removes the extension and setup stages a crash or a force quit left in `dataDir`, where Claude would find them.
+    /// The item a stage was for was never replaced from it, or was backed up first; one kept after a failed restore has
+    /// another name and stays. Runs under open.lock, like every merge, so no stage found here is in use.
+    private func removeLeftoverStages(in dataDir: URL) {
+        for name in (try? fm.contentsOfDirectory(atPath: dataDir.path)) ?? [] where Self.isLeftoverStage(name) {
+            guard (try? fm.removeItem(at: dataDir.appending(path: name, directoryHint: .isDirectory))) != nil else { continue }
+            Log.notice("settings", "Removed \(name) from window \(dataDir.lastPathComponent), a copy left unfinished when Baton stopped")
+        }
+    }
+
+    /// `.baton-extensions-<UUID>` and `.baton-setup-<UUID>`, the temporary names the extension and setup merges copy under.
+    static func isLeftoverStage(_ name: String) -> Bool {
+        for prefix in [".baton-extensions-", ".baton-setup-"] where name.hasPrefix(prefix) {
+            return UUID(uuidString: String(name.dropFirst(prefix.count))) != nil
+        }
+        return false
+    }
+
     /// `.<version>-<UUID>`, the temporary name `copyBuilds` copies a build under. `UUID().uuidString` is upper case,
     /// which tells it apart from a name Claude would make.
     static func isPartialBuild(_ name: String) -> Bool {
@@ -468,14 +490,20 @@ public struct SettingsSync: Sendable {
     /// config or another window's, which may be open while this profile's is closed. Such a file is left as it is, and
     /// the log says so.
     static func mayWrite(_ url: URL, in dataDir: URL) -> Bool {
-        let target = LocalOnly.writeTarget(url)
-        let folder = dataDir.resolvingSymlinksInPath().path
-        let resolved = target.deletingLastPathComponent().resolvingSymlinksInPath().appending(path: target.lastPathComponent).path
-        guard resolved.hasPrefix(folder + "/") else {
+        guard leadsInside(url, dataDir) else {
             Log.notice("settings", "Left \(url.lastPathComponent) of window \(dataDir.lastPathComponent) as it is: it links to a file outside its data folder")
             return false
         }
         return true
+    }
+
+    /// Whether a write to `url` lands inside `dataDir`: `url` is a file there, or a link to a file inside that folder.
+    /// Local only and Auto-continue follow the same rule for a window's settings file (`LocalOnly.Failure.linkedOutside`).
+    static func leadsInside(_ url: URL, _ dataDir: URL) -> Bool {
+        let target = LocalOnly.writeTarget(url)
+        let folder = dataDir.resolvingSymlinksInPath().path
+        let resolved = target.deletingLastPathComponent().resolvingSymlinksInPath().appending(path: target.lastPathComponent).path
+        return resolved.hasPrefix(folder + "/")
     }
 
     /// Copies theme, zoom and language into the profile's `config.json`, leaving everything else in it untouched.

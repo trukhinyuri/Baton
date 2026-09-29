@@ -34,7 +34,8 @@ public struct AutoResumeEntry: Equatable, Sendable {
 /// so the session doesn't run in two windows. Only `optedIn` of that one entry changes, the way `LocalOnly` edits the
 /// same file: a dated backup, the old value recorded first, an atomic write, a read-back. The account's own key and
 /// Claude's `autoResumeRateLimitOptIn` choice are never touched. An open window keeps the whole bucket in memory and
-/// writes it back, so it is never edited.
+/// writes it back, so it is never edited; nor is a settings file that links outside that window's data folder, which
+/// another window may use (`Failure.linkedOutside`).
 public struct AutoResume: Sendable {
     public let paths: Paths
     let isRunning: @Sendable (String) -> Bool
@@ -91,11 +92,15 @@ public struct AutoResume: Sendable {
         case windowOpen(String)
         case entryChanged
         case didNotReadBack
+        /// The window's settings file links to a file outside its data folder, as in `LocalOnly.Failure.linkedOutside`.
+        case linkedOutside
 
         public var errorDescription: String? {
             switch self {
             case .windowOpen(let label): "Claude \(label) is open, so its settings file was left as it is"
             case .entryChanged: "Claude changed that entry in the meantime"
+            case .linkedOutside:
+                "the settings file links to a file outside that window's data folder, which another window may use, so it was left as it is"
             case .didNotReadBack: "the settings file didn't read back as written; the earlier file was put back"
             }
         }
@@ -252,6 +257,7 @@ public struct AutoResume: Sendable {
         _ patch: JSONPatch, over original: Data, to url: URL, window: String, value: Any, account: String, entry: String,
         record: () throws -> Void
     ) throws {
+        guard SettingsSync.leadsInside(url, dataDir(window)) else { throw Failure.linkedOutside }
         var expected = try JSONPatch(original).dictionary()
         expected = Self.setting(value, at: ["preferences", "epitaxyPrefs", Self.bucketKey(account), entry, "optedIn"], in: expected)
         // A linked config is written where it leads, so that file's content is what is backed up, not the link.
