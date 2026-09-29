@@ -43,6 +43,10 @@ public enum HandoverLeftover: Codable, Equatable, Sendable {
     case layoutNotCarried(String)
     /// Cowork tasks, which belong to their window.
     case coworkStays(count: Int)
+    /// Sessions that couldn't be brought to the destination (their copy failed, or their card isn't there), by title.
+    case notMoved(titles: [String])
+    /// Copies made in the destination that stay there unused: the source's limit reset first.
+    case copiesStay(count: Int)
 }
 
 /// What handing a window's work over would do, worked out without changing anything.
@@ -171,13 +175,35 @@ public struct HandoverLog: Sendable {
 
     /// Whether the work of `source` at the limit that resets at `resetsAt` was handed over already, or is being.
     public func handled(source: String, resetsAt: Date?, now: Date = Date()) -> Bool {
-        entries().contains { entry in
-            guard entry.source == source else { return false }
-            switch (entry.resetsAt, resetsAt) {
-            case (let a?, let b?): return abs(a.timeIntervalSince(b)) <= Self.sameEpisode
-            case (nil, nil): return now.timeIntervalSince(entry.startedAt) < LimitKind.fiveHour.window
-            default: return false
-            }
+        entries().contains { Self.same($0, source: source, resetsAt: resetsAt, now: now) }
+    }
+
+    static func same(_ entry: Entry, source: String, resetsAt: Date?, now: Date) -> Bool {
+        guard entry.source == source else { return false }
+        switch (entry.resetsAt, resetsAt) {
+        case (let a?, let b?): return abs(a.timeIntervalSince(b)) <= sameEpisode
+        case (nil, nil): return now.timeIntervalSince(entry.startedAt) < LimitKind.fiveHour.window
+        default: return false
+        }
+    }
+
+    /// Writes `entry` unless its episode was handed over already, in one step for the app and the CLI alike.
+    /// - Returns: false when another handover of the episode got there first.
+    func claim(_ entry: Entry, now: Date = Date()) throws -> Bool {
+        try FileLock.withLock(lock, blocking: true) {
+            guard !handled(source: entry.source, resetsAt: entry.resetsAt, now: now) else { return false }
+            try save(entry, now: now)
+            return true
+        } ?? false
+    }
+
+    /// Handovers of `source`, or of every window, not finished yet: waiting for their destination, or done with the
+    /// source left open before its reset, so Baton still has to close it once nothing works there.
+    public func unfinished(source: String? = nil, now: Date = Date()) -> [Entry] {
+        entries().filter { entry in
+            guard source.map({ $0 == entry.source }) ?? true else { return false }
+            if entry.state == "waiting" { return true }
+            return entry.state == "done" && !entry.sourceClosed && (entry.resetsAt.map { $0 > now } ?? false)
         }
     }
 
@@ -187,16 +213,23 @@ public struct HandoverLog: Sendable {
     /// Every handover waiting for its destination.
     public func waiting() -> [Entry] { entries().filter { $0.state == "waiting" } }
 
-    /// Adds `entry`, or replaces the one for the same source started at the same moment.
+    /// Adds `entry`, or replaces the one for the same source started at the same moment. A source once closed stays
+    /// closed in the log, whichever step writes last.
     func save(_ entry: Entry, now: Date = Date()) throws {
-        var state = State()
-        state.entries = entries().filter {
-            !($0.source == entry.source && abs($0.startedAt.timeIntervalSince(entry.startedAt)) < 1) && now.timeIntervalSince($0.startedAt) < Self.keep
+        try FileLock.withLock(lock, blocking: true) {
+            var entry = entry
+            let same = { (other: Entry) in other.source == entry.source && abs(other.startedAt.timeIntervalSince(entry.startedAt)) < 1 }
+            let before = entries()
+            if before.contains(where: { same($0) && $0.sourceClosed }) { entry.sourceClosed = true }
+            var state = State()
+            state.entries = before.filter { !same($0) && now.timeIntervalSince($0.startedAt) < Self.keep }
+            state.entries.append(entry)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder.handovers.encode(state).write(to: file, options: .atomic)
         }
-        state.entries.append(entry)
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder.handovers.encode(state).write(to: file, options: .atomic)
     }
+
+    private var lock: URL { file.deletingLastPathComponent().appending(path: "handovers.lock") }
 }
 
 extension JSONEncoder {
@@ -329,6 +362,12 @@ public enum HandoverText {
             return "their pins and groups couldn't be written (\(trimmed(reason)))"
         case .coworkStays(let count):
             return "\(count) Cowork task\(count == 1 ? "" : "s") \(count == 1 ? "stays" : "stay") in \(source)"
+        case .notMoved(let titles):
+            guard !titles.isEmpty else { return nil }
+            let one = titles.count == 1
+            return "\(titles.count) couldn't be brought to \(destination) and \(one ? "stays" : "stay") in \(source): " + names(titles)
+        case .copiesStay(let count):
+            return count == 1 ? "the copy made in \(destination) stays there" : "the \(count) copies made in \(destination) stay there"
         }
     }
 
@@ -516,23 +555,47 @@ extension ProfileManager {
             source: plan.source, resetsAt: plan.resetsAt, destination: plan.destination,
             startedAt: Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.down)), state: "waiting",
             sessions: plan.sessions.count, seeding: plan.seeding)
-        try log.save(entry, now: now)
+        // One handover per episode, even when the app and the CLI start one at the same moment.
+        guard try log.claim(entry, now: now) else { throw HandoverError.alreadyHandedOver(displayLabel(of: plan.source)) }
 
         // 1. The source: closed when nothing is live there, so every session moves as itself; otherwise its live
-        // sessions continue as copies and its turn-offs wait until it closes.
+        // sessions continue as copies and its turn-offs wait until it closes. A session open in a `claude` Baton
+        // can't place stays live after the source quits, so it continues as a copy too.
         progress("Closing \(displayLabel(of: plan.source))…")
+        let liveBefore = liveSessions(in: plan.source)
         let sourceClosed = activity(of: plan.source).isBusy ? false : await quitWindow(plan.source)
         entry.sourceClosed = sourceClosed
-        let live = sourceClosed ? [] : liveSessions(in: plan.source)
+        let live =
+            sourceClosed
+            ? liveBefore.intersection(liveSessionIDs?() ?? LiveSessions.ids(claudeDir: paths.claudeDir)) : liveSessions(in: plan.source)
         for i in plan.sessions.indices { plan.sessions[i].asCopy = live.contains(plan.sessions[i].transcript) }
-        plan.leftovers.removeAll { if case .copies = $0 { return true } else { return false } }
-        let copies = plan.sessions.filter(\.asCopy).count
-        if copies > 0 { plan.leftovers.append(.copies(count: copies)) }
         if sourceClosed {
             do { _ = try localOnly.reconcile(window: plan.source) } catch {
                 Log.error("handover", "Local only in window \(plan.source): \(error.localizedDescription)")
             }
         }
+
+        // The copies, each with its own card in the destination, without Remote Control's keys. A session whose copy
+        // fails stays in the source, untouched: the original must not continue in two windows.
+        var renamed: [String: String] = [:]
+        var shown: [String: String] = [:]
+        var notCopied: [HandoverSession] = []
+        for session in plan.sessions where session.asCopy {
+            do {
+                let copy = try makeHandoverCopy(session, from: plan.source, into: plan.destination)
+                renamed[session.card] = copy.card
+                shown[session.transcript] = copy.transcript
+            } catch {
+                notCopied.append(session)
+                Log.error("handover", "Couldn't copy a session still open in window \(plan.source): \(error.localizedDescription)")
+            }
+        }
+        let failed = Set(notCopied.map(\.card))
+        plan.sessions.removeAll { failed.contains($0.card) }
+        plan.leftovers.removeAll { if case .copies = $0 { return true } else { return false } }
+        if !renamed.isEmpty { plan.leftovers.append(.copies(count: renamed.count)) }
+        if !notCopied.isEmpty { plan.leftovers.append(.notMoved(titles: notCopied.map(\.title))) }
+
         let handed = Set(plan.sessions.map(\.card))
         for armed in (AutoResume.armedEntries(in: sourceDir, account: sourceAccount, now: now) ?? []) where handed.contains(armed.key) {
             do {
@@ -546,18 +609,6 @@ extension ProfileManager {
             }
         }
 
-        // The copies, each with its own card in the destination, without Remote Control's keys.
-        var renamed: [String: String] = [:]
-        var shown: [String: String] = [:]
-        for session in plan.sessions where session.asCopy {
-            do {
-                let copy = try makeHandoverCopy(session, from: plan.source, into: plan.destination)
-                renamed[session.card] = copy.card
-                shown[session.transcript] = copy.transcript
-            } catch {
-                Log.error("handover", "Couldn't copy a session still open in window \(plan.source): \(error.localizedDescription)")
-            }
-        }
         do { _ = try prepareSessionsForLaunch() } catch {
             Log.error("handover", "Sessions weren't all shared: \(error.localizedDescription)")
         }
@@ -576,6 +627,7 @@ extension ProfileManager {
             slice: slice.map(SidebarLayoutData.init), seed: cut.map { renamed[$0.card] ?? $0.card }, show: show, titles: titles,
             sourceCut: cut.map(\.card), sourceShow: cut.map(\.transcript))
         entry.leftovers = plan.leftovers
+        entry.sessions = plan.sessions.count
         result.plan = plan
         result.sourceClosed = sourceClosed
 
@@ -635,6 +687,20 @@ extension ProfileManager {
         return false
     }
 
+    /// Closes the source of `source`'s latest unfinished handover once nothing works there, if Baton couldn't close
+    /// it at the handover: checks every `poll` seconds until its reset (`closeSourceWhenFree`) and notes it in the log.
+    /// - Returns: whether the source is closed now; `false` also when nothing needed watching.
+    public func watchHandoverSource(_ source: String, poll: Double = 10, now: @escaping @Sendable () -> Date = { Date() }) async throws -> Bool {
+        let log = HandoverLog(paths: paths)
+        guard let entry = log.unfinished(source: source, now: now()).last, !entry.sourceClosed, let reset = entry.resetsAt else { return false }
+        guard try await closeSourceWhenFree(source, until: reset, poll: poll, now: now) else { return false }
+        if var latest = log.entries().last(where: { $0.source == source && $0.startedAt == entry.startedAt }) {
+            latest.sourceClosed = true
+            try log.save(latest)
+        }
+        return true
+    }
+
     // MARK: Steps
 
     /// Opens the closed destination with the layout and the seeded entries written first, shows each session to
@@ -654,6 +720,7 @@ extension ProfileManager {
         progress("Opening \(displayLabel(of: destination))…")
         do {
             try await open(destination, links: []) {
+                prepared.setRan()
                 if let slice = pending.slice?.layout, let scope {
                     do {
                         let report = try SidebarLayout.carry(
@@ -685,9 +752,18 @@ extension ProfileManager {
         for (group, count) in prepared.ungrouped.sorted(by: { $0.key < $1.key }) {
             result.plan.leftovers.append(.ungrouped(count: count, group: group))
         }
-        if let failure = prepared.failure { result.plan.leftovers.append(.layoutNotCarried(failure)) }
+        if let failure = prepared.failure {
+            result.plan.leftovers.append(.layoutNotCarried(failure))
+        } else if !prepared.ran, pending.slice != nil {
+            result.plan.leftovers.append(.layoutNotCarried("\(displayLabel(of: destination)) started by itself first"))
+        }
 
-        let order = showOrder(pending.show, in: destinationDir)
+        // A session without its card in the destination would be imported by its link under a new card: named instead.
+        let cards = cardsBySession(in: destinationDir)
+        let title = { (session: String) in pending.titles[session] ?? session }
+        let missing = pending.show.filter { cards[$0.lowercased()] == nil }
+        if !missing.isEmpty { result.plan.leftovers.append(.notMoved(titles: missing.map(title))) }
+        let order = showOrder(pending.show.filter { cards[$0.lowercased()] != nil }, in: destinationDir)
         var shown = ShowInTurn.Result()
         if !order.isEmpty {
             progress("Resuming \(order.count) session\(order.count == 1 ? "" : "s") in \(displayLabel(of: destination))…")
@@ -700,7 +776,6 @@ extension ProfileManager {
                 shown.failure = error.localizedDescription
             }
         }
-        let title = { (session: String) in pending.titles[session] ?? session }
         if seeding == .seed {
             result.resumed = shown.resumed
             result.notResumed = shown.notResumed
@@ -726,14 +801,17 @@ extension ProfileManager {
         var entry = stored, result = result
         let source = entry.source, sourceDir = dataDir(of: source)
         let pending = entry.pending
-        autoResume.dropPending(window: source, entries: Set(pending?.sourceCut ?? []))
-        for change in autoResume.changes() where change.window == source && change.action == .turnedOff && change.changedAt >= entry.startedAt {
+        let cut = Set(pending?.sourceCut ?? [])
+        autoResume.dropPending(window: source, entries: cut)
+        for change in autoResume.changes()
+        where change.window == source && change.action == .turnedOff && change.changedAt >= entry.startedAt && cut.contains(change.entry) {
             do { try autoResume.undo(change) } catch {
                 Log.error("handover", "Couldn't put back auto-continue in window \(source): \(error.localizedDescription)")
             }
         }
         result.state = .resetFirst
-        result.plan.leftovers = []
+        // The copies already written into the destination stay there; nothing else of the plan happened.
+        result.plan.leftovers = result.plan.leftovers.compactMap { if case .copies(let count) = $0 { .copiesStay(count: count) } else { nil } }
         if entry.sourceClosed, activity(of: source) == .closed, let pending, !pending.sourceCut.isEmpty {
             let account = DesktopData.accountID(in: sourceDir) ?? ""
             let autoResume = autoResume
@@ -814,18 +892,24 @@ extension ProfileManager {
     func showOrder(_ sessions: [String], in dataDir: URL) -> [String] {
         let transcripts = ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)
         let layout = sidebarScope(dataDir).flatMap { SidebarLayout.read(dataDir: dataDir, scope: $0) }
-        var cardOf: [String: String] = [:]
-        for folder in cardFolders(in: dataDir) {
-            for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
-                if let session = AutoResume.cliSessionID(inCard: folder.appending(path: name)) { cardOf[session] = String(name.dropLast(5)) }
-            }
-        }
+        let cardOf = cardsBySession(in: dataDir)
         let items = sessions.map { session in
             ShowInTurn.Item(
                 session: session, lastActivity: transcripts[session].flatMap(ConversationIndex.lastActivity(of:)) ?? .distantPast,
-                pinRank: cardOf[session].flatMap { layout?.pinnedOrder.firstIndex(of: "code:" + $0) })
+                pinRank: cardOf[session.lowercased()].flatMap { layout?.pinnedOrder.firstIndex(of: "code:" + $0) })
         }
         return ShowInTurn.order(items)
+    }
+
+    /// The window's cards (`local_<id>`) by the session each points at.
+    func cardsBySession(in dataDir: URL) -> [String: String] {
+        var cardOf: [String: String] = [:]
+        for folder in cardFolders(in: dataDir) {
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
+                if let session = AutoResume.cliSessionID(inCard: folder.appending(path: name)) { cardOf[session.lowercased()] = String(name.dropLast(5)) }
+            }
+        }
+        return cardOf
     }
 
     /// The `account/organization` scope Claude files the window's sidebar under, when it can be told.
@@ -866,7 +950,11 @@ private final class PrepareOutcome: @unchecked Sendable {
     private let lock = NSLock()
     private var groups: [String: Int] = [:]
     private var reason: String?
+    private var didRun = false
 
+    /// Whether the prepare step ran: a window that started by itself meanwhile skips it.
+    var ran: Bool { lock.withLock { didRun } }
+    func setRan() { lock.withLock { didRun = true } }
     var ungrouped: [String: Int] { lock.withLock { groups } }
     var failure: String? { lock.withLock { reason } }
     func set(ungrouped: [String: Int]) { lock.withLock { groups = ungrouped } }

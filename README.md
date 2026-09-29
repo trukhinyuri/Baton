@@ -242,7 +242,9 @@ baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
                                     the most room: the sessions the limit cut resume there, a
                                     session still open where it was continues as a copy. By
                                     default the open window at its limit, and the best window.
-                                    A busy window restarts once its current work finishes.
+                                    A busy window restarts once its current work finishes, and
+                                    one left open at its limit is closed then. Run it again to
+                                    go on after an interrupt.
                                     Exit 3: the limit resets within 15 minutes
 baton rules [--json]                Show which accounts may continue the work in which folders
 baton rule <folder> --only <email>[,<email>…] | --remove

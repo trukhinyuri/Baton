@@ -489,11 +489,59 @@ struct HandoverRunTests {
         #expect(scene.entry(S.a, in: "work")?.optedIn == true, "left on while WORK is open")
         #expect(scene.manager.autoResume.pending().map(\.entry) == [S.card(S.a)])
 
-        scene.world.stopWork(in: "work")
-        let closed = try await scene.manager.closeSourceWhenFree("work", until: Date().addingTimeInterval(30), poll: 0.1)
+        #expect(HandoverLog(paths: scene.box.paths).unfinished(source: "work").count == 1, "the source still has to be closed")
+        let world = scene.world
+        Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            world.stopWork(in: "work")
+        }
+        let closed = try await scene.manager.watchHandoverSource("work", poll: 0.1)
 
         #expect(closed && scene.world.events.contains("quit work"))
         #expect(scene.entry(S.a, in: "work")?.optedIn == false, "turned off once WORK closed")
+        #expect(HandoverLog(paths: scene.box.paths).entries().last?.sourceClosed == true)
+        #expect(HandoverLog(paths: scene.box.paths).unfinished(source: "work").isEmpty)
+    }
+
+    @Test func failedCopyStaysInTheSourceAndIsNamed() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.armed([S.a])
+        scene.world.start("work")
+        scene.world.work(S.a, in: "work")
+        let plan = try scene.plan()
+        try FileManager.default.removeItem(at: scene.workPair.appending(path: S.card(S.a) + ".json"))
+
+        let result = try await scene.manager.handOver(plan, dwell: 0.3, lastWait: 0.3)
+
+        #expect(result.resumed.isEmpty && !scene.world.links.contains { $0.hasSuffix(S.a) }, "the original, still open in WORK, isn't shown")
+        #expect(result.plan.leftovers.contains(.notMoved(titles: ["Fix CI"])))
+        #expect(!result.plan.leftovers.contains { if case .copies = $0 { true } else { false } })
+        #expect(scene.manager.autoResume.pending().isEmpty, "its auto-continue in WORK stays on")
+        #expect(HandoverLog(paths: scene.box.paths).entries().last?.pending == nil)
+    }
+
+    @Test func sessionOpenOutsideAnyWindowStaysACopyAfterTheSourceQuits() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.armed([S.a])
+        scene.world.start("work")
+        scene.manager.liveSessionIDs = { [S.a] }
+
+        let result = try await scene.manager.handOver(try scene.plan(), dwell: 0.3, lastWait: 0.3)
+
+        #expect(result.sourceClosed && result.plan.leftovers.contains(.copies(count: 1)))
+        #expect(!result.resumed.isEmpty && !result.resumed.contains(S.a), "\(result.resumed)")
+    }
+
+    @Test func secondHandoverOfTheSameEpisodeIsRefused() async throws {
+        let (scene, planned) = try busyScene()
+        _ = try await scene.manager.handOver(planned.plan, dwell: 0.1, lastWait: 0.1)
+
+        await #expect(throws: HandoverError.alreadyHandedOver("WORK")) {
+            _ = try await scene.manager.handOver(planned.plan, dwell: 0.1, lastWait: 0.1)
+        }
+        #expect(HandoverLog(paths: scene.box.paths).entries().count == 1)
     }
 }
 
@@ -545,6 +593,8 @@ struct HandoverTextTests {
             (.cannotResume(titles: ["Fix CI", "Docs", "Tests"]), "PAY can't resume them by itself — they're open there: “Fix CI”, “Docs” and 1 more"),
             (.ungrouped(count: 4, group: "X"), "group “X” is new to PAY, so 4 are ungrouped there"),
             (.layoutNotCarried("the store is in use"), "their pins and groups couldn't be written (the store is in use)"),
+            (.notMoved(titles: ["Fix CI"]), "1 couldn't be brought to PAY and stays in ROBIN: “Fix CI”"),
+            (.copiesStay(count: 2), "the 2 copies made in PAY stay there"),
         ]
         for (leftover, text) in clauses {
             #expect(HandoverText.clause(leftover, source: "ROBIN", destination: "PAY") == text)
@@ -568,6 +618,7 @@ struct HandoverTextTests {
         let leftovers: [HandoverLeftover] = [
             .folderRule(count: 1, folder: "/a", accounts: ["a@example.org"]), .remoteControl(count: 1), .copies(count: 2),
             .notResumed(titles: ["a"]), .cannotResume(titles: ["b"]), .ungrouped(count: 1, group: "g"), .layoutNotCarried("r"), .coworkStays(count: 1),
+            .notMoved(titles: ["c"]), .copiesStay(count: 1),
         ]
         for state in [HandoverResult.State.done, .waiting, .picksUpItself, .resetFirst, .failed] {
             for leftover in leftovers {

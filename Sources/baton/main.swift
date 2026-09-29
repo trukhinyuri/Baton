@@ -515,18 +515,35 @@ do {
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
     case "handover":
         let json = args.contains("--json")
+        let dryRun = args.contains("--dry-run")
         let statuses = manager.statuses()
+        let log = HandoverLog(paths: manager.paths)
+        let labels = { (id: String) in manager.displayLabel(of: id) }
+        let say = { @Sendable (step: String) in if !json { print(step) } }
         let source: String
         if let name = value(of: "--from", in: args) {
             source = destinationID(name)
+        } else if !dryRun, let unfinished = log.unfinished().last {
+            source = unfinished.source
         } else {
             let atLimit = statuses.filter { DestinationRanking.isAtLimit($0) }
             guard let found = atLimit.first(where: \.isRunning) ?? atLimit.first else { fail("No window is at its limit, so there is nothing to hand over.") }
             source = found.id
         }
+        // A handover stopped halfway (Ctrl-C, a crash) goes on where it stopped: its destination restarts once free,
+        // and its source is closed once nothing works there.
+        if !dryRun, let unfinished = log.unfinished(source: source).last {
+            say("Continuing the handover of Claude \(labels(source))'s work to Claude \(labels(unfinished.destination))…")
+            async let closing = manager.watchHandoverSource(source)
+            let finished = try await manager.finishWaitingHandover(source: source, progress: say)
+            let line = finished?.line ?? unfinished.line
+            if json, let finished { print(try CLIOutput.json(HandoverSummary(result: finished, labels: labels))) } else if !json { print(line) }
+            if try await closing { say("Claude \(labels(source)) was closed once nothing worked there.") }
+            if finished?.state == .failed { exit(1) }
+            break
+        }
         let plan = try manager.planHandover(from: source, to: value(of: "--to", in: args).map(destinationID))
-        let labels = { (id: String) in manager.displayLabel(of: id) }
-        if args.contains("--dry-run") {
+        if dryRun {
             if json {
                 print(try CLIOutput.json(HandoverSummary(plan: plan, labels: labels)))
             } else if plan.picksUpItself {
@@ -550,14 +567,18 @@ do {
             if plan.picksUpItself { exit(3) }
             break
         }
-        var result = try await manager.handOver(plan) { step in if !json { print(step) } }
+        var result = try await manager.handOver(plan, progress: say)
+        // The source stayed open because Claude Code works there: it is closed as soon as that work finishes.
+        async let closing = manager.watchHandoverSource(source)
         if result.state == .waiting {
-            if !json { print(result.line) }
-            if let finished = try await manager.finishWaitingHandover(source: source, progress: { step in if !json { print(step) } }) {
-                result = finished
-            }
+            say(result.line)
+            if let finished = try await manager.finishWaitingHandover(source: source, progress: say) { result = finished }
         }
         print(json ? try CLIOutput.json(HandoverSummary(result: result, labels: labels)) : result.line)
+        if !result.sourceClosed, result.state == .done || result.state == .waiting {
+            say("Claude \(labels(source)) is closed as soon as its current work finishes; keep this running until then.")
+        }
+        if try await closing { say("Claude \(labels(source)) was closed once nothing worked there.") }
         if result.state == .picksUpItself { exit(3) }
         if result.state == .failed { exit(1) }
     case "rules":
