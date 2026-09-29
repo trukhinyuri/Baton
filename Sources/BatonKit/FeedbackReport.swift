@@ -12,12 +12,12 @@ public struct FeedbackReport: Sendable {
         public var isSignedIn: Bool
         /// Newest Claude Code Claude Desktop downloaded for this window (`<data>/claude-code/<version>`).
         public var claudeCodeVersion: String?
-        /// Whether cloud features are switched off in this window; `nil` when this build can't tell.
-        public var localOnly: Bool?
+        /// Whether cloud features are switched off in this window, or wait for it to close; `nil` when this build can't tell.
+        public var localOnly: LocalOnly.Status?
 
         public init(
             id: String, label: String, isMain: Bool, isRunning: Bool, isSignedIn: Bool,
-            claudeCodeVersion: String? = nil, localOnly: Bool? = nil
+            claudeCodeVersion: String? = nil, localOnly: LocalOnly.Status? = nil
         ) {
             self.id = id; self.label = label; self.isMain = isMain; self.isRunning = isRunning
             self.isSignedIn = isSignedIn; self.claudeCodeVersion = claudeCodeVersion; self.localOnly = localOnly
@@ -60,7 +60,7 @@ public struct FeedbackReport: Sendable {
         public static func collect(
             paths: Paths, user: String = NSUserName(), errors: [String] = [], log: [String] = [],
             lastSync: SyncReport? = nil, lastSyncDate: Date? = nil,
-            localOnly: [String: Bool] = [:]
+            localOnly: [String: LocalOnly.Status] = [:]
         ) -> Facts {
             let manager = ProfileManager(paths: paths)
             let profiles = manager.profiles
@@ -107,7 +107,7 @@ public struct FeedbackReport: Sendable {
         lines.append("")
         lines.append("### Windows")
         for window in facts.windows {
-            let local = window.localOnly.map { $0 ? "Local only on" : "Local only off" } ?? "Local only unknown"
+            let local = window.localOnly.map(Self.describe) ?? "Local only unknown"
             lines.append(
                 "- \(names[window.id] ?? "?"): \(window.isRunning ? "open" : "closed"), "
                     + "\(window.isSignedIn ? "signed in" : "not signed in"), "
@@ -267,7 +267,7 @@ public struct FeedbackReport: Sendable {
     /// `--save` says where). Returns what to print.
     public static func command(
         _ arguments: [String], paths: Paths, user: String = NSUserName(), errors: [String] = [],
-        log: [String] = [], localOnly: [String: Bool] = [:], downloads: URL,
+        log: [String] = [], localOnly: [String: LocalOnly.Status] = [:], downloads: URL,
         copy: (String) -> Void, open: (URL) -> Void
     ) throws -> String {
         var savePath: String?
@@ -326,6 +326,17 @@ public struct FeedbackReport: Sendable {
             let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         else { return nil }
         return info["CFBundleShortVersionString"] as? String
+    }
+
+    /// A window's Local only state as the report's window list says it. While it waits for the window to close, the
+    /// user's choice is not applied yet, so it is neither on nor off.
+    static func describe(_ localOnly: LocalOnly.Status) -> String {
+        switch localOnly {
+        case .on: "Local only on"
+        case .off: "Local only off"
+        case .pending: "Local only waiting for the window to close"
+        case .notSupported: "Local only not available in this Claude Desktop version"
+        }
     }
 
     /// The highest `major.minor.patch` folder name in `<data>/claude-code`.

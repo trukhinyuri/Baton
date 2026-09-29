@@ -69,6 +69,15 @@ struct ReportSharingTests {
         #expect(opened == [quick.link.url])
     }
 
+    /// A window whose Local only waits for it to close is reported as waiting, not as off.
+    @Test func saysWhenLocalOnlyWaitsForTheWindowToClose() {
+        var facts = facts(logLines: 1)
+        facts.windows[0].localOnly = .pending
+        #expect(FeedbackReport(facts: facts).document(description: "").contains("Local only waiting for the window to close"))
+        facts.windows[0].localOnly = .on
+        #expect(FeedbackReport(facts: facts).document(description: "").contains("Local only on"))
+    }
+
     @Test func descriptionIsMarkedAsNotRedacted() {
         let report = FeedbackReport(facts: facts(logLines: 1))
         let text = report.document(description: "My folder /Users/robin.k/src/app broke")

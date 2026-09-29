@@ -63,6 +63,47 @@ struct ProfileTests {
         #expect(box.read(box.paths.registryFile)?.contains(#""carryPermissionMode""#) == true)
     }
 
+    /// MAIN and CLAUDE name the main window in the app, the CLI and reports, so no subscription may take them.
+    @Test func mainAndClaudeNameOnlyTheMainWindow() throws {
+        #expect(!Profile.isValidLabel("MAIN"))
+        #expect(!Profile.isValidLabel("claude"))
+        #expect(Profile.suggestedLabel(for: "main@company.com", taken: []) == "MAIN2")
+        let box = try Sandbox()
+        try box.claudeBundle(at: box.paths.claudeApp, identifier: "test.baton.not-claude")
+        let manager = ProfileManager(paths: box.paths)
+        manager.appBuilder = { _ in }
+
+        #expect(throws: ProfileError.reservedLabel("MAIN")) { try manager.create(label: "main", email: nil) }
+        #expect(throws: ProfileError.reservedLabel("CLAUDE")) { try manager.create(label: "Claude", email: nil) }
+        #expect(try manager.create(label: "MAIN_", email: nil).id == "main-2", "a label that would get the id main gets another")
+        #expect(ProfileManager.reservedIDWarnings(manager.profiles).isEmpty)
+        // An earlier version let a profile have the id main; start-up says so instead of renaming its folders.
+        let old = Profile(id: "main", label: "MAIN", email: nil, color: "#1971C2")
+        #expect(ProfileManager.reservedIDWarnings(manager.profiles + [old]).map { $0.hasPrefix("Claude MAIN was added by an earlier") } == [true])
+    }
+
+    /// An Add that fails halfway (a full disk, a copy that doesn't verify) leaves nothing, and trying again keeps the id.
+    @Test func failedAddLeavesNothingBehind() throws {
+        let box = try Sandbox()
+        try box.claudeBundle(at: box.paths.claudeApp, identifier: "test.baton.not-claude")
+        let manager = ProfileManager(paths: box.paths)
+        let fails = Flag()
+        fails.set(true)
+        manager.appBuilder = { profile in
+            try FileManager.default.createDirectory(
+                at: box.paths.launcher(for: profile).appending(path: "Contents/MacOS"), withIntermediateDirectories: true)
+            if fails.value { throw CocoaError(.fileWriteOutOfSpace) }
+        }
+
+        #expect(throws: CocoaError.self) { try manager.create(label: "LAB", email: nil) }
+        #expect(!box.exists(box.paths.dataDir(for: "lab")))
+        #expect(!box.exists(box.paths.launcher(for: Profile(id: "lab", label: "LAB", email: nil, color: "#000000"))))
+        #expect(try manager.registry.load().isEmpty)
+
+        fails.set(false)
+        #expect(try manager.create(label: "LAB", email: nil).id == "lab", "not lab-2")
+    }
+
     @Test func unexpectedAccountIsCaseInsensitive() {
         let profile = Profile(id: "w", label: "W", email: "Jane@Acme.com", color: "#000000")
         var status = ProfileStatus(profile: profile, accountID: "id", email: "jane@acme.com", usage: nil, isRunning: false)
@@ -130,6 +171,53 @@ struct LauncherTests {
         let script = manager.launcherScript(for: Profile(id: "work", label: "WORK", email: nil, color: "#000000"))
         #expect(script.contains(#"'/Apps/It'\''s Here/baton' open 'work'"#))
         #expect(script.contains("--user-data-dir="))
+    }
+
+    /// Started from the Dock, nothing shows what `baton` says; a launcher whose `baton open` fails says why in an alert.
+    @Test func aLauncherWhoseBatonFailsSaysWhy() throws {
+        let box = try Sandbox()
+        let bin = box.root.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        func tool(_ text: String, at url: URL) throws {
+            try box.write("#!/bin/sh\n" + text, to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        let said = box.root.appending(path: "alert.txt")
+        let alert = bin.appending(path: "alert")
+        try tool("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '\(said.path)'\n", at: alert)
+        let cli = bin.appending(path: "baton")
+        let manager = ProfileManager(paths: box.paths, cliPath: cli)
+        // The alert is recorded instead of shown, and no app is ever opened.
+        let script = manager.launcherScript(for: Profile(id: "work", label: "WORK", email: nil, color: "#000000"))
+            .replacingOccurrences(of: "/usr/bin/osascript", with: alert.path)
+            .replacingOccurrences(of: "/usr/bin/open", with: "/usr/bin/false")
+        func run() throws -> Int32 {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", script]
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        }
+
+        try tool("echo 'error: Claude WORK is open without its profile' >&2\nexit 1\n", at: cli)
+        #expect(try run() == 1)
+        let lines = box.read(said)?.split(separator: "\n").map(String.init) ?? []
+        #expect(lines.suffix(2) == ["Claude WORK didn't open", "error: Claude WORK is open without its profile"])
+
+        try FileManager.default.removeItem(at: said)
+        try tool("echo 'warning: a note' >&2\nexit 0\n", at: cli)
+        #expect(try run() == 0)
+        #expect(!box.exists(said), "no alert when it opened")
+    }
+
+    @Test func launchersNeverPointIntoDownloadsOrATranslocatedCopy() {
+        let home = URL(fileURLWithPath: "/Users/alex")
+        #expect(AppLocation.problem(app: URL(fileURLWithPath: "/Applications/Baton.app"), home: home) == nil)
+        #expect(AppLocation.problem(app: URL(fileURLWithPath: "/Users/alex/Applications/Baton.app"), home: home) == nil)
+        #expect(AppLocation.problem(app: URL(fileURLWithPath: "/Users/alex/Downloads/Baton.app"), home: home)?.contains("Downloads") == true)
+        let translocated = URL(fileURLWithPath: "/private/var/folders/ab/cd/T/AppTranslocation/0A1B/d/Baton.app")
+        #expect(AppLocation.problem(app: translocated, home: home)?.contains("temporary copy") == true)
     }
 
     @Test func hexColorsParse() {

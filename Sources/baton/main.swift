@@ -150,7 +150,7 @@ func describe(_ status: LocalOnly.Status) -> String {
     switch status {
     case .on: "Local only: Remote Control off for new sessions"
     case .off: "Local only off"
-    case .pending: "Local only applies when this window next starts"
+    case .pending: "Local only applies once this window is closed while Baton runs, or when Baton opens it"
     case .notSupported: "Local only not available in this Claude Desktop version"
     }
 }
@@ -531,7 +531,7 @@ do {
         }
     case "report":
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? manager.paths.home
-        let localOnly = Dictionary(uniqueKeysWithValues: manager.localOnlyStatus().map { ($0.window, $0.status == .on) })
+        let localOnly = Dictionary(manager.localOnlyStatus().map { ($0.window, $0.status) }, uniquingKeysWith: { first, _ in first })
         print(
             try FeedbackReport.command(
                 args, paths: manager.paths, log: LogTail.read(), localOnly: localOnly, downloads: downloads,
