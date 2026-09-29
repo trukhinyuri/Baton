@@ -87,7 +87,8 @@ before `1.0.0`.
 2. Check the release title for the version in `docs/launch/repo-metadata.md` and the workflow's `case`. Update the
    README's [Download](../README.md#download) section for the new version: the ZIP's name in the steps and the
    commands, and, for the first signed release, drop the release-candidate wording and the **Open Anyway** step there,
-   and the note under Homebrew that the command fails until 1.0.
+   and the sentence under Homebrew that the command fails until 1.0. Keep the paragraph after it: people who installed
+   a release candidate from the ZIP still have to move that app to the Trash before `brew install`.
 3. Make sure the screenshots in `docs/images` show the current app: after `make app`, run `scripts/screenshots.sh`,
    which draws them from the sample data ([TESTING.md](TESTING.md#checking-a-build)), and look at each one.
 4. Run the green bar locally: `make test`, `swift build -Xswiftc -warnings-as-errors`,

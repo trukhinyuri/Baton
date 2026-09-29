@@ -63,7 +63,9 @@ Or build it [from source](#from-source) with `make install`: a build you make yo
 
 ### Homebrew
 
-From 1.0: the cask arrives with the signed release, and until then this command fails. Installed the release candidate from the ZIP? Quit Baton and move that `Baton.app` to the Trash first, then run the command: Homebrew won't install over an app it didn't put in `/Applications`. Your profiles and launchers stay.
+From 1.0: the cask arrives with the signed release, and until then this command fails.
+
+Installed the release candidate from the ZIP? Quit Baton and move that `Baton.app` to the Trash first, then run the command: Homebrew won't install over an app it didn't put in `/Applications`. Your profiles and launchers stay.
 
 ```sh
 brew install --cask trukhinyuri/tap/baton
