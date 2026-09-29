@@ -1,0 +1,18 @@
+{
+  "identities": {
+    "22222222-0000-4000-8000-000000000002:0a000000-0000-4000-8000-000000000002": {
+      "folders": {
+        "/work/bots": {
+          "environmentId": "env_atlas",
+          "keys": [
+            "/work/bots"
+          ]
+        }
+      },
+      "pendingDelete": [],
+      "pendingUnarchive": [],
+      "serve": "on"
+    }
+  },
+  "version": 1
+}

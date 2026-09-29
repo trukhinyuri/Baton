@@ -1,0 +1,18 @@
+{
+  "identities": {
+    "33333333-0000-4000-8000-000000000003:0a000000-0000-4000-8000-000000000003": {
+      "folders": {
+        "/work/assistant": {
+          "environmentId": "env_bravo",
+          "keys": [
+            "/work/assistant"
+          ]
+        }
+      },
+      "pendingDelete": [],
+      "pendingUnarchive": [],
+      "serve": "off"
+    }
+  },
+  "version": 1
+}

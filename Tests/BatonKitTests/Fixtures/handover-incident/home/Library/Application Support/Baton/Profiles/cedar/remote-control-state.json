@@ -1,0 +1,18 @@
+{
+  "identities": {
+    "44444444-0000-4000-8000-000000000004:0a000000-0000-4000-8000-000000000004": {
+      "folders": {
+        "/work/bots/shared": {
+          "environmentId": "env_cedar",
+          "keys": [
+            "/work/bots/shared"
+          ]
+        }
+      },
+      "pendingDelete": [],
+      "pendingUnarchive": [],
+      "serve": "on"
+    }
+  },
+  "version": 1
+}

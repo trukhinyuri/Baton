@@ -102,7 +102,13 @@ func value(of flag: String, in args: [String]) -> String? {
 }
 
 let args = CommandAliases.resolve(Array(CommandLine.arguments.dropFirst()))
-let home = FileManager.default.homeDirectoryForCurrentUser
+#if DEBUG
+    // Debug builds only: a sandbox home and stand-in windows for scripts/e2e-handover.sh (`SandboxRun`).
+    let sandbox = SandboxRun(environment: ProcessInfo.processInfo.environment)
+    let home = sandbox?.home ?? FileManager.default.homeDirectoryForCurrentUser
+#else
+    let home = FileManager.default.homeDirectoryForCurrentUser
+#endif
 // Launchers call this path, so it is the real file, not whatever name the shell found it by.
 let cli = RunningExecutable.url() ?? URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
 
@@ -143,16 +149,28 @@ case .manager(let sharedLock):
     if sharedLock, let busy = LegacyMigration.holdShared(home: home) { fail(busy) }
 }
 
-// Run from inside a Baton.app in Downloads or a temporary copy: no profile is added and no launcher points there.
-let manager = ProfileManager(cliPath: cli, misplaced: AppLocation.problem(app: cli, home: home))
+/// Run from inside a Baton.app in Downloads or a temporary copy: no profile is added and no launcher points there.
+func makeManager() -> ProfileManager {
+    #if DEBUG
+        if let sandbox { return sandbox.manager(cliPath: cli) }
+    #endif
+    return ProfileManager(cliPath: cli, misplaced: AppLocation.problem(app: cli, home: home))
+}
+let manager = makeManager()
 // A profile waiting for a Claude started from its Dock icon to finish its work says so once; Ctrl-C stops waiting.
 manager.onStrayWait = { _, line in print(line) }
 
 // Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a missing or unsigned Claude Desktop, a
 // version outside the tested range and managed policies. Informational only: it never blocks the command that follows.
 // A command that only reads leaves Launch Services as it is, so `baton doctor` never changes what it looks into.
-let startUpNotes = manager.startUpChecks(restoringLinks: !CLIDispatch.isReadOnly(args))
-for warning in startUpNotes { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
+func startUpNotes() -> [String] {
+    #if DEBUG
+        // A sandbox run never touches Launch Services or looks for this Mac's Claude.
+        if sandbox != nil { return [] }
+    #endif
+    return manager.startUpChecks(restoringLinks: !CLIDispatch.isReadOnly(args))
+}
+for warning in startUpNotes() { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
 
 func resolve(_ name: String) -> Profile {
     guard let profile = manager.profiles.first(where: { $0.id == name.lowercased() || $0.label.caseInsensitiveCompare(name) == .orderedSame })
