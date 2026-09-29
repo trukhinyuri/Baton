@@ -12,6 +12,7 @@ import Foundation
 /// A copy for another account leaves out what the first account granted or connected (Remote Control bridges,
 /// connectors, browser and computer-use grants, and the permission mode with the session's permission rules unless
 /// the profile keeps it); copies between windows of one account are exact.
+/// A card that isn't one whole JSON object, such as one a crash cut short, is never copied.
 ///
 /// Cards are copied, not symlinked: Claude Desktop creates these directories with `mkdir` and fails on symlinks.
 ///
@@ -118,9 +119,11 @@ public struct SessionSync: Sendable {
                         return (data, Self.facts(of: data))
                     }
                     observed.insert(name)
-                    holders[name, default: []].append(pair)
                     cardScopes[name, default: []].insert(scope)
                     if facts.accountBound { accountBound.insert(name) }
+                    // Not a whole card: it stays where it is, and no copy of it is made or relied on.
+                    guard facts.valid else { continue }
+                    holders[name, default: []].append(pair)
                     if let transcript = facts.transcript {
                         transcriptsByFolder[pair.path, default: [:]][name] = transcript
                         if facts.imported, Self.cardName(for: transcript) == name { importedByFolder[pair.path, default: []].insert(name) }
@@ -258,7 +261,11 @@ public struct SessionSync: Sendable {
                         if isLive(transcript) { report.keptLive += 1; continue }
                     }
                     let behind = here.transcript.map(card.facts.priors.contains) == true
-                    if current >= card.modified.addingTimeInterval(-1), !behind {
+                    let asNew = current >= card.modified.addingTimeInterval(-1) && !behind
+                    // A copy that isn't whole and is newer than every whole one may be one Claude is still writing:
+                    // left alone while its window is open, replaced by the newest whole copy once it is closed.
+                    if !here.valid, asNew, windowOpen { continue }
+                    if asNew, here.valid {
                         // This copy is as new as any; it may still need this window's scratch folder path.
                         data = native ? own : shared(own)
                         modified = current
@@ -491,6 +498,8 @@ public struct SessionSync: Sendable {
     static func isAccountBound(_ data: Data) -> Bool { facts(of: data).accountBound }
 
     struct CardFacts {
+        /// One whole JSON object; a card cut short by a crash or a full disk is not.
+        var valid = false
         var accountBound = false
         /// The Claude Code conversation the card opens (`cliSessionId`).
         var transcript: String?
@@ -507,6 +516,7 @@ public struct SessionSync: Sendable {
         let folders = ["cwd", "originCwd"].compactMap { card[$0] as? String }
             .filter { !$0.isEmpty && !$0.contains(scratchFolder) }
         return CardFacts(
+            valid: true,
             accountBound: isAccountBoundCard(card),
             transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
             imported: card["adoptedFromOtherSurface"] as? Bool == true,

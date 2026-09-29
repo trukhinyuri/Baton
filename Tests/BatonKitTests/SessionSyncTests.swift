@@ -69,12 +69,12 @@ struct SessionSyncTests {
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let b = try box.pair(box.work, account: Sandbox.accountB)
         let old = Date().addingTimeInterval(-3600)
-        try box.write("old", to: a.appending(path: "local_1.json"), modified: old)
-        try box.write("new", to: b.appending(path: "local_1.json"), modified: Date())
+        try box.write(#"{"title":"old"}"#, to: a.appending(path: "local_1.json"), modified: old)
+        try box.write(#"{"title":"new"}"#, to: b.appending(path: "local_1.json"), modified: Date())
 
         let report = try box.sync()
 
-        #expect(box.read(a.appending(path: "local_1.json")) == "new")
+        #expect(box.read(a.appending(path: "local_1.json")) == #"{"title":"new"}"#)
         #expect(report.backedUp == 1)
     }
 

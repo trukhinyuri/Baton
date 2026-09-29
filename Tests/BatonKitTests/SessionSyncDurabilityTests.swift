@@ -37,6 +37,35 @@ private func localStorageCopy() throws -> URL {
 
 @Suite("Durability")
 struct SessionSyncDurabilityTests {
+    /// A card a crash cut short is newer than every whole copy, yet it never replaces them. It stays while its window
+    /// may be writing it, and once every window is closed the newest whole copy replaces it, with a backup.
+    @Test func aCardCutShortIsNeverCopied() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountA)
+        let whole = #"{"sessionId":"local_x","cliSessionId":"11111111-2222-4333-8444-555555555555","title":"T"}"#
+        let cut = #"{"sessionId":"local_x","cliSessionId":"11111111-2222"#
+        try box.write(whole, to: a.appending(path: "local_x.json"), modified: Date().addingTimeInterval(-600))
+        try box.write(cut, to: b.appending(path: "local_x.json"))
+        try box.write(#"["not a card"]"#, to: b.appending(path: "local_y.json"))
+
+        let open = try box.sync()
+
+        #expect(box.read(a.appending(path: "local_x.json")) == whole)
+        #expect(box.read(b.appending(path: "local_x.json")) == cut, "its window may still be writing it")
+        #expect(!box.exists(a.appending(path: "local_y.json")), "a file that isn't a card object is never copied")
+        #expect(open.changes == 0)
+
+        let closed = try box.sync(propagateDeletions: true)
+
+        #expect(closed.cardsWritten == 1)
+        #expect(box.read(b.appending(path: "local_x.json")) == whole)
+        #expect(box.read(a.appending(path: "local_x.json")) == whole)
+        let backups = try FileManager.default.subpathsOfDirectory(atPath: box.paths.backupsDir.path)
+        #expect(backups.contains { $0.hasSuffix("local_x.json") }, "the cut copy is kept in the backups")
+        #expect(try box.sync(propagateDeletions: true).changes == 0)
+    }
+
     @Test func everyOverwriteKept() throws {
         let box = try Sandbox()
         let file = box.main.appending(path: "claude-code-sessions/card.json")
