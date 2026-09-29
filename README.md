@@ -141,7 +141,7 @@ Before you continue, the sheet lists what will not follow into that account: rem
 
 Claude imports every continued session itself, with its usual folder trust and permission checks. A session takes its model from its history; when that differs from the destination's model, the sheet asks you to choose before your first message.
 
-**Folder rules** keep work where it belongs. `baton rule ~/Work/client --only me@example.com` lets the work in that folder, and inside it, continue only in that account; continuing it anywhere else, including a new session there, is refused. The closest folder's rule applies. Session sharing honors the same rules: a session in that folder does not appear in other accounts' windows. A rules file that cannot be read stops continuing and sharing until it is fixed.
+**Folder rules** keep work where it belongs. `baton rule ~/Work/client --only me@example.com` lets the work in that folder, and inside it, continue only in that account; continuing it anywhere else, including a new session there, is refused. The closest folder's rule applies. Work reached through a link in one ruled folder that leads into another takes both folders' rules, so it continues only in an account both allow. Session sharing honors the same rules: a session in that folder does not appear in other accounts' windows. A rules file that cannot be read stops continuing and sharing until it is fixed.
 
 Continuing needs no macOS permissions: the destination window receives a `claude://` link that only that window handles.
 

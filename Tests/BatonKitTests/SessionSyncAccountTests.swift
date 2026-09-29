@@ -210,6 +210,36 @@ struct SessionSyncAccountTests {
         #expect(try box.sync().changes == 0)
     }
 
+    /// A list an earlier build saved after matching whole values only is looked for again, entry by entry: the grants it
+    /// missed because either account added its own go now, and what it already named stays on it.
+    @Test func aListFromWholeValueMatchingIsLookedForAgain() throws {
+        let terminal = #"{"bundleId":"com.apple.Terminal","displayName":"Terminal","grantedAt":1790000000000,"tier":"full"}"#
+        let notes = #"{"bundleId":"com.apple.Notes","displayName":"Notes","grantedAt":1790000500000,"tier":"full"}"#
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cuAllowedApps":[\#(terminal)],"title":"T"}"#,
+            to: a.appending(path: "local_1.json"), modified: Date().addingTimeInterval(-3_600))
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cuAllowedApps":[\#(terminal), \#(notes)],"title":"T2"}"#,
+            to: b.appending(path: "local_1.json"))
+        // The two lists differ as whole values, so that build found nothing for local_1.
+        let list = box.paths.stateDir.appending(path: "cross-account-grants.json")
+        try box.write(#"{"cards":{"local_9":["cuGrantFlags 00"]},"version":1}"#, to: list)
+
+        let report = try box.sync()
+
+        #expect(report.grantsRemoved == 2)
+        #expect(
+            box.read(b.appending(path: "local_1.json"))
+                == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cuAllowedApps":[\#(notes)],"title":"T2"}"#)
+        #expect(box.read(a.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T2"}"#)
+        let saved = try #require(box.read(list))
+        #expect(saved.contains(#""version":2"#) && saved.contains("local_1") && saved.contains("local_9"))
+        #expect(try box.sync().changes == 0, "looked for once")
+    }
+
     @Test func listElementsKeepTheirBytes() {
         func elements(_ json: String) -> [String]? { JSONMembers.elements(Array(json.utf8)[...])?.map { String(decoding: $0, as: UTF8.self) } }
         #expect(elements(#" [ {"a":"x,]\"y"} , [1,[2]],"s" ,null ] "#) == [#"{"a":"x,]\"y"}"#, "[1,[2]]", #""s""#, "null"])
@@ -260,7 +290,7 @@ struct SessionSyncAccountTests {
 
         #expect(report.grantsRemoved == 0)
         #expect(box.read(a.appending(path: "local_1.json")) == card)
-        #expect(box.read(box.paths.stateDir.appending(path: "cross-account-grants.json")) == #"{"cards":{},"version":1}"#)
+        #expect(box.read(box.paths.stateDir.appending(path: "cross-account-grants.json")) == #"{"cards":{},"version":2}"#)
     }
 
     @Test func goldenSanitizedRealCard() throws {

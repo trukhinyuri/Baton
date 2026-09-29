@@ -228,11 +228,13 @@ public struct SessionSync: Sendable {
         }
         // Grants and rules that copies by older releases carried into other accounts. Looked for once, in the first
         // run of a release that keeps them apart, entry by entry (`grantItems`), so what one account added since
-        // doesn't hide what the other gave; each is then taken out of every copy of its card.
+        // doesn't hide what the other gave; each is then taken out of every copy of its card. A list from a build that
+        // matched whole values only is looked for again, entry by entry, keeping what it already names.
         let leakedFile = paths.stateDir.appending(path: "cross-account-grants.json")
         var savedLeaks = LeakedGrants.load(from: leakedFile)
         var leaks = savedLeaks ?? LeakedGrants()
-        if savedLeaks == nil {
+        if savedLeaks?.version != LeakedGrants.current {
+            leaks.version = LeakedGrants.current
             for (name, folders) in holders where !accountBound.contains(name) {
                 var accounts: [String: Set<String>] = [:]  // grant item → accounts whose copy has it
                 for pair in folders {
@@ -242,7 +244,7 @@ public struct SessionSync: Sendable {
                     }
                 }
                 let shared = accounts.filter { $0.value.count > 1 }.keys
-                if !shared.isEmpty { leaks.cards[name] = shared.sorted() }
+                if !shared.isEmpty { leaks.cards[name] = Set(leaks.cards[name] ?? []).union(shared).sorted() }
             }
             // Saved before any copy loses a grant: a run that stopped partway would look again and no longer find a
             // grant it already took out of one of the two accounts.
@@ -523,12 +525,17 @@ public struct SessionSync: Sendable {
     /// Grants and session rules found in copies of one card in two accounts, which older releases copied between
     /// accounts: `cross-account-grants.json` in the state folder. Card name → its grant items (`grantItems`).
     /// Its absence means it was never looked for; a damaged file is looked for again, which only takes more out.
+    /// Version 1 lists were found by whole values, so a grant either account added to since was missed; version 2
+    /// looks entry by entry.
     struct LeakedGrants: Codable, Equatable {
-        var version = 1
+        static let current = 2
+        var version = current
         var cards: [String: [String]] = [:]
 
+        /// A list of this version or of version 1, which the next run looks for again; `nil` if there is none.
         static func load(from url: URL) -> LeakedGrants? {
-            guard let data = try? Data(contentsOf: url), let state = try? JSONDecoder().decode(LeakedGrants.self, from: data), state.version == 1
+            guard let data = try? Data(contentsOf: url), let state = try? JSONDecoder().decode(LeakedGrants.self, from: data),
+                (1...current).contains(state.version)
             else { return nil }
             return state
         }

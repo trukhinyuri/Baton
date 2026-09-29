@@ -88,13 +88,15 @@ public struct SettingsSync: Sendable {
             // Scheduled tasks keep their own switches; only MAIN registers a wake helper.
             for key in Self.mainOnlyPreferences { prefs[key] = false }
             if !prefs.isEmpty || current["preferences"] != nil { result["preferences"] = prefs }
-            if !NSDictionary(dictionary: result).isEqual(to: current) {
+            if NSDictionary(dictionary: result).isEqual(to: current) {
+                base = attempt
+            } else if Self.mayWrite(desktop, in: dataDir) {
                 // A linked config is written where it leads, so that file's content is what is backed up.
                 if fm.fileExists(atPath: desktop.path) { _ = try backup.save(LocalOnly.writeTarget(desktop)) }
                 try Self.writeJSON(result, to: desktop)
                 changed += 1
+                base = attempt
             }
-            base = attempt
             try InterfaceSync.writeState(base, to: stateURL)
         }
         // Tool toggles are permissions owned by each account. Never copy another account's grants or
@@ -461,6 +463,21 @@ public struct SettingsSync: Sendable {
         try LocalOnly.replace(url, with: JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]))
     }
 
+    /// Whether the merge may write `url`, a settings file in the profile's data folder `dataDir`: yes when it is a file
+    /// there or a link to a file inside that folder, and no when it links anywhere else, such as to the main app's
+    /// config or another window's, which may be open while this profile's is closed. Such a file is left as it is, and
+    /// the log says so.
+    static func mayWrite(_ url: URL, in dataDir: URL) -> Bool {
+        let target = LocalOnly.writeTarget(url)
+        let folder = dataDir.resolvingSymlinksInPath().path
+        let resolved = target.deletingLastPathComponent().resolvingSymlinksInPath().appending(path: target.lastPathComponent).path
+        guard resolved.hasPrefix(folder + "/") else {
+            Log.notice("settings", "Left \(url.lastPathComponent) of window \(dataDir.lastPathComponent) as it is: it links to a file outside its data folder")
+            return false
+        }
+        return true
+    }
+
     /// Copies theme, zoom and language into the profile's `config.json`, leaving everything else in it untouched.
     /// That file also holds the profile's sign-in, so it is edited in place and never backed up or copied.
     private func copyAppearance(into dataDir: URL, base: inout [String: String]) throws -> Bool {
@@ -474,6 +491,7 @@ public struct SettingsSync: Sendable {
             Self.share(key, main: main, own: own, into: &config, base: &attempt, prefix: "appearance:")
         }
         guard !NSDictionary(dictionary: own).isEqual(to: config) else { base = attempt; return false }
+        guard Self.mayWrite(to, in: dataDir) else { return false }
         try Self.writeJSON(config, to: to)
         base = attempt
         return true

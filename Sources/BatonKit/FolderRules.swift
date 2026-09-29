@@ -79,14 +79,17 @@ public struct FolderRules: Sendable {
         return rule.accounts.isEmpty ? nil : rule
     }
 
-    /// The rule of the closest folder that is `path` or contains it. The folder `path` resolves to decides, and the
-    /// path as given only when no rule covers that one: work reached through a link from one ruled folder into another
-    /// keeps the rule of the folder it is in, not the rule of the folder the link sits in.
-    public static func rule(for path: String, in rules: [FolderRule]) -> FolderRule? {
+    /// The rules that apply to `path`: the rule of the closest folder that is `path` or contains it, both for the folder
+    /// `path` resolves to and for the path as given. Where a link leads from one ruled folder into another the two
+    /// differ, and both apply, so the stricter one wins whichever way the link goes.
+    public static func rules(for path: String, in rules: [FolderRule]) -> [FolderRule] {
+        var found: [FolderRule] = []
         for form in FolderRule.forms(of: path) {
-            if let closest = rules.filter({ $0.contains(form) }).max(by: { $0.folder.count < $1.folder.count }) { return closest }
+            if let closest = rules.filter({ $0.contains(form) }).max(by: { $0.folder.count < $1.folder.count }), !found.contains(closest) {
+                found.append(closest)
+            }
         }
-        return nil
+        return found
     }
 
     /// The accounts that may continue work touching all of `folders`: `nil` when no rule covers any of them, and
@@ -94,7 +97,7 @@ public struct FolderRules: Sendable {
     public static func allowedAccounts(for folders: [String], in rules: [FolderRule]) -> (accounts: Set<String>, rules: [FolderRule])? {
         var applied: [FolderRule] = []
         for folder in folders {
-            if let rule = rule(for: folder, in: rules), !applied.contains(rule) { applied.append(rule) }
+            for rule in Self.rules(for: folder, in: rules) where !applied.contains(rule) { applied.append(rule) }
         }
         guard let first = applied.first else { return nil }
         let accounts = applied.dropFirst().reduce(Set(first.accounts)) { $0.intersection($1.accounts) }

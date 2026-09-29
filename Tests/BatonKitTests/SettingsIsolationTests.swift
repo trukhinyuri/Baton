@@ -169,32 +169,59 @@ struct SettingsIsolationTests {
         #expect(box.read(external.appending(path: "extension.json")) == "external")
     }
 
-    /// A profile's config linked into place from a dotfiles folder stays a link: the file it leads to gets the shared
-    /// settings and keeps its own permissions, and the backup holds its content from before, not another link.
+    /// A profile's config linked to a file inside the profile's own data folder stays a link: the file it leads to gets
+    /// the shared settings and keeps its own permissions, and the backup holds its content from before, not another link.
     @Test func aLinkedProfileConfigStaysALink() throws {
         let box = try Sandbox()
         let fm = FileManager.default
-        let dotfiles = box.root.appending(path: "dotfiles/claude_desktop_config.json")
-        try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let own = box.work.appending(path: "Kept/claude_desktop_config.json")
+        try fm.createDirectory(at: own.deletingLastPathComponent(), withIntermediateDirectories: true)
         let original = #"{"futureTopLevel":"own"}"#
-        try box.write(original, to: dotfiles)
-        try fm.setAttributes([.posixPermissions: 0o640], ofItemAtPath: dotfiles.path)
+        try box.write(original, to: own)
+        try fm.setAttributes([.posixPermissions: 0o640], ofItemAtPath: own.path)
         let config = box.work.appending(path: "claude_desktop_config.json")
-        try fm.createSymbolicLink(at: config, withDestinationURL: dotfiles)
+        try fm.createSymbolicLink(at: config, withDestinationURL: own)
         try write(box, box.main, ["preferences": ["dockBounceEnabled": true]])
 
         #expect(try SettingsSync(paths: box.paths).run(into: box.work) == 1)
 
-        #expect(try fm.destinationOfSymbolicLink(atPath: config.path) == dotfiles.path, "still a link")
-        let written = try #require(SettingsSync.readJSON(dotfiles))
+        #expect(try fm.destinationOfSymbolicLink(atPath: config.path) == own.path, "still a link")
+        let written = try #require(SettingsSync.readJSON(own))
         #expect((written["preferences"] as? [String: Any])?["dockBounceEnabled"] as? Bool == true, "the linked file got the change")
         #expect(written["futureTopLevel"] as? String == "own")
-        #expect(try fm.attributesOfItem(atPath: dotfiles.path)[.posixPermissions] as? Int == 0o640, "its own permissions, not the link's")
+        #expect(try fm.attributesOfItem(atPath: own.path)[.posixPermissions] as? Int == 0o640, "its own permissions, not the link's")
         let backups = try #require(fm.enumerator(at: box.paths.backupsDir, includingPropertiesForKeys: nil)?.allObjects as? [URL])
-        let saved = backups.filter { $0.lastPathComponent == dotfiles.lastPathComponent }
+        let saved = backups.filter { $0.lastPathComponent == own.lastPathComponent }
         #expect(saved.count == 1)
         #expect(saved.allSatisfy { (try? fm.destinationOfSymbolicLink(atPath: $0.path)) == nil }, "a copy, not a link")
         #expect(saved.first.flatMap(box.read) == original, "the content before the change")
+    }
+
+    /// A profile's config that links outside the profile's data folder, to the main app's config or a dotfiles folder,
+    /// is left as it is: the main app may be open while the profile is closed, and would lose its wake helper.
+    @Test func aProfileConfigLinkedOutsideItsFolderIsLeftAlone() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let mainConfig = box.main.appending(path: "claude_desktop_config.json")
+        let mainText = #"{"preferences":{"dockBounceEnabled":true,"wakeSchedulerEnabled":true}}"#
+        try box.write(mainText, to: mainConfig)
+        let desktop = box.work.appending(path: "claude_desktop_config.json")
+        try fm.createSymbolicLink(at: desktop, withDestinationURL: mainConfig)
+        let dotfiles = box.root.appending(path: "dotfiles/config.json")
+        try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let dotfilesText = #"{"userThemeMode":"dark"}"#
+        try box.write(dotfilesText, to: dotfiles)
+        let config = box.work.appending(path: "config.json")
+        try fm.createSymbolicLink(at: config, withDestinationURL: dotfiles)
+        try box.write(#"{"userThemeMode":"light"}"#, to: box.main.appending(path: "config.json"))
+
+        #expect(try SettingsSync(paths: box.paths).run(into: box.work) == 0)
+
+        #expect(box.read(mainConfig) == mainText, "the main app's config is untouched")
+        #expect(box.read(dotfiles) == dotfilesText)
+        #expect(try fm.destinationOfSymbolicLink(atPath: desktop.path) == mainConfig.path)
+        #expect(try fm.destinationOfSymbolicLink(atPath: config.path) == dotfiles.path)
+        #expect(!fm.fileExists(atPath: box.paths.backupsDir.path), "nothing to back up")
     }
 
     @Test func sshDefinitionsMergeByIDWhileTrustAndProfileChangesStayLocal() throws {

@@ -105,7 +105,7 @@ struct OtherMacsTests {
             paths: box.paths,
             registerReporting: { app, on in
                 recorder.calls.append((app.lastPathComponent, on)); return 0
-            })
+            }, isSignedByAnthropic: { _ in true })
 
         // No sign-in on record: the main app is registered again, every start.
         #expect(try routing.restoreMainIfIdle(allProfileIDs: ["work"]))
@@ -136,7 +136,7 @@ struct OtherMacsTests {
             registerReporting: { app, on in
                 recorder.calls.append((app.lastPathComponent, on))
                 return recorder.failing.contains(app.lastPathComponent) ? 17 : 0
-            })
+            }, isSignedByAnthropic: { _ in true })
 
         #expect {
             try routing.restoreMainIfIdle(allProfileIDs: [])
