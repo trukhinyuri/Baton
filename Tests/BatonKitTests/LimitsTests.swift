@@ -573,6 +573,68 @@ struct AutoResumeTests {
         #expect(box.read(box.desktopConfig(box.work)) == original)
     }
 
+    /// Off in the settings, on in Local Storage, or only in Local Storage: Claude still continues it there, so a
+    /// hand-over finds it and turns it off.
+    @Test func handingOverTurnsOffAnEntryOnOnlyInLocalStorage() throws {
+        let box = try InterfaceSyncTests().sandbox()
+        let manager = ProfileManager(paths: box.paths)
+        try manager.registry.save([Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")])
+        try box.write(#"{"lastKnownAccountUuid":"\#(Self.account)"}"#, to: box.work.appending(path: "config.json"))
+        let cards = try box.pair(box.work, account: Self.account, org: org)
+        let onlyInMirror = "99999999-2222-3333-4444-555555555555"
+        try box.write(#"{"sessionId":"local_1","cliSessionId":"\#(session)"}"#, to: cards.appending(path: "local_1.json"))
+        try box.write(#"{"sessionId":"local_2","cliSessionId":"\#(onlyInMirror)"}"#, to: cards.appending(path: "local_2.json"))
+        let now = Date(timeIntervalSince1970: 1_790_640_000)
+        let original = Self.config(#"{"local_1": {"resetsAt": 1790640600, "attempt": 0, "optedIn": false}}"#)
+        try box.write(original, to: box.desktopConfig(box.work))
+        try putMirror(
+            box.work,
+            Self.mirrorText(#"{"local_1":{"resetsAt":1790640600,"attempt":0,"optedIn":true},"local_2":{"resetsAt":1790640600,"attempt":0,"optedIn":true}}"#))
+        let conversations = [session, onlyInMirror].map {
+            Conversation(kind: .code, sessionID: $0, title: "t", folders: [], lastActivity: now, transcript: box.root)
+        }
+
+        #expect(manager.autoResumeMatches(for: [session, onlyInMirror], excluding: "main", now: now).count == 2, "armed in either copy counts")
+        var plans = conversations.map { ContinuePlan(conversation: $0, destination: "main", forks: false, model: nil) }
+        manager.settleAutoResume(&plans, now: now)
+        #expect(plans.map(\.autoResume) == [[.turnedOff(label: "WORK")], [.turnedOff(label: "WORK")]])
+        #expect(try AutoResume.entries(inMirror: #require(try mirror(box.work)))?.map(\.optedIn) == [false, false])
+        #expect(box.read(box.desktopConfig(box.work)) == original, "the settings had it off already")
+        #expect(manager.autoResumeMatches(for: [session, onlyInMirror], excluding: "main", now: now).isEmpty)
+
+        // The same through a pending turn-off, recorded while the window was open.
+        try putMirror(box.work, Self.mirrorText(#"{"local_2":{"resetsAt":1790640600,"attempt":0,"optedIn":true}}"#))
+        let autoResume = AutoResume(paths: box.paths, isRunning: { _ in false })
+        try autoResume.addPending(AutoResumeEntry(key: "local_2", resetsAt: Date(timeIntervalSince1970: 1_790_640_600)), window: "work", account: Self.account)
+        #expect(autoResume.applyPending(now: now) == ["work"])
+        #expect(try AutoResume.entries(inMirror: #require(try mirror(box.work)))?.map(\.optedIn) == [false])
+    }
+
+    /// A session the user unticked for its current limit isn't seeded; one Baton turned off itself is.
+    @Test func seedSkipsSessionTheUserUnticked() throws {
+        let box = try InterfaceSyncTests().sandbox()
+        let now = Date(timeIntervalSince1970: 1_790_700_000)
+        let recent = Int(now.timeIntervalSince1970) - 600
+        try box.write(Self.config(#"{"local_1": {"resetsAt": \#(recent), "attempt": 0, "optedIn": false}}"#), to: box.desktopConfig(box.work))
+        try box.write(
+            Self.config(
+                #"{"local_2": {"resetsAt": \#(recent), "attempt": 0, "optedIn": true}, "local_3": {"resetsAt": 1790000000, "attempt": 0, "optedIn": false}}"#),
+            to: box.desktopConfig(box.main))
+        try putMirror(box.main, Self.mirrorText(#"{"local_4":{"resetsAt":\#(recent),"attempt":0,"optedIn":false}}"#))
+        let autoResume = AutoResume(paths: box.paths, isRunning: { _ in false })
+        #expect(
+            try autoResume.turnOff(
+                AutoResumeEntry(key: "local_2", resetsAt: Date(timeIntervalSince1970: TimeInterval(recent))), window: "main", account: Self.account))
+
+        let seeded = try autoResume.seed(
+            ["local_1", "local_2", "local_3", "local_4"].map { AutoResumeEntry(key: $0, resetsAt: now) }, window: "work", account: Self.account,
+            source: ("main", Self.account), now: now)
+
+        #expect(seeded == 2)
+        #expect(
+            AutoResume.entries(in: box.work, account: Self.account)?.map { "\($0.key) \($0.optedIn)" } == ["local_1 false", "local_2 true", "local_3 true"])
+    }
+
     @Test func seedWritesPastResetEntryToPrefsAndLocalStorage() throws {
         let box = try InterfaceSyncTests().sandbox()
         try box.write(#"{"preferences": {"zoom": 1.0}}"#, to: box.desktopConfig(box.work))
