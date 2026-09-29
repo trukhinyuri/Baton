@@ -73,12 +73,20 @@ struct OpenLockOrderTests {
 
         let group = DispatchGroup()
         let syncDone = DispatchSemaphore(value: 0)
+        let synced = Flag()
         let syncLock = box.paths.stateDir.appending(path: "sync.lock")
         manager.whilePreparing = { _ in
             // The sync starts while this window is being prepared and takes sync.lock first.
             group.enter()
             Thread.detachNewThread {
-                _ = try? manager.syncSessions()
+                // The look below takes sync.lock for a moment too; a sync that finds it taken then tries again, so the
+                // test never passes on a sync that was skipped.
+                let deadline = Date().addingTimeInterval(5)
+                var report: SyncReport?
+                repeat {
+                    do { report = try manager.syncSessions() } catch { break }
+                } while report == nil && Date() < deadline
+                synced.set(report != nil)
                 syncDone.signal()
                 group.leave()
             }
@@ -97,6 +105,7 @@ struct OpenLockOrderTests {
         }
 
         #expect(await finished(group, within: 20), "opening and the sync wait for each other for good")
+        #expect(synced.value, "the sync ran while the window was prepared")
         #expect(windows.started == 1)
         let card = box.work.appending(path: "claude-code-sessions/\(Sandbox.accountB)/org-1/local_1.json")
         #expect(!box.exists(card), "the folder rule still keeps the card out of the other account")
