@@ -904,7 +904,7 @@ public final class ProfileManager: @unchecked Sendable {
     func checkRules(folders: [String], destination: String) throws {
         guard let allowed = try allowedAccounts(for: folders) else { return }
         let dataDir = dataDir(of: destination)
-        let email = DesktopData.accountID(in: dataDir).flatMap { email(in: dataDir, accountID: $0) }
+        let email = DesktopData.accountID(in: dataDir).flatMap { self.email(in: dataDir, accountID: $0) }
         guard let email, allowed.accounts.contains(email.lowercased()) else {
             throw ProfileError.notAllowed(
                 folders: allowed.rules.map(\.folder), accounts: allowed.accounts.sorted(),
