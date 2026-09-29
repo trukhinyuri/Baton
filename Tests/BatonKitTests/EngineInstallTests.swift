@@ -228,4 +228,46 @@ struct EngineInstallTests {
         #expect(throws: (any Error).self) { try EngineInstall.install(from: source, to: destination) }
         #expect(try version(destination) == "1")
     }
+
+    /// A lookalike with Claude's bundle id and a valid signature that isn't Anthropic's, here an ad hoc one, is never
+    /// copied into a profile, and `baton doctor` says why.
+    @Test func validSignatureFromAnyoneButAnthropicIsRefused() throws {
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let lookalike = box.root.appending(path: "Downloads/Claude.app")
+        try fm.createDirectory(at: lookalike.appending(path: "Contents/MacOS"), withIntermediateDirectories: true)
+        try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: lookalike.appending(path: "Contents/MacOS/Claude"))
+        let info = [
+            "CFBundleVersion": "99", "CFBundleIdentifier": ClaudeVersion.bundleIdentifier, "CFBundleExecutable": "Claude",
+            "CFBundlePackageType": "APPL",
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: lookalike.appending(path: "Contents/Info.plist"))
+        #expect(ProfileManager.run("/usr/bin/codesign", ["--sign", "-", "--force", lookalike.path]) == 0, "signed ad hoc")
+        #expect(ProfileManager.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", lookalike.path]) == 0, "a valid signature")
+
+        let destination = try app(in: box.root, name: "engine.app", version: "1")
+        #expect {
+            try EngineInstall.install(from: lookalike, to: destination)
+        } throws: { error in
+            error.localizedDescription.contains("isn't Claude Desktop as Anthropic signs it")
+        }
+        #expect(try version(destination) == "1")
+        #expect(!ClaudeSource.isSignedByAnthropic(lookalike))
+        #expect(!ClaudeSource.isSignedByAnthropic(destination), "unsigned")
+        #expect(ClaudeSource.notes(paths: Paths(home: box.root, claudeApp: lookalike)).contains { $0.hasPrefix("Not signed by Anthropic") })
+    }
+
+    /// Across disks an app copy can't be a clone; `baton doctor` says so, with the size each copy takes.
+    @Test func saysWhenAppCopiesAreFullCopies() throws {
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let source = try app(in: box.root, name: "Claude.app", version: "2")
+        #expect(!EngineInstall.copiesAcrossDisks(from: source, to: box.paths.enginesDir), "same disk, before the folder exists")
+        let devices = URL(fileURLWithPath: "/dev")
+        #expect(EngineInstall.copiesAcrossDisks(from: devices, to: box.paths.enginesDir), "another disk")
+        #expect(EngineInstall.size(of: source) > 0)
+        let notes = ClaudeSource.notes(paths: Paths(home: box.root, claudeApp: source))
+        #expect(notes.count == 1 && notes[0].hasPrefix("Not signed by Anthropic"), "\(notes)")
+    }
 }

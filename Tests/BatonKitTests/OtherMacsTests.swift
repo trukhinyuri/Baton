@@ -32,25 +32,51 @@ struct OtherMacsTests {
         // While a profile signs in, Launch Services knows only that profile's engine; an engine is never the main app.
         let engine = try box.claudeBundle(at: box.paths.engine(for: "work"))
 
-        #expect(Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [engine] }).path == user.path)
+        let signed = { (_: URL) in true }
+        #expect(Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [engine] }, isSignedByAnthropic: signed).path == user.path)
 
         let elsewhere = try box.claudeBundle(at: box.root.appending(path: "Other/Claude.app"))
         #expect(
-            Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [engine, elsewhere] }).path == elsewhere.path,
-            "Launch Services' choice comes first")
+            Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [elsewhere, engine] }, isSignedByAnthropic: signed).path
+                == user.path,
+            "an installed Claude before whatever Launch Services prefers, such as a newer one on a disk image")
 
         let installed = try box.claudeBundle(at: system.appending(path: "Claude.app"))
         #expect(
-            Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [] }).path == installed.path,
+            Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [] }, isSignedByAnthropic: signed).path == installed.path,
             "/Applications before ~/Applications")
 
         let impostor = try box.claudeBundle(at: box.root.appending(path: "Impostor/Claude.app"), identifier: "com.example.other")
-        #expect(Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [impostor] }).path == installed.path)
+        #expect(
+            Paths.findClaude(home: box.root, systemApplications: system, lookup: { _ in [impostor] }, isSignedByAnthropic: signed).path == installed.path)
 
         let nowhere = box.root.appending(path: "Empty", directoryHint: .isDirectory)
         #expect(
-            Paths.findClaude(home: nowhere, systemApplications: nowhere, lookup: { _ in [] }).path == nowhere.appending(path: "Claude.app").path,
+            Paths.findClaude(home: nowhere, systemApplications: nowhere, lookup: { _ in [] }, isSignedByAnthropic: signed).path
+                == nowhere.appending(path: "Claude.app").path,
             "with no Claude anywhere, the usual place, so the error names it")
+    }
+
+    /// Only Claude as Anthropic signs it is taken for Claude Desktop: a lookalike with its bundle id is passed over,
+    /// even in Applications, and so is a copy macOS runs from a temporary place. Launch Services' copies come last.
+    @Test func takesOnlyClaudeSignedByAnthropic() throws {
+        let box = try Sandbox()
+        let system = box.root.appending(path: "System Applications", directoryHint: .isDirectory)
+        let installed = try box.claudeBundle(at: system.appending(path: "Claude.app"))
+        let user = try box.claudeBundle(at: box.root.appending(path: "Applications/Claude.app"))
+        let downloaded = try box.claudeBundle(at: box.root.appending(path: "Downloads/Claude.app"), version: "99")
+        let translocated = try box.claudeBundle(at: box.root.appending(path: "AppTranslocation/1234/d/Claude.app"))
+        func find(_ lookup: [URL], signed: [URL]) -> String {
+            Paths.findClaude(
+                home: box.root, systemApplications: system, lookup: { _ in lookup },
+                isSignedByAnthropic: { app in signed.contains { $0.path == app.path } }
+            ).path
+        }
+
+        #expect(find([downloaded, installed], signed: [user]) == user.path, "a lookalike in /Applications and a newer one in Downloads are passed over")
+        #expect(find([downloaded], signed: [downloaded]) == downloaded.path, "Anthropic's own copy elsewhere, when none is installed")
+        #expect(find([translocated], signed: [translocated]) == installed.path, "never a translocated copy: the usual place, so the error names it")
+        #expect(find([downloaded], signed: []) == installed.path)
     }
 
     @Test func restoresMainAfterStaleSignIn() throws {

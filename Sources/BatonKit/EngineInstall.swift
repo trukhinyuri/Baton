@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Security
 
 /// Replaces a closed profile engine without deleting the working app before its replacement is ready.
 /// The caller serializes installations and ensures the destination app is not running.
@@ -8,8 +9,14 @@ enum EngineInstall {
     typealias Validate = (URL) throws -> Void
     typealias Exchange = (URL, URL) throws -> Void
 
+    /// Claude Desktop as Anthropic signs it: its bundle id, and a Developer ID certificate Apple issued to Anthropic's
+    /// team. Only an app that meets it is copied into a profile or taken for Claude Desktop.
+    static let anthropicRequirement =
+        #"identifier "\#(ClaudeVersion.bundleIdentifier)" and anchor apple generic and certificate leaf[subject.OU] = "Q6L2SF6YDW""#
+
     enum InstallError: LocalizedError {
         case invalidBundle(URL, String)
+        case notFromAnthropic(URL)
         case overlappingPaths
         case sourceChanged
         case exchangeFailed(String)
@@ -19,6 +26,9 @@ enum EngineInstall {
         var errorDescription: String? {
             switch self {
             case let .invalidBundle(url, reason): "Invalid Claude engine at \(url.path): \(reason)"
+            case let .notFromAnthropic(url):
+                "\(url.path) isn't Claude Desktop as Anthropic signs it, so Baton doesn't copy it into a profile. "
+                    + "Install Claude Desktop from Anthropic in Applications and try again."
             case .overlappingPaths: "The source and destination app bundles must be separate."
             case .sourceChanged: "Claude changed while its engine was being copied. Try opening the profile again."
             case let .exchangeFailed(reason): "Could not replace the Claude engine: \(reason)"
@@ -127,14 +137,18 @@ enum EngineInstall {
         return BundleIdentity(version: version, identifier: identifier, executable: executable)
     }
 
+    /// Every file of `app` as signed, and signed by Anthropic (`anthropicRequirement`); a valid signature from anyone
+    /// else, ad hoc included, is refused.
     static func validateSignature(at app: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        process.arguments = ["--verify", "--deep", "--strict", app.path]
+        process.arguments = ["--verify", "--deep", "--strict", "-R=" + anthropicRequirement, app.path]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
         process.waitUntilExit()
+        // codesign exits with 3 when the signature is valid but the requirement isn't met.
+        if process.terminationStatus == 3 { throw InstallError.notFromAnthropic(app) }
         guard process.terminationStatus == 0 else {
             throw InstallError.invalidBundle(app, "code signature verification failed")
         }
@@ -144,13 +158,69 @@ enum EngineInstall {
         if clonefile(source.path, destination.path, 0) == 0 { return }
         // A failed clone may have left a partial item. Only this installation's unique staging path is removed.
         if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+        // Across disks a clone can't be made: the copy takes as much space as Claude itself. `baton doctor` says so.
+        Log.notice("engine", "Claude is on another disk than the app copies, so \(destination.lastPathComponent) is a full copy")
         try FileManager.default.copyItem(at: source, to: destination)
+    }
+
+    /// Whether app copies made from `claudeApp` in `enginesDir` are full copies rather than clones: the two are on
+    /// different disks. The engines folder may not exist yet; its closest existing folder counts.
+    static func copiesAcrossDisks(from claudeApp: URL, to enginesDir: URL) -> Bool {
+        var folder = enginesDir.standardizedFileURL
+        while !FileManager.default.fileExists(atPath: folder.path), folder.path != "/" { folder = folder.deletingLastPathComponent() }
+        func volume(_ url: URL) -> String? {
+            (try? url.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier).map { "\($0)" }
+        }
+        guard let source = volume(claudeApp), let target = volume(folder) else { return false }
+        return source != target
+    }
+
+    /// The disk space `app` takes, in bytes.
+    static func size(of app: URL) -> Int {
+        let files = FileManager.default.enumerator(at: app, includingPropertiesForKeys: [.totalFileAllocatedSizeKey])
+        var total = 0
+        while let file = files?.nextObject() as? URL {
+            total += (try? file.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize) ?? 0
+        }
+        return total
     }
 
     static func exchangeBundles(_ first: URL, _ second: URL) throws {
         guard renamex_np(first.path, second.path, UInt32(RENAME_SWAP)) == 0 else {
             throw InstallError.exchangeFailed(String(cString: strerror(errno)))
         }
+    }
+}
+
+/// What `baton doctor` says about the Claude Desktop that profiles are copied from.
+public enum ClaudeSource {
+    /// Whether `app` is signed by Anthropic as Claude Desktop (`EngineInstall.anthropicRequirement`). It checks who
+    /// signed the app and its executable, not every file, so it is quick enough for every start (about 30 ms);
+    /// `EngineInstall.validateSignature` checks every file before a copy.
+    public static func isSignedByAnthropic(_ app: URL) -> Bool {
+        var code: SecStaticCode?
+        var requirement: SecRequirement?
+        guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code,
+            SecRequirementCreateWithString(EngineInstall.anthropicRequirement as CFString, [], &requirement) == errSecSuccess
+        else { return false }
+        return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSDoNotValidateResources), requirement) == errSecSuccess
+    }
+
+    /// A line when the app isn't signed by Anthropic, so no profile is copied from it, and one when each app copy
+    /// is a full copy because Claude is on another disk than the copies. Empty when neither applies.
+    public static func notes(paths: Paths) -> [String] {
+        guard FileManager.default.fileExists(atPath: paths.claudeApp.path) else { return [] }
+        var notes: [String] = []
+        if !isSignedByAnthropic(paths.claudeApp) {
+            notes.append("Not signed by Anthropic: Baton won't copy this app into a profile. Install Claude Desktop from Anthropic.")
+        }
+        if EngineInstall.copiesAcrossDisks(from: paths.claudeApp, to: paths.enginesDir) {
+            let size = ByteCountFormatter.string(fromByteCount: Int64(EngineInstall.size(of: paths.claudeApp)), countStyle: .file)
+            notes.append(
+                "On another disk than \(Paths.display(paths.launchersDir, home: paths.home)): each profile's app copy is a full "
+                    + "copy of about \(size) instead of a clone, made again after each Claude Desktop update")
+        }
+        return notes
     }
 }
 
