@@ -10,6 +10,8 @@ final class ReportForm: ObservableObject {
     @Published var title = ""
     @Published var description = ""
     @Published var note: String?
+    /// Saving or sharing failed. Shown in the sheet: an alert of the window would wait behind it.
+    @Published var problem: String?
 }
 
 struct ReportSheet: View {
@@ -22,10 +24,11 @@ struct ReportSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Report a problem").font(.title2.bold())
+                .accessibilityAddTraits(.isHeader)
             Text(
-                "Dropped the baton? Tell us where. Below is exactly what will be shared. Emails, account IDs, profile labels, folder names, session titles and your username are taken out. Nothing is sent until you submit the issue on GitHub yourself."
+                "Dropped the baton? Tell us where. Below is exactly what will be shared. Emails, account IDs, Dock labels, folder names, session titles and your username are taken out. Nothing is sent until you submit the issue on GitHub yourself."
             )
-            .font(.callout).foregroundStyle(.secondary)
+            .font(.callout).foregroundStyle(Color.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
 
             TextField("Summary", text: $form.title, prompt: Text("One line: what went wrong"))
@@ -51,15 +54,20 @@ struct ReportSheet: View {
                 .frame(minHeight: 160)
                 .accessibilityLabel("Report text")
             }
-            if let note = form.note {
-                Label(note, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
+            if let problem = form.problem {
+                Label(problem, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(Color.warningText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else if let note = form.note {
+                Label(note, systemImage: "info.circle").font(.callout).foregroundStyle(Color.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()
             HStack(spacing: 8) {
                 Button("Copy") {
-                    copy(text); form.note = "Copied the report."
+                    copy(text)
+                    say("Copied the report.")
                 }
                 Button("Save…", action: save)
                 Spacer()
@@ -88,8 +96,15 @@ struct ReportSheet: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try Data(text.utf8).write(to: url)
-            form.note = "Saved to \((url.path as NSString).abbreviatingWithTildeInPath)."
-        } catch { model.show(error) }
+            say("Saved to \((url.path as NSString).abbreviatingWithTildeInPath).")
+        } catch { say("Couldn't save the report: \(error.localizedDescription)", isProblem: true) }
+    }
+
+    /// What the last button did, below the report, read out by VoiceOver.
+    private func say(_ text: String, isProblem: Bool = false) {
+        form.problem = isProblem ? text : nil
+        form.note = isProblem ? nil : text
+        AppModel.announce(text)
     }
 
     private func openGitHub() {
@@ -100,12 +115,13 @@ struct ReportSheet: View {
                 title: form.title, description: form.description, saveIn: downloads, copy: copy,
                 open: { NSWorkspace.shared.open($0) })
             if let file = shared.file {
-                form.note =
+                say(
                     "The report is too long for the link, so the form has a summary. The full report is on the clipboard and saved as “\(file.lastPathComponent)” in Downloads: attach it to the issue."
+                )
                 NSWorkspace.shared.activateFileViewerSelecting([file])
             } else {
-                form.note = "Opened the issue form in your browser. Review it there and submit it yourself."
+                say("Opened the issue form in your browser. Review it there and submit it yourself.")
             }
-        } catch { model.show(error) }
+        } catch { say("Couldn't open the issue form: \(error.localizedDescription)", isProblem: true) }
     }
 }
