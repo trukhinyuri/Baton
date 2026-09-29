@@ -255,7 +255,7 @@ public final class ProfileManager: @unchecked Sendable {
         }
         var warnings: [String] = []
         // `Paths.findClaude` names an unsigned /Applications/Claude.app only when no Claude Anthropic signed is found.
-        if ClaudeSource.isSignedByAnthropic(paths.claudeApp) {
+        if isSignedByAnthropic(paths.claudeApp) {
             do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) } catch { warnings.append(error.localizedDescription) }
         } else {
             warnings.append(ProfileError.claudeNotFromAnthropic(paths.claudeApp.path).localizedDescription)
@@ -426,6 +426,11 @@ public final class ProfileManager: @unchecked Sendable {
     var appActivator: (@Sendable (_ app: URL, _ links: [URL]) async throws -> Void)?
     /// Called while a window is prepared to start, under open.lock; tests use it to overlap other work with it.
     var whilePreparing: (@Sendable (String) -> Void)?
+    /// Whether an app is Claude as Anthropic signs it (`ClaudeSource.isSignedByAnthropic`); tests replace it, since a
+    /// sandbox's Claude.app isn't signed.
+    var signatureCheck: (@Sendable (URL) -> Bool)?
+
+    private func isSignedByAnthropic(_ app: URL) -> Bool { signatureCheck?(app) ?? ClaudeSource.isSignedByAnthropic(app) }
 
     // MARK: Open
 
@@ -609,7 +614,7 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     private func openMainNow(links: [URL]) async throws {
-        guard ClaudeSource.isSignedByAnthropic(paths.claudeApp) else {
+        guard isSignedByAnthropic(paths.claudeApp) else {
             guard fm.fileExists(atPath: paths.claudeApp.path) else { throw ProfileError.claudeNotInstalled(paths.claudeApp.path) }
             throw ProfileError.claudeNotFromAnthropic(paths.claudeApp.path)
         }

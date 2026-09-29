@@ -32,6 +32,8 @@ extension Sandbox {
         try signIn(main, account: Sandbox.accountA)
         try signIn(work, account: Sandbox.accountB)
         let manager = ProfileManager(paths: paths)
+        // Taken for Claude as Anthropic signs it, so the main window opens too.
+        manager.signatureCheck = { _ in true }
         manager.runningCopies = { windows.running }
         manager.appLauncher = { app, arguments, _ in
             try await Task.sleep(for: .seconds(launchDelay))
