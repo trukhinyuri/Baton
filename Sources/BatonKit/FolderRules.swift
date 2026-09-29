@@ -17,12 +17,18 @@ public struct FolderRule: Codable, Equatable, Sendable {
     /// longer exists, such as a deleted worktree; the path as given counts too, and case is ignored, as the Mac's disks
     /// ignore it. Wherever the two could differ, the rule covers more rather than less.
     public func covers(_ path: String) -> Bool {
-        let folder = folder.lowercased()
-        let given = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path
-        return [Self.canonical(path), given].contains { candidate in
-            let own = candidate.lowercased()
-            return own == folder || own.hasPrefix(folder == "/" ? "/" : folder + "/")
-        }
+        Self.forms(of: path).contains(where: contains)
+    }
+
+    /// Whether `form`, a path already resolved or standardized, is the rule's folder or inside it; case is ignored.
+    func contains(_ form: String) -> Bool {
+        let folder = folder.lowercased(), own = form.lowercased()
+        return own == folder || own.hasPrefix(folder == "/" ? "/" : folder + "/")
+    }
+
+    /// `path` resolved, then as given: the folder its files are in, then the one it is reached through.
+    static func forms(of path: String) -> [String] {
+        [canonical(path), URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path]
     }
 
     /// `ConversationIndex.canonical`, also for a path that no longer exists: its closest existing folder is resolved
@@ -73,9 +79,14 @@ public struct FolderRules: Sendable {
         return rule.accounts.isEmpty ? nil : rule
     }
 
-    /// The rule of the closest folder that is `path` or contains it.
+    /// The rule of the closest folder that is `path` or contains it. The folder `path` resolves to decides, and the
+    /// path as given only when no rule covers that one: work reached through a link from one ruled folder into another
+    /// keeps the rule of the folder it is in, not the rule of the folder the link sits in.
     public static func rule(for path: String, in rules: [FolderRule]) -> FolderRule? {
-        rules.filter { $0.covers(path) }.max { $0.folder.count < $1.folder.count }
+        for form in FolderRule.forms(of: path) {
+            if let closest = rules.filter({ $0.contains(form) }).max(by: { $0.folder.count < $1.folder.count }) { return closest }
+        }
+        return nil
     }
 
     /// The accounts that may continue work touching all of `folders`: `nil` when no rule covers any of them, and
