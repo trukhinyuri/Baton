@@ -48,7 +48,9 @@ public struct SessionSync: Sendable {
         public var tombstonesRetired = 0
         /// Copies that had a grant or rule another account's copy held too, which was taken out of them.
         public var grantsRemoved = 0
-        /// Copies read to compare with their card. An idle run, in which no card changed, reads none.
+        /// Copies read to compare with their card. An idle run, in which no card changed, reads only the copies no match
+        /// is remembered for, such as those of "No folder" sessions, which may need this window's link, and those that name
+        /// another conversation than their card.
         public var cardsCompared = 0
         /// The data folders (standardized paths) that got a session card in this run. A window that was already open
         /// shows those sessions only after a restart.
@@ -819,7 +821,8 @@ public struct SessionSync: Sendable {
     }
 
     /// What a run keeps of a card between runs, while its file stays the same: what it says and a digest of its
-    /// bytes, not the bytes. A copy found to match its card is remembered here, so an idle run compares nothing.
+    /// bytes, not the bytes. A copy found to match its card is remembered here, so an idle run doesn't compare it again
+    /// (see `Report.cardsCompared` for the copies it does compare).
     final class CardRead: @unchecked Sendable {
         let facts: CardFacts
         /// SHA-256 of the bytes, in hex.
