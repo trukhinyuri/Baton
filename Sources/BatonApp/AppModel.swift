@@ -200,6 +200,10 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Brings the Baton window forward, opening it if it is closed: a menu command's sheet shows now, not the next
+    /// time the window opens.
+    func bringWindowForward() { presentWindow?() }
+
     func show(_ error: Error) {
         errorTitle = WindowStatus.alertTitle(for: error)
         errorMessage = error.localizedDescription
@@ -432,20 +436,24 @@ final class AppModel: ObservableObject {
         run("Opening Claude \(profile.label) with its own account…", window: profile.id, opens: true) { try await manager.open(profile.id) }
     }
 
-    /// - Parameter asked: “Share Sessions Now” rather than the timer: a failure is also an alert, which opens the
-    ///   window if it is closed. The timer's failures show in the footer only.
+    /// - Parameter asked: “Share Sessions Now” rather than the timer: its result is a notice, and a failure is also an
+    ///   alert, which opens the window if it is closed. The timer's failures show in the footer only.
     func syncNow(asked: Bool = false) {
         guard !isDemo else { return }
         let manager = manager
         Task.detached {
             do {
                 // nil: the CLI or a launcher is syncing right now; the next tick will catch up.
-                guard let report = try manager.syncSessions() else { return }
+                guard let report = try manager.syncSessions() else {
+                    if asked { await MainActor.run { self.show(notice: SyncReport.notice(nil)) } }
+                    return
+                }
                 await MainActor.run {
                     self.lastSync = Date()
                     self.lastSyncReport = report
                     self.lastSyncChanges = report.changes
                     self.syncError = nil
+                    if asked { self.show(notice: SyncReport.notice(report)) }
                 }
             } catch {
                 Log.error("sync", "Sync failed: \(error.localizedDescription)")

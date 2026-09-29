@@ -64,3 +64,18 @@ public struct OpenWarnings: Equatable, Sendable {
     /// Every window's warning, one after another; `nil` when there is none.
     public var text: String? { warnings.isEmpty ? nil : warnings.map(\.text).joined(separator: " ") }
 }
+
+extension SyncReport {
+    /// What the app says after Share Sessions Now: what the sync did, or, with no report, that someone else is
+    /// sharing right now.
+    public static func notice(_ report: SyncReport?) -> String {
+        guard let report else {
+            return "Sessions are being shared by a launcher or `baton` right now. Baton shares them again within a minute."
+        }
+        switch report.changes {
+        case 0: return "Sessions are shared: nothing new to copy."
+        case 1: return "Sessions are shared: 1 change."
+        default: return "Sessions are shared: \(report.changes) changes."
+        }
+    }
+}

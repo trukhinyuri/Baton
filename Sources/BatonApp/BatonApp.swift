@@ -29,16 +29,30 @@ struct BatonApp: App {
                     NSApp.activate()
                 }
             }
+            // Each command that shows a sheet opens the window first: with it closed, the sheet would wait unseen.
             CommandGroup(replacing: .newItem) {
-                Button("Add Subscription…") { model.isAdding = true }.keyboardShortcut("n")
+                Button("Add Subscription…") {
+                    model.bringWindowForward()
+                    model.isAdding = true
+                }
+                .keyboardShortcut("n")
             }
             CommandGroup(after: .newItem) {
                 Button("Share Sessions Now") { model.syncNow(asked: true) }.keyboardShortcut("r")
-                Button("Continue work…") { model.isContinuing = true }
-                Button("Check sessions…") { model.checkSessions() }
+                Button("Continue work…") {
+                    model.bringWindowForward()
+                    model.isContinuing = true
+                }
+                Button("Check sessions…") {
+                    model.bringWindowForward()
+                    model.checkSessions()
+                }
             }
             CommandGroup(replacing: .help) {
-                Button("Report a problem…") { model.isReporting = true }
+                Button("Report a problem…") {
+                    model.bringWindowForward()
+                    model.isReporting = true
+                }
             }
         }
 

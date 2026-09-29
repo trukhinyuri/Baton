@@ -79,3 +79,17 @@ struct OpenWarningsTests {
         #expect(warnings.text == nil)
     }
 }
+
+@Suite("Share Sessions Now")
+struct SyncNoticeTests {
+    /// Asking for a sync always says what came of it, also when a launcher or `baton` was sharing at that moment.
+    @Test func anAskedSyncSaysWhatItDid() {
+        var report = SyncReport(sessions: SessionSync.Report(), cowork: CoworkSync.Report())
+        #expect(SyncReport.notice(report) == "Sessions are shared: nothing new to copy.")
+        report.sessions.cardsWritten = 1
+        #expect(SyncReport.notice(report) == "Sessions are shared: 1 change.")
+        report.sessions.cardsRemoved = 2
+        #expect(SyncReport.notice(report) == "Sessions are shared: 3 changes.")
+        #expect(SyncReport.notice(nil).contains("within a minute"))
+    }
+}
