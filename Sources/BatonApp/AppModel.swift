@@ -53,8 +53,11 @@ final class AppModel: ObservableObject {
     init() {
         if !isDemo { Self.handOverToRunningCopy() }
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/baton")
-        let cliPath = FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil
         let home = FileManager.default.homeDirectoryForCurrentUser
+        // Run from Downloads or from the temporary copy macOS makes of a downloaded app: launchers must not point here,
+        // or they stop reaching `baton` once it moves or after a restart. A new one opens its app copy directly instead.
+        let misplaced = isDemo ? nil : AppLocation.problem(app: Bundle.main.bundleURL, home: home)
+        let cliPath = misplaced == nil && FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil
         // A folder of the earlier name that links nowhere right now (a disk not connected): nothing may write, or a
         // new, empty Baton folder would win for good. The window shows why; open Baton again once it is connected.
         let unreachable = isDemo ? nil : Paths.unreachableFolder(home: home)
@@ -65,7 +68,7 @@ final class AppModel: ObservableObject {
         // whichever folders exist once this is done. Skipped while Baton runs from inside the old launchers folder,
         // and in demo mode, which changes nothing.
         let migration =
-            unreachable != nil
+            unreachable != nil || misplaced != nil
             ? nil
             : LegacyMigration.atAppStart(home: home, app: Bundle.main.bundleURL, cli: cliPath, variables: ProcessInfo.processInfo.environment)
         manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil)
@@ -96,7 +99,7 @@ final class AppModel: ObservableObject {
         }
         // Re-registers the main Claude after an abandoned sign-in and notes a Claude Desktop version
         // outside the tested range: information for the footer, never a blocking alert.
-        var startUp = manager.startUpChecks()
+        var startUp = (misplaced.map { [$0] } ?? []) + manager.startUpChecks()
         switch migration {
         case .migrated(let moved)? where moved.problems.isEmpty:
             show(notice: LegacyMigration.message(for: .migrated(moved), home: manager.paths.home))
@@ -113,7 +116,7 @@ final class AppModel: ObservableObject {
         syncTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.syncNow() }
         }
-        Task.detached { [manager] in try? manager.refresh() }
+        if misplaced == nil { Task.detached { [manager] in try? manager.refresh() } }
         installWarning = AppInstances.duplicateWarning(AppInstances.installedCopies())
         syncNow()
         launchObserver = NSWorkspace.shared.notificationCenter.addObserver(

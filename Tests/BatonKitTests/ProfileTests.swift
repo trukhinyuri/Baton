@@ -169,6 +169,53 @@ struct LauncherTests {
         #expect(script.contains("--user-data-dir="))
     }
 
+    /// Started from the Dock, nothing shows what `baton` says; a launcher whose `baton open` fails says why in an alert.
+    @Test func aLauncherWhoseBatonFailsSaysWhy() throws {
+        let box = try Sandbox()
+        let bin = box.root.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        func tool(_ text: String, at url: URL) throws {
+            try box.write("#!/bin/sh\n" + text, to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        let said = box.root.appending(path: "alert.txt")
+        let alert = bin.appending(path: "alert")
+        try tool("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '\(said.path)'\n", at: alert)
+        let cli = bin.appending(path: "baton")
+        let manager = ProfileManager(paths: box.paths, cliPath: cli)
+        // The alert is recorded instead of shown, and no app is ever opened.
+        let script = manager.launcherScript(for: Profile(id: "work", label: "WORK", email: nil, color: "#000000"))
+            .replacingOccurrences(of: "/usr/bin/osascript", with: alert.path)
+            .replacingOccurrences(of: "/usr/bin/open", with: "/usr/bin/false")
+        func run() throws -> Int32 {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", script]
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        }
+
+        try tool("echo 'error: Claude WORK is open without its profile' >&2\nexit 1\n", at: cli)
+        #expect(try run() == 1)
+        let lines = box.read(said)?.split(separator: "\n").map(String.init) ?? []
+        #expect(lines.suffix(2) == ["Claude WORK didn't open", "error: Claude WORK is open without its profile"])
+
+        try FileManager.default.removeItem(at: said)
+        try tool("echo 'warning: a note' >&2\nexit 0\n", at: cli)
+        #expect(try run() == 0)
+        #expect(!box.exists(said), "no alert when it opened")
+    }
+
+    @Test func launchersNeverPointIntoDownloadsOrATranslocatedCopy() {
+        let home = URL(fileURLWithPath: "/Users/alex")
+        #expect(AppLocation.problem(app: URL(fileURLWithPath: "/Applications/Baton.app"), home: home) == nil)
+        #expect(AppLocation.problem(app: URL(fileURLWithPath: "/Users/alex/Applications/Baton.app"), home: home) == nil)
+        #expect(AppLocation.problem(app: URL(fileURLWithPath: "/Users/alex/Downloads/Baton.app"), home: home)?.contains("Downloads") == true)
+        let translocated = URL(fileURLWithPath: "/private/var/folders/ab/cd/T/AppTranslocation/0A1B/d/Baton.app")
+        #expect(AppLocation.problem(app: translocated, home: home)?.contains("temporary copy") == true)
+    }
+
     @Test func hexColorsParse() {
         let color = NSColor(hex: "#FF8000").usingColorSpace(.sRGB)!
         #expect(abs(color.redComponent - 1) < 0.01)
