@@ -8,12 +8,28 @@ repository settings, not in a file, so they live here and are set by hand; the r
 
 Description:
 
-> Run several Claude Desktop accounts side by side on one Mac and hand a local conversation from one of your own windows to another. Not affiliated with Anthropic.
+> Baton, a Mac app for Claude Desktop accounts: run several side by side on one Mac and hand a local conversation from one of your own windows to another. Not affiliated with Anthropic.
+
+It starts with "Baton, a Mac app for Claude Desktop accounts" because other products and commands are called Baton
+too, among them getbaton.dev; the README says right under its title that this one is not related to them.
 
 Website: none (the README is the home page).
 
 Topics (suggested): `macos`, `macos-app`, `menu-bar-app`, `swift`, `swiftui`, `claude`, `claude-desktop`,
-`claude-code`, `multi-account`, `homebrew-cask`
+`claude-code`, `multi-account`, `session-management`, `homebrew-cask`
+
+Social preview: `docs/images/social-preview.png` (1280 × 640), uploaded under **Settings → General → Social
+preview**. Without it, links to the repository show a card GitHub draws from the name and description.
+
+## Repository settings
+
+GitHub keeps these in the repository's settings, not in a file, so nothing in the repository can check them. Set them
+by hand before the first tag; [RELEASING.md](../RELEASING.md#repository-settings) has the whole list, including
+the rename, private vulnerability reporting, branch protection and secrets. The ones that are about how the
+repository looks:
+
+- [ ] The About description, website and topics above.
+- [ ] The social preview above.
 
 ## Release title
 
