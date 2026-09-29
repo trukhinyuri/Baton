@@ -98,6 +98,23 @@ struct WindowActivityTests {
         #expect(manager.liveSessions(in: "work").isEmpty, "not in a closed window")
     }
 
+    @Test func liveProcessOutlivingItsWindowKeepsItBusy() async throws {
+        let box = try Sandbox()
+        let copies = FakeCopies()
+        let manager = try manager(box, copies: copies, open: false, processes: [process(200, Self.session, executable: inData(box.work))])
+        #expect(manager.activity(of: "work") == .busy(live: 1), "left running after the window went away")
+        #expect(await manager.quitWindow("work", seconds: 0.2) == false, "not closed while it works")
+    }
+
+    @Test func quitWindowLeavesBusyWindowAlone() async throws {
+        let box = try Sandbox()
+        let copies = FakeCopies()
+        let manager = try manager(box, copies: copies, processes: [process(200, Self.session, executable: inData(box.work))])
+        manager.quitRequester = { copies.askToQuit($0, andQuit: true) }
+        #expect(await manager.quitWindow("work", seconds: 0.2) == false)
+        #expect(copies.quitRequests.isEmpty, "running work isn't interrupted")
+    }
+
     @Test func quitWindowNeverForces() async throws {
         let box = try Sandbox()
         let copies = FakeCopies()

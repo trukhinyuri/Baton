@@ -40,14 +40,14 @@ struct ProcessTree: Sendable {
 }
 
 extension ProfileManager {
-    /// closed: no process. busy: at least one live Claude Code process belongs to the window, by its executable in the
-    /// window's data folder (as `LimitTracker.liveWindows` tells) or by descending from the window's process (as
-    /// `WindowStatus.liveSessions` counts). idle otherwise.
+    /// busy: at least one live Claude Code process belongs to the window, by its executable in the window's data folder
+    /// (as `LimitTracker.liveWindows` tells; such a process can outlive a crashed window) or by descending from the
+    /// window's process (as `WindowStatus.liveSessions` counts). closed: no process at all. idle otherwise.
     public func activity(of window: String) -> WindowActivity {
         let copies = runningCopies(of: window)
-        guard !copies.isEmpty else { return .closed }
         let live = liveProcesses(of: window, copies: copies)
-        return live.pids.isEmpty ? .idle : .busy(live: live.pids.count)
+        if !live.pids.isEmpty { return .busy(live: live.pids.count) }
+        return copies.isEmpty ? .closed : .idle
     }
 
     /// Sessions of the window with a live Claude Code process there: the test for whether a session continues elsewhere
@@ -63,13 +63,19 @@ extension ProfileManager {
         return sessions
     }
 
-    /// Asks every process of the window to quit and waits up to `seconds` for them to go. Never forces: a window that
-    /// asks the user something, or keeps running, stays open.
+    /// Asks every process of the window to quit and waits up to `seconds` for them to go. Never forces, and never asks
+    /// a busy window: running work isn't interrupted, and a window that asks the user something, or keeps running,
+    /// stays open.
     /// - Returns: whether the window is closed now.
     public func quitWindow(_ window: String, seconds: Double = 20) async -> Bool {
         guard !isReadOnly else { return false }
+        let activity = activity(of: window)
+        guard activity != .closed else { return true }
+        guard !activity.isBusy else {
+            Log.notice("open", "Didn't ask window \(window) to quit: Claude Code works there")
+            return false
+        }
         let copies = runningCopies(of: window)
-        guard !copies.isEmpty else { return true }
         for copy in copies {
             if let quitRequester { quitRequester(copy) } else { copy.app?.terminate() }
         }
@@ -82,7 +88,7 @@ extension ProfileManager {
             Log.notice("open", "Window \(window) didn't quit within \(Int(seconds)) s; left running")
             return false
         }
-        return true
+        return self.activity(of: window) == .closed
     }
 
     /// The running copies that show the window's own data.
