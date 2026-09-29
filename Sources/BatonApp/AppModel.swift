@@ -315,10 +315,11 @@ final class AppModel: ObservableObject {
         return FolderRules.allowedAccounts(for: folders, in: rules)
     }
 
-    /// “ · usage as of 5h ago” when a subscription's sample is too old to compare by; empty otherwise.
+    /// “ · usage of Claude LAB as of 5h ago” when a subscription's sample is too old to compare by; empty otherwise.
+    /// It names the window, since the limit banner shows it next to the one at its limit.
     func staleNote(_ id: String) -> String {
         guard let usage = statuses.first(where: { $0.id == id })?.usage, !usage.isFresh() else { return "" }
-        return " · usage as of \(relativeAge(since: usage.sampledAt))"
+        return " · usage of \(buttonLabel(of: id)) as of \(relativeAge(since: usage.sampledAt))"
     }
 
     func label(of windowID: String) -> String { statuses.first { $0.id == windowID }?.label ?? manager.label(of: windowID) }
