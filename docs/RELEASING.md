@@ -10,10 +10,10 @@ workflow** with the tag.
 
 ## Before the first tag
 
-The README offers Homebrew as the main way to install, so a final release is tagged only when all three of these are
-in place. Without notarization there is no final tag: Homebrew disables a cask that fails Gatekeeper, and everyone who
-downloads the ZIP would have to override macOS to open it. A release candidate needs step 1 and skips steps 2 and 3;
-see [Release candidates](#release-candidates).
+The README offers the ZIP and Homebrew, so a final release is tagged only when all three of these are in place. Without
+notarization there is no final tag: Homebrew disables a cask that fails Gatekeeper, and everyone who downloads the ZIP
+would have to override macOS to open it. A release candidate needs step 1 and skips steps 2 and 3; see [Release
+candidates](#release-candidates).
 
 1. **The repository is `trukhinyuri/Baton`, with the settings below in place.** Rename it on GitHub first; GitHub
    redirects the old URLs. The cask, the README badges, the issue links in the app and `scripts/product.env` already
