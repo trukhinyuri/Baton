@@ -332,7 +332,7 @@ Same app, new name. If you're upgrading from Claude Profiles, your windows, prof
    ```sh
    brew uninstall --cask baton         # or: make uninstall
    ```
-   From the ZIP, move `/Applications/Baton.app` to the Trash. `brew uninstall --zap --cask baton` also removes the app's preferences, caches and old app copies. None of these removes your profiles (`Profiles/`), their backups (`Backups/`), the launchers, `~/.claude` or Claude's own data.
+   From the ZIP, move `/Applications/Baton.app` to the Trash. If you linked the `baton` command yourself ([The `baton` command](#the-baton-command)), remove that link too: `rm ~/.local/bin/baton`, or `sudo rm /usr/local/bin/baton`. It removes only the link; Homebrew removes its own. `brew uninstall --zap --cask baton` also removes the app's preferences, caches and old app copies. None of these removes your profiles (`Profiles/`), their backups (`Backups/`), the launchers, `~/.claude` or Claude's own data.
 4. Give `claude://` links back to the main Claude app, in case a profile was signing in when you removed it (use `~/Applications/Claude.app` if Claude is there):
    ```sh
    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Claude.app
