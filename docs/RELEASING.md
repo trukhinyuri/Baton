@@ -92,6 +92,11 @@ before `1.0.0`.
    with a note on how to open a build that isn't notarized (Open Anyway in System Settings → Privacy & Security, or
    `make install`).
 5. The `tap` job is skipped: the cask follows signed final releases only, and `bump-cask.yml` refuses a `-rc.` tag.
+6. Deal with the old release. The repository's only earlier release, "Claude Profiles v0.2.0", is not a prerelease, so
+   GitHub keeps showing it as Latest next to the release candidate, under the old name and with no security fixes
+   (`SECURITY.md`). Pick one, in **Releases → Claude Profiles v0.2.0 → Edit**: change its title to say it is the
+   old name and superseded by Baton (for example "Claude Profiles v0.2.0 (old name, superseded by Baton)"), or tick
+   **Set as a pre-release** so nothing is Latest until the signed 1.0.0. Leave the tag and the ZIP as they are.
 
 ## Each release
 

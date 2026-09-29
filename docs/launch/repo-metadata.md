@@ -30,6 +30,9 @@ repository looks:
 
 - [ ] The About description, website and topics above.
 - [ ] The social preview above.
+- [ ] The old release, "Claude Profiles v0.2.0", no longer shown as Latest next to the release candidate: retitled to
+      say it is the old name, or marked a pre-release. Which one is the owner's choice;
+      [RELEASING.md](../RELEASING.md#release-candidates) has both.
 
 ## Release title
 
