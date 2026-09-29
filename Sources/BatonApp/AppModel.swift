@@ -32,8 +32,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var notice: String?
     @Published private(set) var noticeIsWarning = false
     private var noticeTask: Task<Void, Never>?
-    /// Brings the Baton window forward; set by the window and by the menu bar's items. An error from an item in the
-    /// menu bar while the window is closed would otherwise wait unseen until the window next opens.
+    /// Brings the Baton window forward; set by the menu bar icon at launch, by the window and by the menu bar's items.
+    /// An error while the window is closed (from the menu bar, or from a copy reopened from its own Dock icon) would
+    /// otherwise wait unseen until the window next opens.
     var presentWindow: (@MainActor () -> Void)?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
@@ -156,6 +157,14 @@ final class AppModel: ObservableObject {
         guard let other = decision.handOverTo, let app = running.first(where: { $0.processIdentifier == other }) else { return }
         app.activate()
         exit(0)
+    }
+
+    /// Lets an error open the window (`show`), with the `openWindow` of any of the app's views.
+    func letErrorsOpenTheWindow(with openWindow: OpenWindowAction) {
+        presentWindow = {
+            openWindow(id: "main")
+            NSApp.activate()
+        }
     }
 
     func show(_ error: Error) {

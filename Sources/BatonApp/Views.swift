@@ -369,13 +369,7 @@ struct ContentView: View {
                 .padding(.bottom, 8)
         }
         .frame(minWidth: 760, idealWidth: 900, minHeight: 380, idealHeight: 580)
-        .onAppear {
-            let open = openWindow
-            model.presentWindow = {
-                open(id: "main")
-                NSApp.activate()
-            }
-        }
+        .onAppear { model.letErrorsOpenTheWindow(with: openWindow) }
         .task(id: model.lastSync) { syncFooter.everyoneInStep = await Self.everyoneInStep(model) }
         .sheet(isPresented: $model.isAdding) { AddProfileSheet(model: model) }
         .sheet(isPresented: $model.isContinuing) { ContinueWorkSheet(model: model) }
@@ -443,7 +437,9 @@ struct ContentView: View {
                 Text(message)
             } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning ?? model.installWarning {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.warningText).accessibilityHidden(true)
-                Text(problem).lineLimit(2).textSelection(.enabled).help(problem)
+                // In full: these ask for something, and a tooltip is out of reach of the keyboard. The buttons keep
+                // their size, so the text takes the width they leave and wraps.
+                Text(problem).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).layoutPriority(1)
             } else {
                 Image(systemName: "arrow.triangle.2.circlepath")
                 if model.statuses.count < 2 {
@@ -469,12 +465,14 @@ struct ContentView: View {
             .controlSize(.small)
             .fixedSize()
             .help("Optional, off by default: adds mcp__ccd_session__move_to_cloud to permissions.deny in ~/.claude/settings.json, Mac-wide.")
-            Button("Check sessions…") { model.checkSessions() }
+            Button("Check sessions…") { model.checkSessions() }.fixedSize()
             Button("Report a problem…") { model.isReporting = true }
+                .fixedSize()
                 .help("Shows a redacted report to review, then opens a prefilled GitHub issue. Nothing is sent automatically.")
             Link(destination: URL(string: "https://github.com/\(FeedbackReport.repository)#staying-within-anthropics-terms")!) {
                 Label("Anthropic terms", systemImage: "checkmark.shield")
             }
+            .fixedSize()
             .help("How Baton stays within Anthropic's terms")
         }
         .font(.caption)

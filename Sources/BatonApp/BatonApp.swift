@@ -45,8 +45,7 @@ struct BatonApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            Image(systemName: About.menuBarSymbol)
-                .accessibilityLabel("Baton")
+            MenuBarLabel(model: model)
         }
     }
 }
@@ -76,6 +75,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
+/// The menu bar icon. It is there from launch, with the window open or not, so errors can open the window from the start:
+/// Baton may start with its window closed and meet an error before any item or the window sets that up.
+struct MenuBarLabel: View {
+    let model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(systemName: About.menuBarSymbol)
+            .accessibilityLabel("Baton")
+            .onAppear { model.letErrorsOpenTheWindow(with: openWindow) }
+    }
+}
+
 struct MenuBarContent: View {
     @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
@@ -83,7 +95,7 @@ struct MenuBarContent: View {
     var body: some View {
         ForEach(model.statuses) { status in
             Button(menuTitle(for: status)) {
-                letErrorsOpenTheWindow()
+                model.letErrorsOpenTheWindow(with: openWindow)
                 model.open(status)
             }
         }
@@ -98,7 +110,7 @@ struct MenuBarContent: View {
             model.isAdding = true
         }
         Button("Share Sessions Now") {
-            letErrorsOpenTheWindow()
+            model.letErrorsOpenTheWindow(with: openWindow)
             model.syncNow(asked: true)
         }
         Button("Continue work…") {
@@ -115,15 +127,6 @@ struct MenuBarContent: View {
         Button("Quit Baton") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 
-    /// These items work with the window closed: an error from one opens it, so its alert shows (`AppModel.show`).
-    private func letErrorsOpenTheWindow() {
-        let open = openWindow
-        model.presentWindow = {
-            open(id: "main")
-            NSApp.activate()
-        }
-    }
-
     private func menuTitle(for status: ProfileStatus) -> String {
         let name = "Claude \(status.displayLabel)"
         let who = status.email ?? (status.isSignedIn ? "signed in" : "not signed in")
@@ -131,7 +134,7 @@ struct MenuBarContent: View {
         if status.isSignedIn, status.limits.isAtLimit() {
             usage = " · " + LimitText.atLimit(status.limits)
         } else if status.isSignedIn, status.usage != nil {
-            usage = " · " + LimitText.describe(status.limits.week)
+            usage = " · " + LimitText.describe(status.limits.week, fullNames: true)
         }
         // Open or closed in words, as in the window list: VoiceOver reads a dot glyph as "black circle".
         return "\(name) · \(status.isRunning ? "Open" : "Closed") — \(who)\(usage)"

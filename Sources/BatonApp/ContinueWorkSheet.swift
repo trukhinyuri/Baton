@@ -195,7 +195,12 @@ struct ContinueWorkSheet: View {
                 }
             }
             if let ruleNote { Text(ruleNote).font(.callout).foregroundStyle(Color.warningText).fixedSize(horizontal: false, vertical: true) }
-            if let problem = form.problem { Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+            if let problem = form.problem {
+                // As the report sheet shows its problem: system red is about 3.5:1 on a light sheet.
+                Label(problem, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(Color.warningText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
 
             if let folder, !folderBatch.isEmpty {
                 HStack(spacing: 8) {
@@ -326,7 +331,7 @@ struct ContinueWorkSheet: View {
             return name + " · " + LimitText.atLimit(status.limits) + (LimitText.checkHint(status) == nil ? "" : " (open it to check)")
         }
         guard status.usage != nil else { return name }
-        return name + " · " + LimitText.summary(status.limits, usage: status.usage)
+        return name + " · " + LimitText.summary(status.limits, usage: status.usage, fullNames: true)
     }
 
     private func explanation(_ conversation: Conversation) -> String {

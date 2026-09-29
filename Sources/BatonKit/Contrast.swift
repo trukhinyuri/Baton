@@ -45,10 +45,10 @@ public enum TextColors {
     public static let warning = (light: "#A64B00", dark: "#FF9230")
 
     /// What the text sits on. Light, as macOS 27 draws Baton (measured in the README pictures): sheet, window title
-    /// bar, list row, window, the second shade of a list and the limit banner. Dark: the window and a range of lighter
-    /// rows and panels.
+    /// bar, list row, window, the second shade of a list and the limit banner; then the window of macOS 14 and 15.
+    /// Dark: the window and a range of lighter rows and panels.
     public static let backgrounds = (
-        light: ["#FFFFFF", "#FBFBFB", "#F8F8F8", "#F6F6F6", "#F4F5F5", "#F7E9DD"],
+        light: ["#FFFFFF", "#FBFBFB", "#F8F8F8", "#F6F6F6", "#F4F5F5", "#F7E9DD", "#ECECEC"],
         dark: ["#1E1E1E", "#282828", "#323232", "#3C3C3C"]
     )
 }

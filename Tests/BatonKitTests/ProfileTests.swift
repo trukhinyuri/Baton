@@ -124,6 +124,20 @@ struct LauncherTests {
         #expect(length == data.count)
     }
 
+    /// A profile made with the earlier, lighter palette: its Dock label band is darkened as its badge is, so the white
+    /// label reads at 4.5:1.
+    @Test func anEarlierColourIsDarkenedOnTheDockIcon() throws {
+        let box = try Sandbox()
+        let image = ProfileManager(paths: box.paths).icon(for: Profile(id: "work", label: "WORK", email: nil, color: "#2F9E44"))
+        let bitmap = try #require(image.representations.first as? NSBitmapImageRep)
+        // Inside the band, left of the label: 10% from the left, halfway up the band (from the top, 79% down).
+        let pixel = try #require(bitmap.colorAt(x: bitmap.pixelsWide / 10, y: bitmap.pixelsHigh * 79 / 100)?.usingColorSpace(.sRGB))
+        let hex = String(
+            format: "#%02X%02X%02X", Int((pixel.redComponent * 255).rounded()), Int((pixel.greenComponent * 255).rounded()),
+            Int((pixel.blueComponent * 255).rounded()))
+        #expect(Contrast.ratio(hex, "#FFFFFF") >= Contrast.minimum - 0.05, "band \(hex)")
+    }
+
     @Test func launcherScriptQuotesPaths() throws {
         let box = try Sandbox()
         let manager = ProfileManager(paths: box.paths, cliPath: URL(fileURLWithPath: "/Apps/It's Here/baton"))
