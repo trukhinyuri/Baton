@@ -11,9 +11,6 @@ on:
         description: The release tag, such as v1.0.0
         required: true
         type: string
-    secrets:
-      HOMEBREW_TAP_PAT:
-        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -27,6 +24,8 @@ permissions:
 jobs:
   bump:
     runs-on: macos-15
+    # HOMEBREW_TAP_PAT lives in this environment, which only v* tags may use: run it by hand from the tag, not a branch.
+    environment: release
     env:
       HAS_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT != '' }}
       TAG: ${{ inputs.tag }}

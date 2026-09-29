@@ -1,10 +1,11 @@
 #!/bin/sh
-# Stores the release secrets in the GitHub repository, for maintainers. Usage:
+# Stores the release secrets in the GitHub environment `release`, for maintainers. Usage:
 #   scripts/set-release-secrets.sh <certificate.p12> <AuthKey_KEYID.p8> <team id> <key id> <issuer id>
 # The .p12 is the Developer ID Application certificate exported with its private key; the .p8 is an App Store Connect
 # API key for notarization. Asks for the .p12 password and the Homebrew tap token without showing them, makes a random
 # keychain password, and hands every value to `gh secret set` on stdin: nothing lands in the shell history, the
-# process list or a file. Checks the certificate before sending anything. Needs the GitHub CLI signed in.
+# process list or a file. Checks the certificate before sending anything. Needs the GitHub CLI signed in and the
+# environment made by hand first (docs/RELEASING.md, Repository settings); it sets the secrets and creates nothing else.
 set -eu
 
 if [ $# -ne 5 ]; then
@@ -35,6 +36,8 @@ fail() {
 command -v gh >/dev/null 2>&1 || fail "The GitHub CLI (gh) is not installed: brew install gh, then gh auth login."
 gh auth status >/dev/null 2>&1 || fail "The GitHub CLI is not signed in: gh auth login."
 gh repo view "$REPO_SLUG" >/dev/null 2>&1 || fail "Can't reach $REPO_SLUG with the GitHub CLI."
+gh api "repos/$REPO_SLUG/environments/release" >/dev/null 2>&1 ||
+    fail "$REPO_SLUG has no environment called release: add it first (docs/RELEASING.md, Repository settings)."
 grep -q 'BEGIN PRIVATE KEY' "$P8" || fail "$P8 doesn't look like an App Store Connect API key (.p8)."
 
 ask_hidden() { # ask_hidden <prompt>: prints the answer; the terminal doesn't show it
@@ -63,7 +66,7 @@ esac
 echo "Certificate: $subject"
 
 put() { # put <name>: the value comes on stdin
-    gh secret set "$1" -R "$REPO_SLUG" >/dev/null || fail "Couldn't set $1."
+    gh secret set "$1" -R "$REPO_SLUG" --env release >/dev/null || fail "Couldn't set $1."
     echo "set   $1"
 }
 base64 -i "$P12" | tr -d '\n' | put MACOS_CERTIFICATE
@@ -83,5 +86,5 @@ else
 fi
 unset TAP_TOKEN
 
-echo "Secrets now in $REPO_SLUG:"
-gh secret list -R "$REPO_SLUG" --json name --jq '.[].name' | sed 's/^/  /'
+echo "Secrets now in the release environment of $REPO_SLUG:"
+gh secret list -R "$REPO_SLUG" --env release --json name --jq '.[].name' | sed 's/^/  /'
