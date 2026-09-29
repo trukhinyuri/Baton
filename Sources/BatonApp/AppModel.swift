@@ -9,7 +9,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastSyncChanges = 0
     @Published private(set) var syncError: String? { didSet { remember(syncError) } }
     @Published private(set) var registryError: String? { didSet { remember(registryError) } }
-    @Published var busyMessage: String?
+    /// The actions still running; the footer shows the newest one's message (see `OperationsInFlight`).
+    @Published private(set) var operations = OperationsInFlight()
     @Published var errorMessage: String? { didSet { remember(errorMessage) } }
     @Published var isReporting = false
     /// Says what kind of problem `errorMessage` is about.
@@ -26,8 +27,14 @@ final class AppModel: ObservableObject {
     @Published private(set) var isLoadingConversations = false
     /// Selected when the continue sheet opens, if still available.
     @Published var preselectedConversation: String?
+    /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed or
+    /// replaced; any other goes after 20 seconds.
     @Published private(set) var notice: String?
+    @Published private(set) var noticeIsWarning = false
     private var noticeTask: Task<Void, Never>?
+    /// Brings the Baton window forward; set by the window and by the menu bar's items. An error from an item in the
+    /// menu bar while the window is closed would otherwise wait unseen until the window next opens.
+    var presentWindow: (@MainActor () -> Void)?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
     @Published private(set) var setupWarning: String? { didSet { remember(setupWarning) } }
@@ -38,6 +45,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var folderRules: [FolderRule]? = []
     /// Local only's optional extra, Mac-wide: off by default. See `CloudMoveLock`.
     @Published private(set) var cloudMoveLockOn = false
+    /// Asking before the lock goes on: it changes a setting of every Claude Code session on this Mac.
+    @Published var isConfirmingCloudMoveLock = false
     /// Windows blocked at a limit as of the last reload (see `LimitWatch`).
     @Published private(set) var atLimit: Set<String> = []
     private let limitWatch = LimitWatch()
@@ -152,6 +161,24 @@ final class AppModel: ObservableObject {
     func show(_ error: Error) {
         errorTitle = WindowStatus.alertTitle(for: error)
         errorMessage = error.localizedDescription
+        // The alert belongs to the window: with the window closed, open it so the alert shows now.
+        if !Self.windowIsOnScreen { presentWindow?() }
+    }
+
+    /// The Baton window is open and not in the Dock.
+    private static var windowIsOnScreen: Bool {
+        NSApp.windows.contains { $0.identifier?.rawValue.hasPrefix("main") == true && $0.isVisible && !$0.isMiniaturized }
+    }
+
+    /// The newest of the actions still running, for the footer.
+    var busyMessage: String? { operations.message }
+
+    /// An action on `id` is still running, so its Open button waits.
+    func isBusy(_ id: String) -> Bool { operations.isBusy(window: id) }
+
+    /// Read out by VoiceOver, which doesn't follow text that changes in place (a result, what Baton is doing).
+    static func announce(_ text: String) {
+        AccessibilityNotification.Announcement(text).post()
     }
 
     func showStatus(of id: String) {
@@ -191,7 +218,7 @@ final class AppModel: ObservableObject {
     func restart(_ id: String) {
         guard !isDemo else { return }
         let manager = manager
-        run("Restarting Claude \(displayLabel(of: id))…") { try await manager.restart(id) }
+        run("Restarting Claude \(displayLabel(of: id))…", window: id) { try await manager.restart(id) }
     }
 
     private func remember(_ message: String?) {
@@ -262,14 +289,28 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func show(notice text: String) {
+    /// - Parameter isWarning: the text asks for something (choose a model, stop another window continuing a
+    ///   session), so it stays until dismissed.
+    func show(notice text: String, isWarning: Bool = false) {
         notice = text
+        noticeIsWarning = isWarning
         noticeTask?.cancel()
-        noticeTask = Task {
-            try? await Task.sleep(for: .seconds(20))
-            if !Task.isCancelled { notice = nil }
+        noticeTask = nil
+        if !isWarning {
+            noticeTask = Task {
+                try? await Task.sleep(for: .seconds(20))
+                if !Task.isCancelled { dismissNotice() }
+            }
         }
+        Self.announce(text)
         reload()
+    }
+
+    func dismissNotice() {
+        noticeTask?.cancel()
+        noticeTask = nil
+        notice = nil
+        noticeIsWarning = false
     }
 
     func reload() {
@@ -308,7 +349,7 @@ final class AppModel: ObservableObject {
                 awaitingSignIn.insert(id)
             } else if awaitingSignIn.remove(id) != nil, status.isRunning, status.isSignedIn {
                 let manager = manager
-                run("Loading your sessions into Claude \(status.label)…") {
+                run("Loading your sessions into Claude \(status.label)…", window: id) {
                     try await Task.sleep(for: .seconds(3))  // let Claude finish saving the new sign-in
                     try await manager.finishFirstSignIn(id)
                 }
@@ -321,10 +362,12 @@ final class AppModel: ObservableObject {
     private func reopenIfStartedWithoutProfile(_ pid: pid_t) {
         guard let profile = manager.profileStartedWithoutDataDir(pid: pid) else { return }
         let manager = manager
-        run("Opening Claude \(profile.label) with its own account…") { try await manager.open(profile.id) }
+        run("Opening Claude \(profile.label) with its own account…", window: profile.id) { try await manager.open(profile.id) }
     }
 
-    func syncNow() {
+    /// - Parameter asked: “Share Sessions Now” rather than the timer: a failure is also an alert, which opens the
+    ///   window if it is closed. The timer's failures show in the footer only.
+    func syncNow(asked: Bool = false) {
         guard !isDemo else { return }
         let manager = manager
         Task.detached {
@@ -339,15 +382,19 @@ final class AppModel: ObservableObject {
                 }
             } catch {
                 Log.error("sync", "Sync failed: \(error.localizedDescription)")
-                await MainActor.run { self.syncError = error.localizedDescription }
+                await MainActor.run {
+                    self.syncError = error.localizedDescription
+                    if asked { self.show(error) }
+                }
             }
         }
     }
 
+    /// Does nothing while another action on that window runs: two clicks on Open start it once.
     func open(_ status: ProfileStatus) {
-        guard !isDemo else { return }
+        guard !isDemo, !isBusy(status.id) else { return }
         let manager = manager
-        run(status.isRunning ? nil : "Opening Claude \(status.displayLabel)…") {
+        run(status.isRunning ? nil : "Opening Claude \(status.displayLabel)…", window: status.id) {
             if let id = status.profile?.id { try await manager.open(id) } else { try await manager.openMain() }
         }
     }
@@ -374,7 +421,7 @@ final class AppModel: ObservableObject {
     func remove(_ status: ProfileStatus) {
         guard !isDemo, let id = status.profile?.id else { return }
         let manager = manager
-        run("Removing Claude \(status.label)…") { try await manager.remove(id) }
+        run("Removing Claude \(status.label)…", window: id) { try await manager.remove(id) }
     }
 
     func setCarryPermissionMode(_ enabled: Bool, for id: String) {
@@ -388,15 +435,17 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([manager.paths.launcher(for: profile)])
     }
 
-    private func run(_ message: String?, _ work: @escaping @Sendable () async throws -> Void) {
+    /// - Parameter window: the window the action is on, whose Open button waits for it.
+    private func run(_ message: String?, window: String? = nil, _ work: @escaping @Sendable () async throws -> Void) {
         guard !isDemo else { return }  // demo mode changes nothing on this Mac
-        busyMessage = message
+        let operation = operations.start(message, window: window)
+        if let message { Self.announce(message) }
         Task {
             do {
                 try await work()
                 setupWarning = manager.lastOpenWarning
             } catch { show(error) }
-            busyMessage = nil
+            operations.finish(operation)
             reload()
             if statusWindow != nil { refreshStatus() }
         }

@@ -33,7 +33,7 @@ struct BatonApp: App {
                 Button("Add Subscription…") { model.isAdding = true }.keyboardShortcut("n")
             }
             CommandGroup(after: .newItem) {
-                Button("Share Sessions Now") { model.syncNow() }.keyboardShortcut("r")
+                Button("Share Sessions Now") { model.syncNow(asked: true) }.keyboardShortcut("r")
                 Button("Continue work…") { model.isContinuing = true }
                 Button("Check sessions…") { model.checkSessions() }
             }
@@ -82,7 +82,10 @@ struct MenuBarContent: View {
 
     var body: some View {
         ForEach(model.statuses) { status in
-            Button(menuTitle(for: status)) { model.open(status) }
+            Button(menuTitle(for: status)) {
+                letErrorsOpenTheWindow()
+                model.open(status)
+            }
         }
         Divider()
         Button("Open Baton") {
@@ -94,7 +97,10 @@ struct MenuBarContent: View {
             NSApp.activate()
             model.isAdding = true
         }
-        Button("Share Sessions Now") { model.syncNow() }
+        Button("Share Sessions Now") {
+            letErrorsOpenTheWindow()
+            model.syncNow(asked: true)
+        }
         Button("Continue work…") {
             openWindow(id: "main")
             NSApp.activate()
@@ -107,6 +113,15 @@ struct MenuBarContent: View {
         }
         Divider()
         Button("Quit Baton") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+
+    /// These items work with the window closed: an error from one opens it, so its alert shows (`AppModel.show`).
+    private func letErrorsOpenTheWindow() {
+        let open = openWindow
+        model.presentWindow = {
+            open(id: "main")
+            NSApp.activate()
+        }
     }
 
     private func menuTitle(for status: ProfileStatus) -> String {
