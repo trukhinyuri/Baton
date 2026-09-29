@@ -62,10 +62,24 @@ public struct HandoverAuto: Sendable {
 }
 
 extension HandoverText {
-    /// "ROBIN is at its limit. Moving your work to PAY…"
-    public static func moving(source: String, destination: String) -> String {
-        "\(source) is at its limit. Moving your work to \(destination)…"
+    /// "ROBIN is at its limit. Moving your work to PAY…"; "Moving ROBIN's work to PAY…" for a move by hand from a
+    /// window with room.
+    public static func moving(source: String, destination: String, atLimit: Bool = true) -> String {
+        atLimit ? "\(source) is at its limit. Moving your work to \(destination)…" : "Moving \(source)'s work to \(destination)…"
     }
+
+    /// The Continue sheet's footer: "12 sessions, 3 to resume. 2 stay in ROBIN: Remote Control reaches them there."
+    public static func summary(_ plan: HandoverPlan, labels: (String) -> String) -> String {
+        let count = plan.sessions.count, resume = plan.cut.count - plan.resumeInSource.count
+        var text = count == 0 ? "No sessions to move." : "\(count) session\(count == 1 ? "" : "s")" + (resume > 0 ? ", \(resume) to resume." : ".")
+        let clauses = plan.leftovers.compactMap { clause($0, source: labels(plan.source), destination: labels(plan.destination)) }
+        var parts = Array(clauses.prefix(maxClauses))
+        if clauses.count > maxClauses { parts.append("and more — baton doctor") }
+        if !parts.isEmpty { text += " " + capitalized(parts.joined(separator: "; ")) + "." }
+        return text
+    }
+
+    public static func capitalized(_ text: String) -> String { text.prefix(1).uppercased() + text.dropFirst() }
 }
 
 extension ProfileManager {

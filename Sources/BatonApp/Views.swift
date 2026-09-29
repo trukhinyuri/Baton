@@ -202,6 +202,8 @@ struct ProfileRow: View {
                     .accessibilityLabel("\(status.isRunning ? "Show" : "Open") Claude \(status.displayLabel)")
                 Menu {
                     Button("Status…") { model.showStatus(of: status.id) }
+                    Button("Move work…") { model.continueWork(from: status.id) }
+                        .disabled(!status.isSignedIn)
                     Divider()
                     if let profile = status.profile {
                         Button("Show Launcher in Finder") { model.revealLauncher(status) }
@@ -358,7 +360,7 @@ struct ContentView: View {
         .onAppear { model.letErrorsOpenTheWindow(with: openWindow) }
         .task(id: model.lastSync) { syncFooter.everyoneInStep = await Self.everyoneInStep(model) }
         .sheet(isPresented: $model.isAdding) { AddProfileSheet(model: model) }
-        .sheet(isPresented: $model.isContinuing) { ContinueWorkSheet(model: model) }
+        .sheet(isPresented: $model.isContinuing) { MoveWorkSheet(model: model) }
         .sheet(isPresented: $model.isCheckingSessions) { DiagnosticsSheet(entries: model.diagnostics) }
         .sheet(isPresented: $model.isReporting) { ReportSheet(model: model) }
         .sheet(isPresented: Binding(get: { model.statusWindow != nil }, set: { if !$0 { model.statusWindow = nil } })) {

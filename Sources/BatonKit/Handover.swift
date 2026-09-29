@@ -69,6 +69,11 @@ public struct HandoverPlan: Equatable, Sendable {
     public var leftovers: [HandoverLeftover]
     /// The reset is minutes away: the window continues its own work then, and nothing is handed over.
     public var picksUpItself = false
+    /// Moved by hand (the Continue sheet, `planMove`) rather than because of a limit: it runs even when this limit's
+    /// work was handed over already.
+    public var byHand = false
+    /// The source was at its limit when this was planned; a move by hand may come from a window with room.
+    public var sourceAtLimit = true
 
     /// Sessions that resume in the destination.
     public var cut: [HandoverSession] { sessions.filter(\.cut) }
@@ -352,6 +357,8 @@ public enum HandoverText {
         let resumed = result.resumed.count
         let resumedText = resumed > 0 ? " — \(resumed) session\(resumed == 1 ? "" : "s") resumed" : ""
         let closed = result.sourceClosed ? " and was closed." : "."
+        // A window moved by hand with room left isn't at its limit: only whether it was closed is said.
+        let first = plan.sourceAtLimit ? "\(source) is at its limit\(until)\(closed) " : result.sourceClosed ? "\(source) was closed. " : ""
         let head: String
         switch result.state {
         case .picksUpItself:
@@ -359,13 +366,13 @@ public enum HandoverText {
         case .resetFirst:
             head = "\(source)'s limit reset before \(destination) was free, so your work continues in \(source)\(resumedText)"
         case .waiting:
-            head = "\(source) is at its limit\(until)\(closed) \(destination) restarts when its current work finishes"
+            head = "\(first)\(destination) restarts when its current work finishes"
         case .failed:
             head =
-                "\(source) is at its limit\(until)\(closed) \(destination) didn't open: \(trimmed(result.failure ?? "unknown error")). "
+                "\(first)\(destination) didn't open: \(trimmed(result.failure ?? "unknown error")). "
                 + "Your sessions are there when you open it"
         case .done:
-            head = "\(source) is at its limit\(until)\(closed) Your work continues in \(destination)\(resumedText)"
+            head = "\(first)Your work continues in \(destination)\(resumedText)"
         }
         let clauses = result.state == .picksUpItself ? [] : plan.leftovers.compactMap { clause($0, source: source, destination: destination) }
         var parts = Array(clauses.prefix(maxClauses))
@@ -449,19 +456,26 @@ extension ProfileManager {
         try planHandover(from: source, to: destination, statuses: statuses(), now: now)
     }
 
-    func planHandover(from source: String, to destination: String?, statuses: [ProfileStatus], now: Date) throws -> HandoverPlan {
+    /// The same plan for moving `source`'s work by hand, from the Continue sheet: `source` need not be at its limit, and
+    /// a limit whose work was handed over already, or that resets within minutes, doesn't stop it. Changes nothing.
+    public func planMove(from source: String, to destination: String? = nil, now: Date = Date()) throws -> HandoverPlan {
+        try planHandover(from: source, to: destination, statuses: statuses(), now: now, byHand: true)
+    }
+
+    func planHandover(from source: String, to destination: String?, statuses: [ProfileStatus], now: Date, byHand: Bool = false) throws -> HandoverPlan {
         let label = displayLabel(of: source)
         guard let status = statuses.first(where: { $0.id == source }) else { throw ProfileError.notFound(source) }
         guard let sourceAccount = status.accountID else { throw ProfileError.notSignedIn(label) }
-        guard DestinationRanking.isAtLimit(status, now: now) else { throw HandoverError.notAtLimit(label) }
-        let resetsAt = status.limits.binding(now: now)?.reset?.at
+        let atLimit = DestinationRanking.isAtLimit(status, now: now)
+        guard atLimit || byHand else { throw HandoverError.notAtLimit(label) }
+        let resetsAt = atLimit ? status.limits.binding(now: now)?.reset?.at : nil
         let sourceActivity = activity(of: source)
-        if let resetsAt, resetsAt.timeIntervalSince(now) <= AutoResumeOffer.within {
+        if !byHand, let resetsAt, resetsAt.timeIntervalSince(now) <= AutoResumeOffer.within {
             return HandoverPlan(
                 source: source, destination: source, resetsAt: resetsAt, sessions: [], sourceActivity: sourceActivity,
                 destinationActivity: sourceActivity, seeding: .seed, leftovers: [], picksUpItself: true)
         }
-        guard !HandoverLog(paths: paths).handled(source: source, resetsAt: resetsAt, now: now) else {
+        guard byHand || !HandoverLog(paths: paths).handled(source: source, resetsAt: resetsAt, now: now) else {
             throw HandoverError.alreadyHandedOver(label)
         }
 
@@ -518,7 +532,8 @@ extension ProfileManager {
         let seeding = autoResume.seeding(window: target, account: destinationAccount, source: (source, sourceAccount), now: now)
         return HandoverPlan(
             source: source, destination: target, resetsAt: resetsAt, sessions: sessions, sourceActivity: sourceActivity,
-            destinationActivity: activity(of: target), seeding: seeding, leftovers: leftovers)
+            destinationActivity: activity(of: target), seeding: seeding, leftovers: leftovers, byHand: byHand,
+            sourceAtLimit: atLimit)
     }
 
     /// A session of the source, and whether Remote Control keeps it there.
@@ -623,8 +638,13 @@ extension ProfileManager {
             source: plan.source, resetsAt: plan.resetsAt, destination: plan.destination,
             startedAt: Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.down)), state: "starting",
             sessions: plan.sessions.count, seeding: plan.seeding, cards: plan.sessions.map(\.card))
-        // One handover per episode, even when the app and the CLI start one at the same moment.
-        guard try log.claim(entry, now: now) else { throw HandoverError.alreadyHandedOver(displayLabel(of: plan.source)) }
+        // One handover per episode, even when the app and the CLI start one at the same moment. A move by hand is
+        // asked for, so it runs anyway, and still counts as this limit's handover.
+        if plan.byHand {
+            try log.save(entry, now: now)
+        } else {
+            guard try log.claim(entry, now: now) else { throw HandoverError.alreadyHandedOver(displayLabel(of: plan.source)) }
+        }
 
         // 1. The source: closed when nothing is live there, so every session moves as itself; otherwise its live
         // sessions continue as copies and its turn-offs wait until it closes. A session open in a `claude` Baton

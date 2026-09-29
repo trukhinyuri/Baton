@@ -49,6 +49,5 @@ capture() { # capture <file name> [sheet]: 1 (Add Subscription), continue (Conti
 capture main-window.png
 capture add-subscription.png 1
 capture continue-work.png continue
-capture continue-wait.png wait
 rmdir "$WORK" 2>/dev/null || true
 exit "$failed"
