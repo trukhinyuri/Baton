@@ -69,17 +69,33 @@ public struct CloudMoveLock: Sendable {
         ((try settings())["permissions"] as? [String: Any])?["deny"] as? [String] ?? []
     }
 
+    /// Changes only the `deny` list and leaves every other byte of the file as it was. A linked `settings.json` stays
+    /// a link: the file it leads to is backed up and written (`LocalOnly.replace`).
     private func write(_ deny: [String]) throws {
-        var object = try settings()
-        var permissions = object["permissions"] as? [String: Any] ?? [:]
-        permissions["deny"] = deny
-        object["permissions"] = permissions
-        if FileManager.default.fileExists(atPath: settingsFile.path) {
-            _ = try Backup(paths: paths, now: Date()).save(settingsFile, everyTime: true)
+        let target = LocalOnly.writeTarget(settingsFile)
+        let original = FileManager.default.fileExists(atPath: target.path) ? try Data(contentsOf: target) : nil
+        var patch = try JSONPatch(original ?? Data("{}".utf8))
+        let list = String(decoding: try JSONSerialization.data(withJSONObject: deny, options: [.withoutEscapingSlashes]), as: UTF8.self)
+        let top = try patch.top()
+        if let permissions = top.members.last(where: { $0.key == "permissions" }) {
+            guard patch.bytes[permissions.valueStart] == UInt8(ascii: "{") else {
+                throw LocalStorageError.corrupt("permissions in \(settingsFile.lastPathComponent) must be a JSON object; it was left as it is")
+            }
+            let object = try patch.object(at: permissions.valueStart)
+            if let member = object.members.last(where: { $0.key == "deny" }) {
+                patch.replace(member, with: list)
+            } else {
+                patch.insert(key: "deny", value: list, in: object)
+            }
+        } else {
+            patch.insert(key: "permissions", value: "{\"deny\": \(list)}", in: top)
         }
-        try FileManager.default.createDirectory(at: settingsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        try data.write(to: settingsFile, options: .atomic)
+        if original != nil { _ = try Backup(paths: paths, now: Date()).save(target, everyTime: true) }
+        try LocalOnly.replace(settingsFile, with: Data(patch.bytes))
+        guard (try? self.deny()) == deny else {
+            if let original { try LocalOnly.replace(settingsFile, with: original) }
+            throw LocalStorageError.corrupt("\(settingsFile.lastPathComponent) didn't read back as written; the earlier file was put back")
+        }
     }
 
     // MARK: - Provenance record

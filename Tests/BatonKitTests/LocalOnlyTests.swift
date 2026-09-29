@@ -241,4 +241,40 @@ struct LocalOnlyTests {
         #expect(throws: (any Error).self) { try closed(box).apply(window: "work") }
         #expect(box.read(box.desktopConfig(box.work)) == #"{"preferences": {"ccRemoteControlDefaultEnabled": tru"#)
     }
+
+    /// A config linked into place from a dotfiles folder stays a link: the file it leads to gets the change and keeps
+    /// its permissions, and the backup holds its content, not another link to it.
+    @Test func aLinkedConfigStaysALink() throws {
+        let box = try Sandbox()
+        try box.installClaude()
+        let fm = FileManager.default
+        let dotfiles = box.root.appending(path: "dotfiles/claude_desktop_config.json")
+        try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try box.write(Self.config, to: dotfiles)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dotfiles.path)
+        try fm.createSymbolicLink(at: box.desktopConfig(box.work), withDestinationURL: dotfiles)
+        // The main window's, by a relative link.
+        let shared = box.main.deletingLastPathComponent().appending(path: "Shared/config.json")
+        try fm.createDirectory(at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try box.write(#"{"preferences":{"keepAwakeEnabled":true}}"#, to: shared)
+        try fm.createSymbolicLink(atPath: box.desktopConfig(box.main).path, withDestinationPath: "../Shared/config.json")
+
+        #expect(try closed(box).apply(window: "work") == .on)
+        #expect(try closed(box).apply(window: "main") == .on)
+
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.work).path) == dotfiles.path, "still a link")
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.main).path) == "../Shared/config.json")
+        #expect(try preferences(dotfiles)["ccRemoteControlDefaultEnabled"] as? Bool == false, "the linked file got the change")
+        #expect(try preferences(shared)["ccRemoteControlDefaultEnabled"] as? Bool == false)
+        #expect(try fm.attributesOfItem(atPath: dotfiles.path)[.posixPermissions] as? Int == 0o600, "its own permissions, not the link's")
+        let backups = try #require(fm.enumerator(at: box.paths.backupsDir, includingPropertiesForKeys: nil)?.allObjects as? [URL])
+        let saved = backups.filter { $0.lastPathComponent == dotfiles.lastPathComponent }
+        #expect(saved.count == 1)
+        #expect(saved.allSatisfy { (try? fm.destinationOfSymbolicLink(atPath: $0.path)) == nil }, "a copy, not a link")
+        #expect(saved.first.flatMap(box.read) == Self.config, "the content before the change")
+
+        #expect(try closed(box).disable(window: "work") == .off)
+        #expect(box.read(dotfiles) == Self.config, "put back in the linked file")
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.work).path) == dotfiles.path)
+    }
 }

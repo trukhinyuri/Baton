@@ -241,7 +241,8 @@ public struct LocalOnly: Sendable {
         _ patch: JSONPatch, over original: Data?, to url: URL, window: String, recording own: WindowState,
         state: inout State, check: (JSONPatch) throws -> Bool
     ) throws {
-        if original != nil { _ = try Backup(paths: paths, now: Date()).save(url, everyTime: true) }
+        // The file itself, not a link to it: a link alone would follow later edits instead of keeping this content.
+        if original != nil { _ = try Backup(paths: paths, now: Date()).save(Self.writeTarget(url), everyTime: true) }
         // Record the values being replaced before replacing them: a crash after this still knows what to put back.
         let previous = state.windows[window]
         var recorded = state
@@ -260,12 +261,27 @@ public struct LocalOnly: Sendable {
         try saveState(state)
     }
 
+    /// Writes `data` over the file at `url` in one step, keeping that file's permissions (0600 for a new file). A link
+    /// stays a link: the file it leads to is written, so settings kept elsewhere, such as in a dotfiles folder linked
+    /// into place, keep receiving the change, and the link's own permissions are never copied onto them.
     static func replace(_ url: URL, with data: Data) throws {
         let fm = FileManager.default
-        let permissions = (try? fm.attributesOfItem(atPath: url.path)[.posixPermissions]) ?? NSNumber(value: 0o600)
-        try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
-        try fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+        let target = writeTarget(url)
+        let permissions = (try? fm.attributesOfItem(atPath: target.path)[.posixPermissions]) ?? NSNumber(value: 0o600)
+        try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: target, options: .atomic)
+        try fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: target.path)
+    }
+
+    /// The file a write to `url` changes: `url` itself, or the file a link at `url` leads to, link by link.
+    static func writeTarget(_ url: URL) -> URL {
+        var target = url.standardizedFileURL
+        // A loop of links stops here and then fails to be written, as it would without Baton.
+        for _ in 0..<32 {
+            guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: target.path) else { break }
+            target = URL(fileURLWithPath: destination, relativeTo: target.deletingLastPathComponent()).absoluteURL.standardizedFileURL
+        }
+        return target
     }
 
     private func running(_ window: String) -> Bool {
@@ -444,7 +460,7 @@ struct JSONPatch {
         insert(key: "preferences", value: "{\(Self.quoted(key))\(separator)\(value)}", in: top)
     }
 
-    private mutating func insert(key: String, value: String, in object: Object) {
+    mutating func insert(key: String, value: String, in object: Object) {
         if let first = object.members.first {
             let lead = Array(bytes[(object.open + 1)..<first.keyStart])
             let separator = Array(bytes[first.keyEnd..<first.valueStart])

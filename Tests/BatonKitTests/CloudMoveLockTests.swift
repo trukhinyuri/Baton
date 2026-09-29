@@ -74,6 +74,51 @@ struct CloudMoveLockTests {
     }
 }
 
+extension CloudMoveLockTests {
+    /// A `settings.json` linked into place from a dotfiles folder stays a link: the file it leads to gets only the
+    /// deny entry, byte for byte around it, keeps its permissions, and is backed up as content.
+    @Test func aLinkedSettingsFileStaysALinkAndKeepsItsFormat() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let dotfiles = box.root.appending(path: "dotfiles/claude-settings.json")
+        try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let before = """
+            {
+              "model": "opus",
+              "permissions": {
+                "allow": ["Read"]
+              },
+              "env": {"B": "1", "A": "2"}
+            }
+
+            """
+        try box.write(before, to: dotfiles)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dotfiles.path)
+        try fm.createDirectory(at: box.paths.claudeDir, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: box.paths.claudeSettingsFile, withDestinationURL: dotfiles)
+
+        let lock = box.paths.cloudMoveLock
+        #expect(try lock.setEnabled(true) == .on)
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.paths.claudeSettingsFile.path) == dotfiles.path, "still a link")
+        let on = before.replacingOccurrences(of: #""allow": ["Read"]"#, with: #""deny": ["\#(CloudMoveLock.tool)"],\#n    "allow": ["Read"]"#)
+        #expect(box.read(dotfiles) == on, "only the deny list is added, and key order and spacing stay")
+        #expect(try fm.attributesOfItem(atPath: dotfiles.path)[.posixPermissions] as? Int == 0o600)
+        let backups = try #require(fm.enumerator(at: box.paths.backupsDir, includingPropertiesForKeys: nil)?.allObjects as? [URL])
+        let saved = backups.filter { $0.lastPathComponent == dotfiles.lastPathComponent }
+        #expect(saved.count == 1 && (try? fm.destinationOfSymbolicLink(atPath: saved[0].path)) == nil, "a copy, not a link")
+        #expect(saved.first.flatMap(box.read) == before)
+
+        #expect(try lock.setEnabled(false) == .off)
+        #expect(box.read(dotfiles) == on.replacingOccurrences(of: #"["\#(CloudMoveLock.tool)"]"#, with: "[]"))
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.paths.claudeSettingsFile.path) == dotfiles.path)
+
+        // With no permissions object at all, one is added with only the entry.
+        try box.write(#"{"model":"opus"}"#, to: dotfiles)
+        #expect(try lock.setEnabled(true) == .on)
+        #expect(box.read(dotfiles) == #"{"permissions":{"deny": ["\#(CloudMoveLock.tool)"]},"model":"opus"}"#)
+    }
+}
+
 extension Paths {
     fileprivate var cloudMoveLock: CloudMoveLock { CloudMoveLock(paths: self) }
 }
