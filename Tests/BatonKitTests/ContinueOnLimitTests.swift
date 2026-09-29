@@ -478,8 +478,8 @@ struct FolderRuleTests {
             FolderRule(folder: "/work/client", accounts: ["b@x.com"]),
             FolderRule(folder: "/other", accounts: ["c@x.com"]),
         ]
-        #expect(FolderRules.rule(for: "/work/client/app", in: rules)?.folder == "/work/client")
-        #expect(FolderRules.rule(for: "/workshop", in: rules) == nil, "a folder with the same prefix isn't inside it")
+        #expect(FolderRules.rules(for: "/work/client/app", in: rules).map(\.folder) == ["/work/client"])
+        #expect(FolderRules.rules(for: "/workshop", in: rules).isEmpty, "a folder with the same prefix isn't inside it")
         #expect(FolderRules.allowedAccounts(for: ["/work/app"], in: rules)?.accounts == ["a@x.com", "b@x.com"])
         #expect(FolderRules.allowedAccounts(for: ["/work/app", "/work/client"], in: rules)?.accounts == ["b@x.com"])
         #expect(FolderRules.allowedAccounts(for: ["/work", "/other"], in: rules)?.accounts == [])

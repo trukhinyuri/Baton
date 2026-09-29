@@ -189,9 +189,9 @@ struct SessionSyncRulesTests {
         #expect(onTmp.covers(resolved + "/gone"))
     }
 
-    /// Work reached through a link from one ruled folder into another keeps the rule of the folder it is in: a link
-    /// in a personal folder never lets a client's work continue in the personal account.
-    @Test func aLinkIntoAnotherRuledFolderKeepsThatFoldersRule() throws {
+    /// Work reached through a link from one ruled folder into another takes both rules, so a link in a personal folder
+    /// never lets a client's work continue in the personal account, nor a link in the client's folder the other way.
+    @Test func aLinkIntoAnotherRuledFolderTakesBothRules() throws {
         let box = try Sandbox()
         let fm = FileManager.default
         let acme = box.root.appending(path: "Clients/acme/src", directoryHint: .isDirectory)
@@ -205,9 +205,35 @@ struct SessionSyncRulesTests {
         ]
 
         let linked = notes.appending(path: "acme-link/src").path
-        #expect(FolderRules.rule(for: linked, in: rules)?.accounts == ["client@corp.example"])
-        #expect(FolderRules.allowedAccounts(for: [linked], in: rules)?.accounts == ["client@corp.example"])
-        #expect(FolderRules.rule(for: notes.appending(path: "acme-link/gone").path, in: rules)?.accounts == ["client@corp.example"])
-        #expect(FolderRules.rule(for: notes.appending(path: "diary").path, in: rules)?.accounts == ["me@home.example"])
+        #expect(Set(FolderRules.rules(for: linked, in: rules).flatMap(\.accounts)) == ["client@corp.example", "me@home.example"])
+        #expect(FolderRules.allowedAccounts(for: [linked], in: rules)?.accounts == [], "no account both rules allow")
+        #expect(FolderRules.allowedAccounts(for: [notes.appending(path: "acme-link/gone").path], in: rules)?.accounts == [])
+        #expect(FolderRules.rules(for: notes.appending(path: "diary").path, in: rules).map(\.accounts) == [["me@home.example"]])
+    }
+
+    /// Where two rules share an account, a link between their folders leaves work with the accounts both allow, whichever
+    /// way the link goes: from a strict folder into a looser one, or from a looser folder into a strict one.
+    @Test func theStricterRuleWinsAcrossALinkEitherWay() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let work = box.root.appending(path: "Work", directoryHint: .isDirectory)
+        let clientX = work.appending(path: "ClientX", directoryHint: .isDirectory)
+        try fm.createDirectory(at: work.appending(path: "shared/repo"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: clientX.appending(path: "own/repo"), withIntermediateDirectories: true)
+        let rules = [
+            FolderRule(folder: work.path, accounts: ["work@corp.example", "client@corp.example"]),
+            FolderRule(folder: clientX.path, accounts: ["client@corp.example"]),
+        ]
+        // From the strict folder into the looser one.
+        try fm.createSymbolicLink(at: clientX.appending(path: "repo"), withDestinationURL: work.appending(path: "shared/repo"))
+        // From the looser folder into the strict one.
+        try fm.createSymbolicLink(at: work.appending(path: "client-repo"), withDestinationURL: clientX.appending(path: "own/repo"))
+
+        #expect(FolderRules.allowedAccounts(for: [clientX.appending(path: "repo").path], in: rules)?.accounts == ["client@corp.example"])
+        #expect(FolderRules.allowedAccounts(for: [clientX.appending(path: "repo/gone").path], in: rules)?.accounts == ["client@corp.example"])
+        #expect(FolderRules.allowedAccounts(for: [work.appending(path: "client-repo").path], in: rules)?.accounts == ["client@corp.example"])
+        #expect(
+            FolderRules.allowedAccounts(for: [work.appending(path: "shared/repo").path], in: rules)?.accounts == ["client@corp.example", "work@corp.example"],
+            "no link: the looser rule alone")
     }
 }
