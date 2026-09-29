@@ -17,6 +17,8 @@ final class ContinueWorkForm: ObservableObject {
     @Published var offer: AutoResumeOffer?
     /// Whether the offer came from “Continue All”.
     @Published var offerForAll = false
+    /// The sheet has closed while a Continue was still running, so its result goes to the window instead.
+    @Published var isGone = false
 }
 
 struct ContinueWorkSheet: View {
@@ -27,16 +29,12 @@ struct ContinueWorkSheet: View {
     /// How far back “Continue All” looks for sessions in the selected session's folder.
     static let folderWindow: TimeInterval = 24 * 3600
 
-    private var filtered: [Conversation] {
-        let query = form.search.trimmingCharacters(in: .whitespaces)
-        let all = model.conversations
-        guard !query.isEmpty else { return Array(all.prefix(200)) }
-        return all.filter { c in
-            c.title.localizedCaseInsensitiveContains(query) || c.folders.contains { $0.localizedCaseInsensitiveContains(query) }
-        }
-    }
+    private var listing: (shown: [Conversation], matching: Int) { ConversationIndex.listed(model.conversations, query: form.search) }
 
-    private var selected: Conversation? { model.conversations.first { $0.id == form.selection } }
+    private var filtered: [Conversation] { listing.shown }
+
+    /// Only a listed conversation: one the search has hidden is never what Continue acts on.
+    private var selected: Conversation? { filtered.first { $0.id == form.selection } }
 
     /// The window the selected conversation belongs to or last ran in: never offered for it.
     private var source: String? { selected.flatMap { $0.ownerID ?? $0.runningIn } }
@@ -97,8 +95,9 @@ struct ContinueWorkSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Continue work").font(.title2.bold())
+                .accessibilityAddTraits(.isHeader)
             Text("Pick a session and the window that runs the next leg. That window opens it for you; nothing is sent on your behalf.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(Color.secondaryText)
 
             TextField("Search conversations", text: $form.search)
                 .textFieldStyle(.roundedBorder)
@@ -117,8 +116,11 @@ struct ContinueWorkSheet: View {
                     ProgressView("Looking for conversations…")
                 } else if filtered.isEmpty {
                     Text(form.search.isEmpty ? "Nothing to hand off yet: there are no local conversations." : "Nothing matches “\(form.search)”.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.secondaryText)
                 }
+            }
+            if let note = ConversationIndex.listNote(shown: listing.shown.count, matching: listing.matching) {
+                Text(note).font(.caption).foregroundStyle(Color.secondaryText)
             }
 
             HStack(spacing: 8) {
@@ -146,18 +148,23 @@ struct ContinueWorkSheet: View {
                 }
             }
 
-            if let selected {
-                Text(explanation(selected)).font(.callout).foregroundStyle(.secondary)
+            if selected != nil, destinations.isEmpty, ruleNote == nil {
+                // Nothing to choose, and no folder rule to blame: say what is missing.
+                Label(DestinationRanking.noDestinationReason(model.statuses, source: source), systemImage: "info.circle")
+                    .font(.callout).foregroundStyle(Color.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let selected {
+                Text(explanation(selected)).font(.callout).foregroundStyle(Color.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 if let note = form.plan?.model, form.plan?.conversation.id == selected.id, form.plan?.destination == form.destination {
                     Label(note.message(destination: destinationLabel), systemImage: note.isWarning ? "exclamationmark.triangle" : "cpu")
-                        .font(.callout).foregroundStyle(note.isWarning ? Color.orange : Color.secondary)
+                        .font(.callout).foregroundStyle(note.isWarning ? Color.warningText : Color.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let notes = form.plan?.autoResume, form.plan?.conversation.id == selected.id, form.plan?.destination == form.destination {
                     ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
                         Label(note.message(), systemImage: note.isWarning ? "exclamationmark.triangle" : "arrow.uturn.forward")
-                            .font(.callout).foregroundStyle(note.isWarning ? Color.orange : Color.secondary)
+                            .font(.callout).foregroundStyle(note.isWarning ? Color.warningText : Color.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -166,7 +173,7 @@ struct ContinueWorkSheet: View {
                         "This task was working less than a minute ago; the attached history may miss its last steps.",
                         systemImage: "exclamationmark.triangle"
                     )
-                    .font(.callout).foregroundStyle(.orange)
+                    .font(.callout).foregroundStyle(Color.warningText)
                 } else if selected.kind != .cowork && !forks && selected.mayStillWrite() {
                     HStack(spacing: 8) {
                         Label(
@@ -175,7 +182,7 @@ struct ContinueWorkSheet: View {
                                 + ", so its window may still write to it. Close it there first, so two windows don't write to one session, or continue as a copy.",
                             systemImage: "exclamationmark.triangle"
                         )
-                        .font(.callout).foregroundStyle(.orange)
+                        .font(.callout).foregroundStyle(Color.warningText)
                         .fixedSize(horizontal: false, vertical: true)
                         Toggle(
                             "I closed it",
@@ -187,12 +194,12 @@ struct ContinueWorkSheet: View {
                     }
                 }
             }
-            if let ruleNote { Text(ruleNote).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+            if let ruleNote { Text(ruleNote).font(.callout).foregroundStyle(Color.warningText).fixedSize(horizontal: false, vertical: true) }
             if let problem = form.problem { Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
 
             if let folder, !folderBatch.isEmpty {
                 HStack(spacing: 8) {
-                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    Image(systemName: "folder").foregroundStyle(.secondary).accessibilityHidden(true)
                     Text(
                         "\(folderBatch.count) in \((folder as NSString).lastPathComponent) from the last day"
                             + (folderSelection.leftOut > 0 ? ", the most recent; \(folderSelection.leftOut) older left out" : "")
@@ -218,8 +225,15 @@ struct ContinueWorkSheet: View {
 
             Divider()
             HStack(spacing: 8) {
+                if form.working {
+                    // Up to `importWait` while the window imports it: Cancel waits too, since the handover goes on anyway.
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for Claude \(destinationLabel.isEmpty ? "…" : destinationLabel) to open it…")
+                        .font(.callout).foregroundStyle(Color.secondaryText)
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    .disabled(form.working)
                 Button(primaryTitle) { go() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
@@ -230,11 +244,14 @@ struct ContinueWorkSheet: View {
         }
         .padding(22)
         .frame(minWidth: 700, idealWidth: 780, minHeight: 540, idealHeight: 590)
+        .interactiveDismissDisabled(form.working)
         .onAppear {
             model.loadConversations()
             chooseDefaults()
             refreshPlan()
         }
+        .onDisappear { form.isGone = true }
+        .onChange(of: form.search) { form.selection = ConversationIndex.selection(form.selection, in: filtered) }
         .onChange(of: model.conversations) {
             chooseDefaults(); refreshPlan()
         }
@@ -287,7 +304,7 @@ struct ContinueWorkSheet: View {
     }
 
     private func chooseDefaults() {
-        if form.selection == nil || selected == nil { form.selection = model.preselectedConversation ?? model.conversations.first?.id }
+        if selected == nil { form.selection = ConversationIndex.selection(model.preselectedConversation, in: filtered) }
         if form.destination.isEmpty || !destinations.contains(where: { $0.id == form.destination }) {
             form.destination = model.bestDestination(excluding: source, accounts: allowed?.accounts) ?? ""
         }
@@ -329,6 +346,16 @@ struct ContinueWorkSheet: View {
         }
     }
 
+    /// A problem in the sheet, read out by VoiceOver; in the window if the sheet has closed meanwhile.
+    private func report(_ problem: String) {
+        if form.isGone {
+            model.show(notice: problem, isWarning: true)
+            return
+        }
+        form.problem = problem
+        AppModel.announce(problem)
+    }
+
     private func go(now: Bool = false) {
         guard let conversation = selected, !needsStop(conversation) else { return }
         form.working = true
@@ -349,32 +376,25 @@ struct ContinueWorkSheet: View {
                 switch try await manager.continueConversation(conversation, in: target, mode: mode, anyway: anyway) {
                 case .openedSession(let plan):
                     guard plan.opened != false else {
-                        form.problem =
+                        report(
                             "“\(conversation.title)” did not show up in Claude \(label) within \(Int(manager.importWait)) s. Look for it in its sidebar, or try again with the window open."
+                        )
                         form.working = false
                         return
                     }
-                    var text =
+                    let result =
                         plan.forks
                         ? "Baton passed to Claude \(label): a copy of “\(conversation.title)” is open there."
                         : "Baton passed to Claude \(label): “\(conversation.title)” is open there."
-                    // The footer shows two lines: another window continuing it by itself goes first, then a model warning,
-                    // then what Baton changed in another window, before the light touch, never after it.
-                    if let note = plan.autoResume.first(where: \.isWarning) {
-                        text += " " + note.message()
-                    } else if let note = plan.model, note.isWarning {
-                        text += " " + note.message(destination: label)
-                    } else if let note = plan.autoResume.first {
-                        text += " " + note.message()
-                    }
-                    model.show(notice: text)
+                    let notice = ContinueNotice.compose(result: result, plans: [plan], label: label)
+                    model.show(notice: notice.text, isWarning: notice.isWarning)
                 case .startedCoworkTask:
                     model.show(notice: "A new Cowork task with the history attached is waiting in Claude \(label). Review it and send it there.")
                 }
                 model.preselectedConversation = nil
                 dismiss()
             } catch {
-                form.problem = error.localizedDescription
+                report(error.localizedDescription)
             }
             form.working = false
         }
@@ -409,28 +429,23 @@ struct ContinueWorkSheet: View {
                 let plans = try await manager.continueAll(batch, in: target, mode: mode, newSessionIn: newSession)
                 let missing = plans.filter { $0.opened == false }
                 guard missing.isEmpty else {
-                    form.problem =
+                    report(
                         "\(missing.count) of \(plans.count) did not show up in Claude \(label) within \(Int(manager.importWait)) s: "
-                        + missing.map { "“\($0.conversation.title)”" }.joined(separator: ", ")
-                        + ". The others opened; continue these again with the window open."
+                            + missing.map { "“\($0.conversation.title)”" }.joined(separator: ", ")
+                            + ". The others opened; continue these again with the window open.")
                     form.working = false
                     model.loadConversations()
                     return
                 }
-                var text = ConversationIndex.passedNotice(label: label, opened: plans.count, copies: plans.filter(\.forks).count, newSession: newSession != nil)
-                if let waiting { text += " Left out \(waiting.names): " + waiting.message() }
-                if let note = plans.flatMap(\.autoResume).first(where: \.isWarning) {
-                    text += " " + note.message()
-                } else if let warning = plans.compactMap(\.model).first(where: \.isWarning) {
-                    text += " " + warning.message(destination: label)
-                } else if let note = plans.flatMap(\.autoResume).first {
-                    text += " " + note.message()
-                }
-                model.show(notice: text)
+                let notice = ContinueNotice.compose(
+                    result: ConversationIndex.passedNotice(
+                        label: label, opened: plans.count, copies: plans.filter(\.forks).count, newSession: newSession != nil),
+                    leftOut: waiting.map { "Left out \($0.names): " + $0.message() }, plans: plans, label: label)
+                model.show(notice: notice.text, isWarning: notice.isWarning)
                 model.preselectedConversation = nil
                 dismiss()
             } catch {
-                form.problem = error.localizedDescription
+                report(error.localizedDescription)
             }
             form.working = false
         }
@@ -464,16 +479,18 @@ struct ConversationRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: icon).foregroundStyle(.secondary).frame(minWidth: 18).accessibilityHidden(true)
+            // A fixed column, so Code and Cowork titles start at the same place.
+            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 20).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(conversation.title).lineLimit(1).truncationMode(.tail)
-                Text(details).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text(details).font(.caption).foregroundStyle(Color.secondaryText).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
             Text(conversation.lastActivity, format: .relative(presentation: .named))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Color.secondaryText)
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -483,17 +500,18 @@ struct DiagnosticsSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Check sessions").font(.title2.bold())
+                .accessibilityAddTraits(.isHeader)
             Text(
-                "Local inventory only. Cloud Projects stay in their account, and Cowork history stays in its original account or local profile. A copied Cowork card does not prove its history can open. This check does not verify cloud access or change settings."
+                "Local inventory only. Cloud Projects stay in their account, and Cowork history stays in its original account or in its subscription's local data. A copied Cowork card does not prove its history can open. This check does not verify cloud access or change settings."
             )
-            .font(.callout).foregroundStyle(.secondary)
+            .font(.callout).foregroundStyle(Color.secondaryText)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(entries) { entry in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(entry.label).font(.headline)
+                            Text(entry.label).font(.headline).accessibilityAddTraits(.isHeader)
                             Text("\(entry.localCode) local Code · \(entry.localCowork) Cowork cards")
-                            ForEach(entry.issues, id: \.self) { Text($0).foregroundStyle(.orange) }
+                            ForEach(entry.issues, id: \.self) { Text($0).foregroundStyle(Color.warningText) }
                             ForEach(entry.missingFolders, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
                         }
                     }
