@@ -36,6 +36,16 @@ struct ProfileTests {
         #expect(!Profile.isValidEmail("a b@c.com"))
     }
 
+    /// An account at an internationalized domain can be added, in its Unicode or its `xn--` form.
+    @Test func acceptsInternationalizedDomains() {
+        for email in ["user@пример.рф", "user@例子.中国", "user@xn--e1afmkfd.xn--p1ai", "user@mail.example.co.uk"] {
+            #expect(Profile.isValidEmail(email), "\(email)")
+        }
+        for email in ["user@example.c", "user@example.12", "user@example.-", "user@@example.com", "user@example"] {
+            #expect(!Profile.isValidEmail(email), "\(email)")
+        }
+    }
+
     @Test func registryRoundTrips() throws {
         let box = try Sandbox()
         let registry = ProfileRegistry(paths: box.paths)
