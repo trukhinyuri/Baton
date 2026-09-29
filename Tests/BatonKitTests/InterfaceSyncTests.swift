@@ -72,7 +72,7 @@ struct InterfaceSyncTests {
         let work = try items(box.work)
         let state = try sidebarState(work)
         #expect(state["sidebarWidth"] as? Int == 242)
-        #expect(state["pinnedOrder"] as? [String] == ["code:local_1"])
+        #expect(state["pinnedOrder"] as? [String] == [], "pins stay the profile's own")
         #expect(state["navPinnedIds"] is NSNull)
         #expect(state["collapsedGroups"] as? [String] == [])
         #expect(state["lastSidebarScopeKey"] as? String == Self.workScope, "the profile's own account stays its own")
@@ -114,7 +114,7 @@ struct InterfaceSyncTests {
 
         var state = try sidebarState(try items(box.work))
         #expect(state["sidebarWidth"] as? Int == 300)
-        #expect(state["pinnedOrder"] as? [String] == ["code:local_2"])
+        #expect(state["pinnedOrder"] as? [String] == ["code:local_1"], "pins stay the profile's own")
         #expect(try items(box.work)[unread] == #"{"state":{"unreadIds":[]}}"#)
 
         // Once the main app changes the same setting too, the main app wins again.
@@ -322,20 +322,6 @@ struct InterfaceSyncTests {
         #expect(try targetPins.read()?.records[stars]?.string == ownPins)
     }
 
-    @Test(arguments: ["{corrupt", #"{"version":3,"scopes":{}}"#])
-    func invalidNativeOwnershipStateRefusesInterfaceWrites(state: String) throws {
-        let box = try sandbox()
-        let key = "LSS-persisted.starred-local-code-sessions"
-        let own = #"{"value":["local_2"]}"#
-        try put(box.main, [key: #"{"value":["local_1"]}"#])
-        try put(box.work, [key: own])
-        try box.write(state, to: box.paths.stateDir.appending(path: "code-native-session-scopes.json"))
-        let sync = InterfaceSync(paths: box.paths)
-        #expect(throws: (any Error).self) { try sync.run(into: box.work, profileID: "work") }
-        #expect(try items(box.work)[key] == own)
-        #expect(!box.exists(sync.stateFile(for: "work")))
-    }
-
     // MARK: IndexedDB
 
     /// The serialized form of a one-byte string as Chromium stores it: Blink's header with its trailer offset,
@@ -389,115 +375,62 @@ struct InterfaceSyncTests {
         return store
     }
 
-    @Test func onlyLocalStarredSessionsFollowTheMainApp() throws {
+    /// Pins follow moved work (`SidebarLayout`), not the main app: main's pins and pin order never reach a profile,
+    /// in Local Storage, the settings or IndexedDB, and baselines older releases recorded for them are dropped.
+    @Test func pinsAreNoLongerCopiedFromMain() throws {
         let box = try sandbox()
-        let starred = "store:pin-state:dframe-starred-code", groups = "store:pin-state:dframe-session-groups"
-        let mainStarred = #"{"state":{"starredIds":["local_1"]},"version":0}"#
-        let mainGroups = #"{"state":{"expandedIds":["routines"]},"version":0}"#
-        try makePinStore(box.main, records: [starred: (7, mainStarred), groups: (8, mainGroups)], databaseID: 5)
-        let work = try makePinStore(
-            box.work,
-            records: [
-                groups: (2, #"{"state":{"expandedIds":[]},"version":0}"#),
-                "unrelated": (3, "own"),
-            ], databaseID: 2)
-        let sync = InterfaceSync(paths: box.paths)
-
-        #expect(try sync.run(into: box.work, profileID: "work") == 1)
-
-        let snapshot = try #require(try work.read())
-        #expect(snapshot.records[starred]?.string == mainStarred)
-        #expect(snapshot.records[groups]?.string == #"{"state":{"expandedIds":[]},"version":0}"#)
-        #expect(snapshot.records["unrelated"]?.string == "own")
-        let version = try #require(snapshot.records[starred]?.version)
-        #expect(version > 3 && snapshot.lastVersion >= version, "new records get versions the store hasn't used")
-        let exists = IDBKey.prefix(2, 1, IDBKey.existsIndex) + IDBKey.string(starred)
-        #expect(try work.store.liveEntries()[exists] == IDBKey.encodeInt(version))
-        let backups = try FileManager.default.subpathsOfDirectory(atPath: box.paths.backupsDir.path)
-        #expect(backups.contains { $0.hasSuffix("Interface/work-IndexedDB.json") }, "replaced values are kept")
-        #expect(try sync.run(into: box.work, profileID: "work") == 0, "a second run has nothing to do")
-        let logs = try FileManager.default.contentsOfDirectory(at: work.dbDir, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "log" }.max { $0.lastPathComponent < $1.lastPathComponent }
-        let permissions = try FileManager.default.attributesOfItem(atPath: try #require(logs).path)[.posixPermissions] as? Int
-        #expect(permissions == 0o600, "private to the user, like Chromium's own files")
-
-        // Starring a session only in the profile's window stays.
-        let own = #"{"state":{"starredIds":["local_2"]},"version":0}"#
-        try work.write([starred: Self.serialized(own)], into: snapshot)
-        #expect(try sync.run(into: box.work, profileID: "work") == 0)
-        #expect(try work.read()?.records[starred]?.string == own)
-    }
-
-    @Test func pinRecordsWithBlobsOrAnotherVersionAreLeftAlone() throws {
-        let box = try sandbox()
-        let starred = "store:pin-state:dframe-starred-code", groups = "store:pin-state:dframe-session-groups"
-        try makePinStore(
+        let starred = "store:pin-state:dframe-starred-code", stars = "LSS-persisted.starred-local-code-sessions"
+        try put(
             box.main,
-            records: [
-                starred: (1, #"{"state":{"starredIds":["local_a"]},"version":1}"#),
-                groups: (2, #"{"state":{"expandedIds":["b"]},"version":0}"#),
+            [
+                stars: #"{"value":["local_1"],"tabId":"","timestamp":1}"#,
+                InterfaceSync.sidebarKey: try sidebar(["sidebarWidth": 250, "pinnedOrder": ["code:local_1"]]),
             ])
-        let work = try makePinStore(
-            box.work,
-            records: [
-                starred: (1, #"{"state":{"starredIds":[]},"version":0}"#),
-                groups: (2, #"{"state":{"expandedIds":[]},"version":0}"#),
-            ], blobs: [groups])
-        #expect(try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work") == 0)
-        let records = try #require(try work.read()?.records)
-        #expect(records[starred]?.string == #"{"state":{"starredIds":[]},"version":0}"#)
-        #expect(records[groups]?.string == #"{"state":{"expandedIds":[]},"version":0}"#)
-    }
+        let ownStars = #"{"value":["local_2"],"tabId":"","timestamp":1}"#
+        try put(box.work, [stars: ownStars, InterfaceSync.sidebarKey: try sidebar(["sidebarWidth": 240, "pinnedOrder": ["code:local_2"]])])
+        try writePrefs(box, box.main, ["starred-local-code-sessions": ["local_1"], "epitaxy-transcript-links-in-preview": true])
+        try writePrefs(box, box.work, ["starred-local-code-sessions": ["local_2"]])
+        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_1"]},"version":0}"#)])
+        let ownPins = #"{"state":{"starredIds":["local_2"]},"version":0}"#
+        let work = try makePinStore(box.work, records: [starred: (1, ownPins)])
+        let sync = InterfaceSync(paths: box.paths)
+        try InterfaceSync.writeState(
+            ["idb:" + starred: "old", stars: "old", "prefs:starred-local-code-sessions": "old", "dframe-store/pinnedOrder": "old"],
+            to: sync.stateFile(for: "work"))
 
-    /// A write adds records the way `put` does and nothing else, so a store that also keeps indexes or a key
-    /// generator, or data in another format, is never written.
-    @Test func storesAWriteWouldNotKeepConsistentAreLeftAlone() throws {
-        let starred = "store:pin-state:dframe-starred-code"
-        let own = #"{"state":{"starredIds":[]},"version":0}"#
-        let index: (UInt64, UInt64) -> [([UInt8], [UInt8])] = { db, os in
-            var ids = ByteWriter()
-            ids.appendVarint64(os)
-            ids.appendVarint64(30)
-            var key: [UInt8] = IDBKey.prefix(db, 0, 0) + [IDBKey.indexMetadataType]
-            key += ids.bytes
-            key.append(0)
-            return [(key, IDBKey.utf16BE("byDate"))]
-        }
-        let keyGenerator: (UInt64, UInt64) -> [([UInt8], [UInt8])] = { db, os in [(IDBKey.objectStoreMetadata(db, os, .autoIncrement), [1])] }
-        for (name, extra, dataVersion) in [
-            ("index", index, UInt64(0x10_0000_0015)),
-            ("key generator", keyGenerator, 0x10_0000_0015),
-            ("data version", { _, _ in [] }, 0x10_0000_0014),
-        ] {
-            let box = try sandbox()
-            try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_a"]},"version":0}"#)])
-            let work = try makePinStore(box.work, records: [starred: (1, own)], dataVersion: dataVersion, extra: extra)
-            #expect(try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work") == 0, "\(name)")
-            let entries = try work.store.liveEntries()
-            #expect(entries[IDBKey.prefix(1, 1, IDBKey.dataIndex) + IDBKey.string(starred)] == [1] + Self.serialized(own), "\(name)")
-        }
+        #expect(try sync.run(into: box.work, profileID: "work") == 2, "the sidebar width and one display setting")
+
+        #expect(try items(box.work)[stars] == ownStars)
+        #expect(try sidebarState(items(box.work))["pinnedOrder"] as? [String] == ["code:local_2"])
+        #expect(try sidebarState(items(box.work))["sidebarWidth"] as? Int == 250)
+        #expect(try prefs(box.work)["starred-local-code-sessions"] as? [String] == ["local_2"])
+        #expect(try prefs(box.work)["epitaxy-transcript-links-in-preview"] as? Bool == true)
+        #expect(try work.read()?.records[starred]?.string == ownPins)
+        let state = InterfaceSync.readState(sync.stateFile(for: "work"))
+        #expect(!state.keys.contains { $0.contains("starred") || $0.hasSuffix("pinnedOrder") }, "old pin baselines are dropped")
     }
 
     /// What was merged before a failure is remembered, so the next run doesn't take it for a change in the profile.
     @Test func placesMergedBeforeAFailureAreRemembered() throws {
         let box = try sandbox()
-        let starred = "store:pin-state:dframe-starred-code"
+        let fm = FileManager.default
+        try put(box.main, ["epitaxy-editor-prefs": #"{"wrap":true}"#])
         try writePrefs(box, box.main, ["epitaxy-transcript-links-in-preview": true])
-        try writePrefs(box, box.work, ["ownOnly": 2])
-        try makePinStore(box.main, records: [starred: (1, #"{"state":{"starredIds":["local_a"]},"version":0}"#)])
-        try makePinStore(box.work, records: [starred: (1, #"{"state":{"starredIds":[]},"version":0}"#)])
-        let now = Date()
-        let blocked = Backup(paths: box.paths, now: now).dayDir.appending(path: "Interface")
-        try FileManager.default.createDirectory(at: blocked.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data().write(to: blocked)  // a file where the backup of the replaced pins would go
+        // The profile's settings file leads into a folder that can't be written, so the settings stage fails.
+        let kept = box.work.appending(path: "kept")
+        try fm.createDirectory(at: kept, withIntermediateDirectories: true)
+        try box.write(#"{"preferences":{"epitaxyPrefs":{"ownOnly":2}}}"#, to: kept.appending(path: "work.json"))
+        try fm.createSymbolicLink(at: box.work.appending(path: InterfaceSync.desktopConfig), withDestinationURL: kept.appending(path: "work.json"))
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: kept.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: kept.path) }
         let sync = InterfaceSync(paths: box.paths)
 
-        #expect(throws: (any Error).self) { try sync.run(into: box.work, profileID: "work", now: now) }
+        #expect(throws: (any Error).self) { try sync.run(into: box.work, profileID: "work") }
 
         let state = InterfaceSync.readState(sync.stateFile(for: "work"))
-        #expect(state["prefs:epitaxy-transcript-links-in-preview"] != nil)
-        #expect(state["idb:" + starred] == nil)
-        #expect(try prefs(box.work)["epitaxy-transcript-links-in-preview"] as? Bool == true)
+        #expect(state["epitaxy-editor-prefs"] != nil)
+        #expect(state["prefs:epitaxy-transcript-links-in-preview"] == nil)
+        #expect(try items(box.work)["epitaxy-editor-prefs"] == #"{"wrap":true}"#)
     }
 
     @Test func readsTheStringsChromiumSerializes() {
