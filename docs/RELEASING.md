@@ -10,9 +10,10 @@ workflow** with the tag.
 
 ## Before the first tag
 
-The README offers Homebrew as the main way to install, so a release is tagged only when all three of these are in
-place. Without notarization there is no tag: Homebrew disables a cask that fails Gatekeeper, and everyone who
-downloads the ZIP would have to override macOS to open it.
+The README offers Homebrew as the main way to install, so a final release is tagged only when all three of these are
+in place. Without notarization there is no final tag: Homebrew disables a cask that fails Gatekeeper, and everyone who
+downloads the ZIP would have to override macOS to open it. A release candidate is the exception; see
+[Release candidates](#release-candidates).
 
 1. **The repository is `trukhinyuri/Baton`.** Rename it on GitHub first; GitHub redirects the old URLs. The cask,
    the README badges, the issue links in the app and `scripts/product.env` already point there.
@@ -27,6 +28,23 @@ downloads the ZIP would have to override macOS to open it.
    it asks for the `.p12` password and the tap token. With `MACOS_CERTIFICATE` missing the workflow stops before building and publishes
    nothing. Only a run started by hand for the tag with `allow_unsigned` ticked publishes an ad-hoc signed, not
    notarized build, with a note saying so in the release, and leaves the tap unchanged.
+
+## Release candidates
+
+A release candidate goes out before the signed release, unsigned (ad-hoc signed, not notarized): `1.0.0-rc.1` comes
+before `1.0.0`.
+
+1. Set `VERSION` to `<major.minor.patch>-rc.<N>`, such as `1.0.0-rc.1`, and head its `CHANGELOG.md` entry
+   `## 1.0.0-rc.1 — 2026-09-29`. The app's `CFBundleShortVersionString` and `CFBundleVersion` get the numbers only
+   (`1.0.0`); `BatonVersion` in its `Info.plist` holds the full version, which `baton --version` and the problem report
+   show. The ZIP is `Baton-v1.0.0-rc.1.zip`.
+2. Run the green bar as for any release (step 4 below), then tag and push the tag: `git tag v1.0.0-rc.1 && git push
+   origin v1.0.0-rc.1`. Without the signing secrets that run stops before building.
+3. Run the workflow by hand for the tag: **Actions → Release → Run workflow**, pick the tag, tick `allow_unsigned`.
+   It publishes a GitHub prerelease, never marked Latest, titled "Baton 1.0.0-rc.1 — first leg, release candidate",
+   with a note on how to open a build that isn't notarized (Open Anyway in System Settings → Privacy & Security, or
+   `make install`).
+4. The `tap` job is skipped: the cask follows signed final releases only, and `bump-cask.yml` refuses a `-rc.` tag.
 
 ## Each release
 

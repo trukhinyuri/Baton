@@ -42,6 +42,35 @@ struct BuildInfoTests {
         #expect(BuildInfo.read(executable: app.appending(path: "Helpers/claude-profiles")) == BuildInfo(version: "1.0.0", commit: "abc123def456"))
     }
 
+    /// A release candidate keeps the numbers in Apple's keys and its full version in BatonVersion.
+    @Test func aReleaseCandidateReportsItsFullVersion() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "buildinfo-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Baton.app/Contents")
+        try FileManager.default.createDirectory(at: app.appending(path: "Helpers"), withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleShortVersionString": "1.0.0", "CFBundleVersion": "1.0.0", "BatonVersion": "1.0.0-rc.1", "BatonCommit": "abc123def456",
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: app.appending(path: "Info.plist"))
+        let build = BuildInfo.read(executable: app.appending(path: "Helpers/baton"))
+        #expect(build == BuildInfo(version: "1.0.0-rc.1", commit: "abc123def456"))
+        #expect(build.description == "Baton 1.0.0-rc.1 (abc123def456)")
+        #expect(build.numericVersion == "1.0.0")
+    }
+
+    @Test func numericVersionDropsOnlyThePrereleaseSuffix() {
+        #expect(BuildInfo(version: "1.0.0", commit: "x").numericVersion == "1.0.0")
+        #expect(BuildInfo(version: "1.2.3-rc.12", commit: "x").numericVersion == "1.2.3")
+        #expect(BuildInfo(version: "dev", commit: "x").numericVersion == "dev")
+    }
+
+    /// An older copy (0.2.0) still counts as outdated next to a release candidate of 1.0.0.
+    @Test func aReleaseCandidateStillReplacesOlderCopies() {
+        let current = BuildInfo(version: "1.0.0-rc.1", commit: "x").numericVersion
+        #expect(AppInstances.isVersion("0.2.0", below: current))
+        #expect(!AppInstances.isVersion("1.0.0", below: current))
+    }
+
     @Test func outsideAnAppReportsDev() {
         let info = BuildInfo.read(executable: URL(fileURLWithPath: "/usr/local/bin/baton"))
         #expect(info == BuildInfo(version: "dev", commit: "dev"))

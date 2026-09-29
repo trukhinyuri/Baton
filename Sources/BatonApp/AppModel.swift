@@ -136,7 +136,7 @@ final class AppModel: ObservableObject {
         let copies = running.map {
             AppInstances.RunningCopy(pid: $0.processIdentifier, bundle: $0.bundleURL, version: $0.bundleURL.flatMap(AppInstances.version(of:)))
         }
-        let decision = AppInstances.handover(others: copies, currentVersion: BuildInfo.current.version)
+        let decision = AppInstances.handover(others: copies, currentVersion: BuildInfo.current.numericVersion)
         let outdated = running.filter { decision.terminate.contains($0.processIdentifier) }
         for app in outdated { app.terminate() }
         // Up to 5 seconds for them to quit; one that doesn't is left to its own quit and never handed over to.

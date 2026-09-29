@@ -6,16 +6,13 @@ set -eu
 cd "$(dirname "$0")/.."
 . scripts/product.env
 VERSION="${1:-$(cat VERSION)}"
-case "$VERSION" in
-    ''|*[!0-9.]*)
-        echo 'Version must be major.minor.patch, for example 0.2.0.' >&2
-        exit 1
-        ;;
-esac
-if ! printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-    echo 'Version must be major.minor.patch, for example 0.2.0.' >&2
+# major.minor.patch, or a release candidate of it: major.minor.patch-rc.N.
+if ! printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'; then
+    echo 'Version must be major.minor.patch or major.minor.patch-rc.N, for example 0.2.0 or 1.0.0-rc.1.' >&2
     exit 1
 fi
+# Apple's version keys take only the three numbers; BatonVersion keeps the full version for --version and the report.
+NUMERIC_VERSION="${VERSION%%-*}"
 APP="build/$PRODUCT_NAME.app"
 COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo dev)"
 if [ "$COMMIT" != dev ] && ! git diff --quiet HEAD -- 2>/dev/null; then COMMIT="$COMMIT+dirty"; fi
@@ -53,8 +50,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Baton</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>${NUMERIC_VERSION}</string>
+  <key>CFBundleVersion</key><string>${NUMERIC_VERSION}</string>
+  <key>BatonVersion</key><string>${VERSION}</string>
   <key>BatonCommit</key><string>${COMMIT}</string>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>

@@ -33,7 +33,18 @@ It never reads credentials, has no network code, copies each session card and se
 
 Requirements: macOS 14 Sonoma or later on Apple silicon or Intel, and [Claude Desktop](https://claude.ai/download) in `/Applications` or `~/Applications`.
 
+### Release candidate
+
+Baton 1.0.0-rc.1 is a release candidate: it is ad-hoc signed and not notarized yet. The signed 1.0.0 and the Homebrew cask follow.
+
+1. Download `Baton-v1.0.0-rc.1.zip` from [Releases](https://github.com/trukhinyuri/Baton/releases) (it is marked Pre-release) and unzip it.
+2. Move `Baton.app` to `/Applications` and open it. macOS refuses the first time; open **System Settings → Privacy & Security** and click **Open Anyway** next to Baton.
+
+Or build it [from source](#from-source) with `make install`: a build you make yourself opens without that step.
+
 ### Homebrew
+
+From 1.0: the cask arrives with the signed release, and until then this command fails.
 
 ```sh
 brew install --cask trukhinyuri/tap/baton
@@ -61,7 +72,7 @@ make install        # builds Baton.app and copies it to ~/Applications/Baton
 ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton
 ```
 
-Use one installation, Homebrew or source, not both: two copies would each run their own background sync. The app warns when it finds a second copy.
+Use one installation (the ZIP, Homebrew or source), not two: two copies would each run their own background sync. The app warns when it finds a second copy.
 
 ### Upgrading from Claude Profiles
 
@@ -77,7 +88,7 @@ Same app, new name. If you're upgrading from Claude Profiles, your windows, prof
   ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/claude-profiles /usr/local/bin/claude-profiles
   ```
 - **`make install`** installs into the folder you already have, renames it to `~/Applications/Baton` when no Claude window is open (or prints the exact command to finish later), and points your launchers at the new app.
-- **Installed with Homebrew?** Run `brew update && brew upgrade`: the tap's `cask_renames.json` moves the `claude-profiles` cask to `baton`, and Homebrew says it was renamed. Don't install `baton` next to it.
+- **Installed with Homebrew?** From 1.0, run `brew update && brew upgrade`: the tap's `cask_renames.json` moves the `claude-profiles` cask to `baton`, and Homebrew says it was renamed. Don't install `baton` next to it.
 - **Installed from the ZIP?** Quit Claude Profiles and move `Claude Profiles.app` to the Trash. If it was inside `~/Applications/Claude Profiles`, put `Baton.app` in `/Applications` (or run `make install`); otherwise put it where the old app was.
 - **Claude Profiles in your Dock?** Once the old app is in the Trash, remove its Dock item and add Baton: the old item could still start it from the Trash.
 - **Claude Profiles opens at login?** Replace it with Baton in **System Settings → General → Login Items**. If an older copy still starts, Baton asks it to quit rather than handing over to it.
