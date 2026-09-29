@@ -58,6 +58,17 @@ public enum CLIDispatch {
     /// The commands that open windows or build launchers or engines, after aliases are resolved.
     public static let lockedCommands: Set<String> = ["open", "add", "refresh", "continue", "remove"]
 
+    /// Whether `args` is a command that only reads: `list`, `doctor`, `report`, `conversations`, `rules` and the
+    /// `local-only` statuses. They skip the start-up re-registration of the main Claude with Launch Services, so
+    /// looking into why `claude://` links go to the wrong window never changes where they go.
+    public static func isReadOnly(_ args: [String]) -> Bool {
+        switch args.first {
+        case nil, "list", "doctor", "report", "conversations", "rules": true
+        case "local-only": args.dropFirst().first == "status" || args.dropFirst().prefix(2) == ["cloud-lock", "status"]
+        default: false
+        }
+    }
+
     /// - Parameter args: the arguments after the command name, aliases resolved. `--help` or `-h` anywhere answers
     /// with the help text before anything is read or changed.
     public static func stage(for args: [String]) -> Stage {

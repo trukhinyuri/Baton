@@ -9,14 +9,33 @@ public struct FolderRule: Codable, Equatable, Sendable {
     public var accounts: [String]
 
     public init(folder: String, accounts: [String]) {
-        self.folder = ConversationIndex.canonical(folder)
+        self.folder = Self.canonical(folder)
         self.accounts = Array(Set(accounts.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty })).sorted()
     }
 
-    /// Whether `path` is the rule's folder or inside it. Links and `..` are resolved first.
+    /// Whether `path` is the rule's folder or inside it. Links and `..` are resolved first, also in a path that no
+    /// longer exists, such as a deleted worktree; the path as given counts too, and case is ignored, as the Mac's disks
+    /// ignore it. Wherever the two could differ, the rule covers more rather than less.
     public func covers(_ path: String) -> Bool {
-        let own = ConversationIndex.canonical(path)
-        return own == folder || own.hasPrefix(folder == "/" ? "/" : folder + "/")
+        let folder = folder.lowercased()
+        let given = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path
+        return [Self.canonical(path), given].contains { candidate in
+            let own = candidate.lowercased()
+            return own == folder || own.hasPrefix(folder == "/" ? "/" : folder + "/")
+        }
+    }
+
+    /// `ConversationIndex.canonical`, also for a path that no longer exists: its closest existing folder is resolved
+    /// and the rest appended. A deleted folder under a linked one is then still under the folder the link leads to,
+    /// and a gone `/private/tmp/…` still matches `/tmp/…`.
+    static func canonical(_ path: String) -> String {
+        var existing = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+        var rest: [String] = []
+        while existing.path != "/", !FileManager.default.fileExists(atPath: existing.path) {
+            rest.insert(existing.lastPathComponent, at: 0)
+            existing = existing.deletingLastPathComponent()
+        }
+        return rest.reduce(ConversationIndex.canonical(existing.path)) { ($0 as NSString).appendingPathComponent($1) }
     }
 }
 

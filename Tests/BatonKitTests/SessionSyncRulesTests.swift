@@ -160,4 +160,32 @@ struct SessionSyncRulesTests {
                 && real.cardsRemoved == report.cardsRemoved && real.tombstonesWritten == report.tombstonesWritten,
             "a dry run reports what a real run does")
     }
+
+    /// A rule set on a linked folder still covers a session whose folder under it is gone, such as a deleted
+    /// worktree, and a gone folder under `/private/var` still matches the rule's `/var`; case doesn't matter.
+    @Test func ruleCoversAGoneFolderUnderALinkedOne() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let real = box.root.appending(path: "RealCloud/Clients/Acme", directoryHint: .isDirectory)
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        let dropbox = box.root.appending(path: "Dropbox")
+        try fm.createSymbolicLink(at: dropbox, withDestinationURL: box.root.appending(path: "RealCloud"))
+        let rule = FolderRule(folder: dropbox.appending(path: "Clients/Acme").path, accounts: ["work@example.org"])
+
+        #expect(rule.covers(dropbox.appending(path: "Clients/Acme").path))
+        #expect(rule.covers(dropbox.appending(path: "Clients/Acme/deleted-worktree/src").path), "gone, under the link")
+        #expect(rule.covers(real.appending(path: "deleted-worktree").path), "gone, under the link's target")
+        #expect(rule.covers(dropbox.appending(path: "clients/ACME/other").path), "case is ignored")
+        #expect(!rule.covers(dropbox.appending(path: "Clients/Acme2").path))
+        #expect(!rule.covers(box.root.appending(path: "Elsewhere/gone").path))
+        #expect(FolderRules.allowedAccounts(for: [dropbox.appending(path: "Clients/Acme/gone").path], in: [rule])?.accounts == ["work@example.org"])
+
+        let temporary = box.root.appending(path: "tmp-work", directoryHint: .isDirectory)
+        try fm.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let onTmp = FolderRule(folder: temporary.path, accounts: ["work@example.org"])
+        let resolved = temporary.resolvingSymlinksInPath().path
+        let other = resolved.hasPrefix("/private/") ? String(resolved.dropFirst("/private".count)) : "/private" + resolved
+        #expect(onTmp.covers(other + "/gone/deeper"), "\(other) against \(onTmp.folder)")
+        #expect(onTmp.covers(resolved + "/gone"))
+    }
 }
