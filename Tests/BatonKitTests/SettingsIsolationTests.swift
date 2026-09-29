@@ -169,6 +169,34 @@ struct SettingsIsolationTests {
         #expect(box.read(external.appending(path: "extension.json")) == "external")
     }
 
+    /// A profile's config linked into place from a dotfiles folder stays a link: the file it leads to gets the shared
+    /// settings and keeps its own permissions, and the backup holds its content from before, not another link.
+    @Test func aLinkedProfileConfigStaysALink() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let dotfiles = box.root.appending(path: "dotfiles/claude_desktop_config.json")
+        try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = #"{"futureTopLevel":"own"}"#
+        try box.write(original, to: dotfiles)
+        try fm.setAttributes([.posixPermissions: 0o640], ofItemAtPath: dotfiles.path)
+        let config = box.work.appending(path: "claude_desktop_config.json")
+        try fm.createSymbolicLink(at: config, withDestinationURL: dotfiles)
+        try write(box, box.main, ["preferences": ["dockBounceEnabled": true]])
+
+        #expect(try SettingsSync(paths: box.paths).run(into: box.work) == 1)
+
+        #expect(try fm.destinationOfSymbolicLink(atPath: config.path) == dotfiles.path, "still a link")
+        let written = try #require(SettingsSync.readJSON(dotfiles))
+        #expect((written["preferences"] as? [String: Any])?["dockBounceEnabled"] as? Bool == true, "the linked file got the change")
+        #expect(written["futureTopLevel"] as? String == "own")
+        #expect(try fm.attributesOfItem(atPath: dotfiles.path)[.posixPermissions] as? Int == 0o640, "its own permissions, not the link's")
+        let backups = try #require(fm.enumerator(at: box.paths.backupsDir, includingPropertiesForKeys: nil)?.allObjects as? [URL])
+        let saved = backups.filter { $0.lastPathComponent == dotfiles.lastPathComponent }
+        #expect(saved.count == 1)
+        #expect(saved.allSatisfy { (try? fm.destinationOfSymbolicLink(atPath: $0.path)) == nil }, "a copy, not a link")
+        #expect(saved.first.flatMap(box.read) == original, "the content before the change")
+    }
+
     @Test func sshDefinitionsMergeByIDWhileTrustAndProfileChangesStayLocal() throws {
         let box = try Sandbox()
         let filename = "ssh_configs.json"
