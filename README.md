@@ -286,7 +286,7 @@ Choose **Report a problem** in the app's footer, the menu bar or the Help menu, 
 
 The report contains the versions of Baton, macOS and Claude Desktop, your Mac's architecture, each window's Claude Code version and Local only state, how many windows are open and signed in, the counts from **Check sessions** and the last sync, the last errors shown, and the last 200 lines of Baton's own log (`Logs/baton.log` in its data folder, kept to three files of 1 MB). Your home folder and user name, emails, account and organization ids, profile labels and folder names are replaced with placeholders. Session titles, transcripts and anything that looks like a token are never included. What you type in the description is yours and is not changed.
 
-A report too long for a link opens GitHub with a short summary; the full text is on your clipboard and in the file you saved, to paste or attach. Security problems go to a [private advisory](https://github.com/trukhinyuri/Baton/security/advisories/new), not an issue; see [SECURITY.md](SECURITY.md).
+A report too long for a link opens GitHub with a short summary. The full text is on your clipboard, and the app also saves it in `Reports` in [Baton's data folder](#how-it-works) and shows it in Finder, to paste or attach; `baton report --open` saves it in Downloads unless `--save` says where. Security problems go to a [private advisory](https://github.com/trukhinyuri/Baton/security/advisories/new), not an issue; see [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
 

@@ -109,19 +109,21 @@ struct ReportSheet: View {
 
     private func openGitHub() {
         guard let report = form.report else { return }
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? model.manager.paths.home
-        do {
-            let shared = try report.share(
-                title: form.title, description: form.description, saveIn: downloads, copy: copy,
-                open: { NSWorkspace.shared.open($0) })
-            if let file = shared.file {
-                say(
-                    "The report is too long for the link, so the form has a summary. The full report is on the clipboard and saved as “\(file.lastPathComponent)” in Downloads: attach it to the issue."
-                )
-                NSWorkspace.shared.activateFileViewerSelecting([file])
-            } else {
-                say("Opened the issue form in your browser. Review it there and submit it yourself.")
-            }
-        } catch { say("Couldn't open the issue form: \(error.localizedDescription)", isProblem: true) }
+        // Baton's own folder: Downloads would bring up a macOS prompt for folder access. None while Baton may not
+        // write (demo mode, a data folder on a disk that isn't connected): the clipboard has the report then.
+        let folder = model.manager.isReadOnly ? nil : model.manager.paths.reportsDir
+        let shared = report.share(
+            title: form.title, description: form.description, saveIn: folder, copy: copy,
+            open: { NSWorkspace.shared.open($0) })
+        let tooLong = "The report is too long for the link, so the form has a summary. The full report is on the clipboard"
+        if let file = shared.file {
+            say("\(tooLong) and saved as “\(file.lastPathComponent)” in Baton's Reports folder, shown in Finder: attach it to the issue.")
+            NSWorkspace.shared.activateFileViewerSelecting([file])
+        } else if !shared.link.isComplete {
+            let unsaved = shared.saveProblem.map { " It couldn't be saved as a file: \($0)" } ?? ""
+            say("\(tooLong): paste it into the issue.\(unsaved)", isProblem: shared.saveProblem != nil)
+        } else {
+            say("Opened the issue form in your browser. Review it there and submit it yourself.")
+        }
     }
 }

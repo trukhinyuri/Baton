@@ -198,8 +198,9 @@ public struct FeedbackReport: Sendable {
             return IssueLink(url: link(diagnostics: markdown, whatHappened: whatHappened), isComplete: true)
         }
         let note =
-            summary + "\n\nThe full report is too long for this form. It is on the clipboard and saved as "
-            + "\(attachment.map { "“\($0)”" } ?? "a file"): attach that file here or paste it below.\n"
+            summary + "\n\nThe full report is too long for this form. "
+            + (attachment.map { "It is on the clipboard and saved as “\($0)”: attach that file here or paste it below.\n" }
+                ?? "It is on the clipboard: paste it below.\n")
         var short = whatHappened
         while encodedLength(note, short) > Self.urlBodyLimit && !short.isEmpty {
             short = String(short.prefix(max(0, short.count - max(50, short.count / 4)))) + (short.count > 50 ? "…" : "")
@@ -209,23 +210,26 @@ public struct FeedbackReport: Sendable {
         return IssueLink(url: link(diagnostics: note, whatHappened: short), isComplete: false)
     }
 
-    /// Opens the issue form. A report too long for the link is also copied and saved in `folder`, for the user
-    /// to attach. Nothing is uploaded: `open` hands the link to the browser.
+    /// Opens the issue form. A report too long for the link is copied first and then saved in `folder`, for the user
+    /// to attach; with no `folder`, or when saving fails, the form says it is on the clipboard, and `saveProblem` says
+    /// why it wasn't saved. Nothing is uploaded: `open` hands the link to the browser.
     public func share(
-        title: String, description: String, saveIn folder: URL, copy: (String) -> Void,
+        title: String, description: String, saveIn folder: URL?, copy: (String) -> Void,
         open: (URL) -> Void
-    ) throws -> (link: IssueLink, file: URL?) {
+    ) -> (link: IssueLink, file: URL?, saveProblem: String?) {
         var link = issueLink(title: title, description: description)
         var file: URL?
+        var saveProblem: String?
         if !link.isComplete {
             let text = document(description: description)
-            let saved = try Self.save(text, in: folder)
             copy(text)
-            link = issueLink(title: title, description: description, attachment: saved.lastPathComponent)
-            file = saved
+            if let folder {
+                do { file = try Self.save(text, in: folder) } catch { saveProblem = error.localizedDescription }
+            }
+            link = issueLink(title: title, description: description, attachment: file?.lastPathComponent)
         }
         open(link.url)
-        return (link, file)
+        return (link, file, saveProblem)
     }
 
     /// Writes `text` as a new dated file in `folder`, never replacing one.
