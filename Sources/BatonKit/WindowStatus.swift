@@ -32,14 +32,18 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
         self.pendingChanges = pendingChanges; self.liveSessions = liveSessions; self.folderNotes = folderNotes
     }
 
-    private var name: String { isMain ? "Claude" : label }
+    /// What follows "Claude " in the window's name: "(main)" or its label.
+    public var displayLabel: String { isMain ? "(main)" : label }
+
+    /// "Claude (main)" or "Claude WORK", as everywhere Baton names a window.
+    private var name: String { "Claude \(displayLabel)" }
 
     /// Only an open window with no Claude Code session running in it: quitting would stop that work.
     /// A closed window picks the changes up when it next opens.
     public var canRestart: Bool { isRunning && liveSessions == 0 }
     public var restartTitle: String { "Restart \(name) to apply" }
     public var restartHelp: String {
-        if !isRunning { return "Claude \(isMain ? "" : label + " ")is closed; it applies these changes when it next opens." }
+        if !isRunning { return "\(name) is closed; it applies these changes when it next opens." }
         if liveSessions > 0 {
             return "\(liveSessions) Claude Code session\(liveSessions == 1 ? " is" : "s are") running in this window. "
                 + "Let \(liveSessions == 1 ? "it" : "them") finish, then restart."
@@ -210,12 +214,17 @@ public enum LogTail {
         let predicate = NSPredicate(format: "subsystem == %@", Log.subsystem)
         guard let entries = try? store.getEntries(at: store.position(date: Date().addingTimeInterval(-since)), matching: predicate)
         else { return [] }
-        let time = Date.FormatStyle().year().month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute().second()
         var lines: [String] = []
         for case let entry as OSLogEntryLog in entries {
-            lines.append("\(entry.date.formatted(time)) [\(entry.category)] \(entry.composedMessage)")
+            lines.append(line(at: entry.date, category: entry.category, message: entry.composedMessage))
             if lines.count > limit * 4 { lines.removeFirst(lines.count - limit) }
         }
         return Array(lines.suffix(limit))
+    }
+
+    /// One unified-log entry as the report shows it: the time in ISO 8601 UTC, as in Baton's text log, so entries
+    /// order the same on any Mac, whatever its clock style.
+    static func line(at date: Date, category: String, message: String) -> String {
+        "\(date.formatted(.iso8601)) [\(category)] \(message)"
     }
 }

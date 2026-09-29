@@ -4,7 +4,7 @@ Status: accepted
 
 ## Context
 
-Baton shares local work between accounts on one Mac. Remote Control connects a window's sessions to its Anthropic account, and a session reachable through one account's Remote Control while it is open under another is the likely trigger for Claude's cross-account forks and history suppression. The owner decided that 1.0 covers local sessions only.
+Baton shares local work between accounts on one Mac. Remote Control connects a window's sessions to its Anthropic account, and a session reachable through one account's Remote Control while it is open under another may be what makes Claude fork it or add history suppression; that is suspected, not confirmed. The owner decided that 1.0 covers local sessions only.
 
 ## Decision
 

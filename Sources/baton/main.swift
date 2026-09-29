@@ -44,7 +44,7 @@ let usage = """
                                           If the session's window resets within 15 minutes and
                                           continues it by itself, nothing happens (exit 3) unless --now
       baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
-                                          Same as `continue`, easier to shout across the track
+                                          Same as `continue`
       baton rules                         Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
                                           Let only these accounts continue work in the folder and
@@ -88,6 +88,8 @@ case .early:
     exit(answer.exitCode)
 case .migrate:
     if let unreachable = Paths.unreachableFolder(home: home) { fail(unreachable) }
+    // Before the rename, so what it did reaches Baton's own log and a problem report; the data folder isn't renamed.
+    Log.enableFile(in: Paths.stateRoot(home: home))
     // Only `baton migrate` renames the launchers folder, before any path is resolved; every other command uses it
     // where it is.
     if let migration = LegacyMigration.command(args, home: home, cli: cli) {
@@ -136,7 +138,7 @@ func describe(_ status: CloudMoveLock.Status) -> String {
 func kindName(_ conversation: Conversation) -> String {
     switch conversation.kind {
     case .code: "Code"
-    case .cowork: "Cowork in \(conversation.ownerID.map { $0 == "main" ? "Claude (main)" : manager.label(of: $0) } ?? "Claude (main)")"
+    case .cowork: "Cowork in Claude \(manager.displayLabel(of: conversation.ownerID ?? "main"))"
     }
 }
 

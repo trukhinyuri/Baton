@@ -204,8 +204,8 @@ struct LimitStateTests {
         #expect(previous.isAtLimit(now: at(301)) && previous.fiveHour.reset == LimitReset(at: at(370), source: .exact), "the previous window ending")
     }
 
-    /// SIDE's five-hour samples of 28.09 (minutes from 21:10, the start of the window whose auto-continue entry
-    /// resets at 02:10): 20:56:50 63%, 21:11:50 91%, 21:26:50 24%, 21:41:50 62%, 21:56:50 95%, 22:04:41 100%.
+    /// A real window's five-hour samples of 28.09 (minutes from 21:10, the start of the window whose auto-continue
+    /// entry resets at 02:10): 20:56:50 63%, 21:11:50 91%, 21:26:50 24%, 21:41:50 62%, 21:56:50 95%, 22:04:41 100%.
     @Test func aNewWindowsFirstSampleDoesNotCancelItsEntry() {
         let samples = [
             sample(-13.17, fh: 63, sd: 13), sample(1.83, fh: 91, sd: 17), sample(16.83, fh: 24, sd: 4), sample(31.83, fh: 62, sd: 11),
@@ -230,20 +230,27 @@ struct LimitStateTests {
 
     /// Claude answered in one of the window's sessions after its last sample at 100%: the limit was reset then.
     @Test func aReplyAfterTheLimitFreesTheWindowAsSeenNotEstimated() {
-        let limits = Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(2))
+        let limits = Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(2), askedAt: at(1.5))
         #expect(!limits.isAtLimit(now: at(3)) && limits.week.phase(now: at(3)) == .below && limits.week.resetByAnswer)
         #expect(limits.week.reset == LimitReset(at: at(2), source: .inferred))
         #expect(LimitText.describe(limits.week, now: at(3)) == "week: Claude answered since" && limits.load(now: at(3)) == 20)
-        #expect(Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(-1)).isAtLimit(now: at(3)), "a reply before the sample proves nothing")
-        let refused = Limits(samples: [sample(0, fh: 20, sd: 90)], hits: [hit(.week, 5, resets: 5000)], answeredAt: at(3))
+        #expect(
+            Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(-1), askedAt: at(-1.5)).isAtLimit(now: at(3)),
+            "a reply before the sample proves nothing")
+        #expect(
+            Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(2), askedAt: at(0.5)).isAtLimit(now: at(3)),
+            "asked for within a minute of the sample: it may have been admitted before the limit")
+        #expect(Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(2)).isAtLimit(now: at(3)), "when it was asked for isn't known")
+        let refused = Limits(samples: [sample(0, fh: 20, sd: 90)], hits: [hit(.week, 5, resets: 5000)], answeredAt: at(3), askedAt: at(2.5))
         #expect(refused.isAtLimit(now: at(6)), "a refusal after the reply still holds")
-        let entryOnly = Limits(samples: [sample(0, fh: 90, sd: 10)], autoResume: [at(200)], answeredAt: at(150))
+        let entryOnly = Limits(samples: [sample(0, fh: 90, sd: 10)], autoResume: [at(200)], answeredAt: at(150), askedAt: at(149))
         #expect(entryOnly.isAtLimit(now: at(151)), "with only an entry, the time of the refusal isn't known")
-        let olderReach = Limits(samples: [sample(-3000, fh: 100, sd: 10), sample(0, fh: 97, sd: 12)], autoResume: [at(250)], answeredAt: at(3))
+        let olderReach = Limits(
+            samples: [sample(-3000, fh: 100, sd: 10), sample(0, fh: 97, sd: 12)], autoResume: [at(250)], answeredAt: at(3), askedAt: at(2.5))
         #expect(olderReach.isAtLimit(now: at(10)), "a 100% sample from an earlier reach proves nothing about this one")
 
         // Held back by a limit message after a 90% sample, then Claude answered: not 90% any more.
-        let told = Limits(samples: [sample(0, fh: 90, sd: 12)], hits: [hit(.fiveHour, 5, resets: 300)], answeredAt: at(200))
+        let told = Limits(samples: [sample(0, fh: 90, sd: 12)], hits: [hit(.fiveHour, 5, resets: 300)], answeredAt: at(200), askedAt: at(199))
         #expect(!told.isAtLimit(now: at(201)) && told.fiveHour.resetByAnswer)
         #expect(LimitText.describe(told.fiveHour, now: at(201)) == "5h: Claude answered since")
         #expect(LimitText.note(told.fiveHour, now: at(201)) == "5h: Claude answered since the limit")
@@ -269,7 +276,8 @@ struct LimitStateTests {
             "",
         ]
         let newest = LimitAnswer.newest(in: Data(lines.joined(separator: "\n").utf8))
-        #expect(newest == LimitAnswer(at: at(1), session: session, version: "2.1.284"))
+        #expect(newest?.at == at(1) && newest?.session == session && newest?.version == "2.1.284")
+        #expect(newest?.askedAt == nil, "no record it follows: when it was asked for isn't known")
         #expect(LimitAnswer.parse(line: Data(reply(at(1), #","isApiErrorMessage":true"#).utf8)) == nil)
     }
 }
@@ -672,5 +680,152 @@ struct WindowWordingTests {
         var closed = open
         closed.isRunning = false
         #expect(LimitText.columnHelp(closed, now: at(1)).hasSuffix("Open it to check: Claude records a new sample about 9 s after the window starts."))
+    }
+}
+
+/// A transcript record as Claude Code writes it, with only what the walk from a reply to its request reads.
+private func record(_ type: String, _ uuid: String, parent: String?, request: String? = nil, at date: Date, session: String = session) -> String {
+    let stamp = ISO8601DateFormatter.string(from: date, timeZone: utc, formatOptions: [.withInternetDateTime, .withFractionalSeconds])
+    let parentField = parent.map { #""\#($0)""# } ?? "null"
+    let requestField = request.map { #","requestId":"\#($0)""# } ?? ""
+    let message = type == "assistant" ? #","message":{"model":"claude-opus-5-5","role":"assistant"}"# : ""
+    return
+        #"{"type":"\#(type)","uuid":"\#(uuid)","parentUuid":\#(parentField)\#(requestField),"sessionId":"\#(session)","entrypoint":"claude-desktop","version":"2.1.284","timestamp":"\#(stamp)"\#(message)}"#
+}
+
+/// Seconds after 20:00 UTC on 28.09.
+private func second(_ seconds: Double) -> Date { base.addingTimeInterval(seconds) }
+
+/// The same moment to the millisecond a transcript keeps.
+private func same(_ a: Date?, _ b: Date) -> Bool { a.map { abs($0.timeIntervalSince(b)) < 0.001 } ?? false }
+
+@Suite("Replies around a limit")
+struct LimitReplyTests {
+    /// 28.09, a real window at its five-hour limit (all times UTC): a sample at 100% at 20:04:41, another session
+    /// refused at 20:04:43.8, then this session's replies at 20:04:48.5 and 20:04:49.6 to a request it sent after a tool
+    /// result at 20:04:38.4, then its own refusal at 20:04:50.1.
+    static let lines = [
+        record("user", "u-1", parent: "a-0", at: second(278.434)),
+        record("attachment", "t-1", parent: "u-1", at: second(278.439)),
+        #"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-28T20:04:45.000Z","sessionId":"\#(session)"}"#,
+        record("assistant", "a-1", parent: "t-1", request: "req_A", at: second(288.521)),
+        record("assistant", "a-2", parent: "a-1", request: "req_A", at: second(289.552)),
+    ]
+    static let samples = [sample(-3.17, fh: 95, sd: 16), UsageSample(at: second(281), org: org, fiveHour: 100, week: 17)]
+    static let refusal = LimitHit(kind: .fiveHour, at: second(283.8), resetsAt: at(250), session: "77912f9a-0000-4000-8000-000000000000")
+
+    @Test func aReplyStreamingWhenTheLimitHitDoesNotFreeTheWindow() throws {
+        let answer = try #require(LimitAnswer.newest(in: Data((Self.lines.joined(separator: "\n") + "\n").utf8)))
+        #expect(same(answer.at, second(289.552)) && same(answer.askedAt, second(278.439)), "asked for before the limit")
+        let limits = Limits(samples: Self.samples, hits: [Self.refusal], answeredAt: answer.at, askedAt: answer.askedAt)
+        #expect(limits.isAtLimit(now: second(289.9)) && !limits.fiveHour.resetByAnswer)
+        // The turn that crossed 100% ends with that reply and nothing is refused after it.
+        let quiet = Limits(samples: Self.samples, answeredAt: answer.at, askedAt: answer.askedAt)
+        #expect(quiet.isAtLimit(now: second(300)) && quiet.fiveHour.percent == 100)
+        let blockedBefore = LimitSchedule.blocked([status("ytw", limits: Limits(samples: Self.samples), usage: nil)], now: second(285))
+        let now = [status("ytw", limits: quiet, usage: nil), status("calm", limits: Limits(samples: [sample(0, fh: 30, sd: 10)]), usage: nil)]
+        #expect(LimitSchedule.freed(blockedBefore: blockedBefore, now, now: second(300)).isEmpty)
+        #expect(DestinationRanking.ranked(now, now: second(300)).map(\.id) == ["calm"], "not offered as where to continue")
+    }
+
+    @Test func aReplyToARequestSentWellAfterTheLimitStillFreesIt() {
+        let later = [
+            record("user", "u-9", parent: "a-8", at: second(281 + 120)), record("assistant", "a-9", parent: "u-9", request: "req_B", at: second(281 + 125)),
+        ]
+        let answer = LimitAnswer.newest(in: Data((Self.lines + later).joined(separator: "\n").utf8))
+        #expect(same(answer?.askedAt, second(401)))
+        let limits = Limits(samples: Self.samples, hits: [Self.refusal], answeredAt: answer?.at, askedAt: answer?.askedAt)
+        #expect(!limits.isAtLimit(now: second(410)) && limits.fiveHour.resetByAnswer)
+    }
+
+    /// Baton reads a transcript every few seconds: the request's own record is in one read, its reply in the next.
+    @Test func aReplyIsFollowedBackIntoTheEarlierRead() throws {
+        let box = try Sandbox()
+        let url = try box.transcript(lines: Array(Self.lines.prefix(3)) + [""])
+        let tracker = LimitTracker()
+        #expect(tracker.scan(url).answer == nil)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((Self.lines[3] + "\n").utf8))
+        try handle.close()
+        #expect(same(tracker.scan(url).answer?.askedAt, second(278.439)))
+        let again = try FileHandle(forWritingTo: url)
+        try again.seekToEnd()
+        try again.write(contentsOf: Data((Self.lines[4] + "\n").utf8))
+        try again.close()
+        let answer = tracker.scan(url).answer
+        #expect(same(answer?.at, second(289.552)) && same(answer?.askedAt, second(278.439)))
+    }
+
+    @Test func roomAgainIsAnnouncedOnlyAfterAMinuteStillFree() {
+        let blocked = status("work", limits: Limits(samples: [sample(0, fh: 100, sd: 10)]), usage: nil)
+        let free = status("work", limits: Limits(samples: [sample(0, fh: 100, sd: 10), sample(2, fh: 3, sd: 10)]), usage: nil)
+        var watch = RoomAgainWatch()
+        #expect(watch.update([blocked], now: at(1)).blocked == ["work"])
+        #expect(watch.update([free], now: at(2)).announce.isEmpty && watch.nextCheck == at(3), "free for the first time: wait")
+        #expect(watch.update([blocked], now: at(2.5)).announce.isEmpty && watch.nextCheck == nil, "blocked again: never announced")
+        #expect(watch.update([free], now: at(3)).announce.isEmpty)
+        #expect(watch.update([free], now: at(3.5)).announce.isEmpty)
+        #expect(watch.update([free], now: at(4)).announce.map(\.id) == ["work"])
+        #expect(watch.update([free], now: at(5)).announce.isEmpty, "once")
+        var switched = free
+        switched.accountID = "acct-other"
+        var other = RoomAgainWatch()
+        _ = other.update([blocked], now: at(1))
+        _ = other.update([free], now: at(2))
+        #expect(other.update([switched], now: at(4)).announce.isEmpty, "another account signed in meanwhile")
+    }
+}
+
+@Suite("Certainly reset limits")
+struct CertainResetTests {
+    @Test func aReserveWhoseLimitsHaveCertainlyResetRanksAheadOfANearlyFullWindow() {
+        let old = base.addingTimeInterval(-8 * 86_400)
+        let reserveUsage = Usage(fiveHour: 100, week: 100, sampledAt: old)
+        let reserve = status("reserve", limits: Limits(usage: reserveUsage), usage: reserveUsage)
+        #expect(LimitText.summary(reserve.limits, usage: reserveUsage, now: base) == "5h reset · week reset · as of 8d ago")
+        let busyUsage = Usage(fiveHour: 95, week: 20, sampledAt: base.addingTimeInterval(-60))
+        let busy = status("busy", limits: Limits(usage: busyUsage), usage: busyUsage)
+        #expect(DestinationRanking.ranked([busy, reserve], now: base).map(\.id) == ["reserve", "busy"])
+        let weekOld = Usage(fiveHour: 10, week: 90, sampledAt: old)
+        #expect(Limits(usage: weekOld).load(now: base) == 0, "a weekly sample older than a week: that week is over")
+        let fresh = Usage(fiveHour: 10, week: 90, sampledAt: base.addingTimeInterval(-3 * 86_400))
+        #expect(Limits(usage: fresh).load(now: base) == 90, "within its week a weekly sample counts however old")
+    }
+
+    /// Reached by a sample, with an estimate from an older weekly hit; the window is closed and the estimate has
+    /// passed: opening it is the one way to know.
+    @Test func aClosedWindowPastItsEstimateSaysToOpenIt() {
+        let samples = [sample(-10 * 24 * 60, fh: 5, sd: 50), sample(-5 * 24 * 60, fh: 5, sd: 10), sample(0, fh: 20, sd: 100)]
+        let limits = Limits(samples: samples, hits: [hit(.week, -7 * 24 * 60 - 60, resets: -7 * 24 * 60 + 33 * 60)])
+        #expect(limits.week.reset == LimitReset(at: at(33 * 60), source: .estimate) && limits.week.sampleOnly)
+        var closed = status("work", limits: limits, usage: Usage(fiveHour: 20, week: 100, sampledAt: base))
+        closed.isRunning = false
+        #expect(LimitText.checkHint(closed, now: at(60)) == nil, "the estimate is still ahead")
+        let past = at(35 * 60)
+        #expect(limits.isAtLimit(now: past) && LimitText.atLimit(limits, now: past, timeZone: utc, locale: gb).contains("may have reset"))
+        #expect(LimitText.checkHint(closed, now: past) != nil)
+        closed.isRunning = true
+        #expect(LimitText.checkHint(closed, now: past) == nil, "an open window samples by itself")
+    }
+
+    /// Why a drop from 100% in the first minutes of an auto-continue entry's window doesn't cancel the entry: right
+    /// after a window starts Claude may still report the previous window's value. Here the previous window ended at its
+    /// limit, the new one's real usage was 30% at +17 min, and the window then hit the limit again and closed.
+    @Test func aPreviousWindowsHundredLaggingIntoTheNextKeepsTheEntry() {
+        let samples = [sample(-1, fh: 95, sd: 40), sample(2, fh: 100, sd: 41), sample(17, fh: 30, sd: 42)]
+        let limits = Limits(samples: samples, autoResume: [at(300)])
+        #expect(limits.isAtLimit(now: at(200)) && limits.fiveHour.reset == LimitReset(at: at(300), source: .exact))
+    }
+
+    /// The limit reached eight minutes into the entry's window, then reset early while the window sat idle: Claude's
+    /// latest sample reads 0%, and Baton no longer holds the window back until the entry's reset.
+    @Test func anEarlyResetAfterAHitInTheFirstTenMinutes() {
+        let samples = [sample(-1, fh: 20, sd: 12), sample(8, fh: 100, sd: 12), sample(60, fh: 0, sd: 12)]
+        let limits = Limits(samples: samples, autoResume: [at(300)])
+        #expect(!limits.isAtLimit(now: at(61)) && limits.fiveHour.phase(now: at(61)) == .below)
+        #expect(LimitText.describe(limits.fiveHour, now: at(61)) == "5h 0%")
+        let ready = status("work", limits: limits, usage: Usage(fiveHour: 0, week: 12, sampledAt: at(60)))
+        #expect(DestinationRanking.ranked([ready], now: at(61)).map(\.id) == ["work"])
     }
 }

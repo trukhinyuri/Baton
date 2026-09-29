@@ -24,14 +24,14 @@ struct WindowStatusTests {
 
         let busy = status(running: true, live: 1)
         #expect(!busy.canRestart)
-        #expect(busy.restartTitle == "Restart WORK to apply")
+        #expect(busy.restartTitle == "Restart Claude WORK to apply")
         #expect(busy.restartHelp.contains("1 Claude Code session"))
         #expect(status(running: true, live: 0).canRestart)
         #expect(!status(running: false, live: 0).canRestart, "a closed window applies changes when it next opens")
     }
 
     /// Claude reads session cards as it starts, so an open window that got cards from another window afterwards
-    /// isn't in step until it restarts; the footer's "everyone's in step" waits for that.
+    /// isn't in step until it restarts; the footer's "all windows are up to date" waits for that.
     @Test func sharedSessionsWaitForARestart() throws {
         let now = Date()
         #expect(WindowStatus.sessionsWaitForRestart(shared: now, windowStarted: now.addingTimeInterval(-60)))

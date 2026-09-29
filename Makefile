@@ -1,7 +1,7 @@
 PREFIX ?= $(HOME)/Applications
 # The app lives next to the profile launchers it creates. With the default PREFIX and no DEST, scripts/install-app.sh
 # picks the folder: ~/Applications/Baton, or ~/Applications/Claude Profiles until Baton renames it from its earlier name.
-DEST ?= $(if $(filter $(HOME)/Applications,$(PREFIX)),,$(PREFIX)/Baton)
+DEST ?= $(if $(filter $(HOME)/Applications $(HOME)/Applications/,$(PREFIX)),,$(PREFIX:%/=%)/Baton)
 # The folder the app is in (or goes to), as the install script picks it.
 WHERE = sh scripts/install-app.sh --where $(if $(DEST),"$(DEST)")
 

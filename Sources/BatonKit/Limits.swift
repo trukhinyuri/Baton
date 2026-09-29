@@ -139,13 +139,18 @@ public struct LimitState: Equatable, Sendable {
     public var extraUsage = false
     /// Reached by a sample alone: no limit message or auto-continue entry says so, so no reset time is known.
     public var sampleOnly = false
-    /// Below the limit because Claude answered in one of the window's sessions after the limit was reached; the
-    /// latest sample still reads what it read before (`reset` is `.inferred`, at that reply). Claude answering shows
-    /// the limit no longer binds, but not why: it may have reset, or extra usage may be paying for it.
+    /// Below the limit because Claude answered, in one of the window's sessions, a request sent after the limit was
+    /// reached; the latest sample still reads what it read before (`reset` is `.inferred`, at that reply). Claude
+    /// answering shows the limit no longer binds, but not why: it may have reset, or extra usage may be paying for it.
     public var resetByAnswer = false
 
     /// Claude resumes work 90 seconds after a reset; Baton counts a window free from then too.
     public static let grace: TimeInterval = 90
+    /// A reply counts as a sign of room only for a request sent at least this long after the newest sign of the limit:
+    /// a request Claude admitted before the limit keeps streaming for a while, and so may one sent in the seconds
+    /// after it (28.09: a sample at 100% at 20:04:41, another session refused at 20:04:43.8, and this one's replies at
+    /// 20:04:48.5 and 20:04:49.6, asked for at 20:04:38.4, then its own refusal at 20:04:50.1).
+    public static let answerMargin: TimeInterval = 60
 
     public init(kind: LimitKind, percent: Int? = nil, sampledAt: Date? = nil, reachedAt: Date? = nil, reset: LimitReset? = nil, extraUsage: Bool = false) {
         self.kind = kind; self.percent = percent; self.sampledAt = sampledAt; self.reachedAt = reachedAt
@@ -161,22 +166,26 @@ public struct LimitState: Equatable, Sendable {
     /// At the limit with no extra usage to go on with.
     public func isBlocking(now: Date = Date()) -> Bool { phase(now: now) == .reached && !extraUsage }
 
-    /// How much of this limit counts against a window when choosing where to continue: a five-hour sample only
-    /// within its five hours; a weekly one however old, since a window kept in reserve is sampled only when used.
+    /// How much of this limit counts against a window when choosing where to continue: a sample only within its
+    /// limit's own window (five hours, or a week), since after that the window has certainly reset. Within the week a
+    /// weekly sample counts however old: a window kept in reserve is sampled only when used.
     func load(now: Date) -> Int? {
         switch phase(now: now) {
         case .reached: return 100
-        case .reset: return 0
-        case .mayHaveReset: return kind == .fiveHour ? 0 : 100
+        case .reset, .mayHaveReset: return 0
         case .below:
             guard let percent, let sampledAt else { return nil }
-            if resetByAnswer || kind == .fiveHour && now.timeIntervalSince(sampledAt) > kind.window { return 0 }
+            if resetByAnswer || now.timeIntervalSince(sampledAt) > kind.window { return 0 }
             return percent
         }
     }
 
-    /// - Parameter answeredAt: the newest reply Claude gave in a session this window ran (`LimitTracker`).
-    static func evaluate(_ kind: LimitKind, samples: [UsageSample], hits: [LimitHit], autoResume: [Date], answeredAt: Date? = nil) -> LimitState {
+    /// - Parameters:
+    ///   - answeredAt: the newest reply Claude gave in a session this window ran (`LimitTracker`).
+    ///   - askedAt: the newest time a request was sent that Claude then answered, in such a session.
+    static func evaluate(
+        _ kind: LimitKind, samples: [UsageSample], hits: [LimitHit], autoResume: [Date], answeredAt: Date? = nil, askedAt: Date? = nil
+    ) -> LimitState {
         let values = samples.compactMap { sample in sample.value(kind).map { (at: sample.at, value: $0, extra: sample.extraUsage) } }
         let latest = values.last
         var state = LimitState(kind: kind, percent: latest?.value, sampledAt: latest?.at)
@@ -208,12 +217,13 @@ public struct LimitState: Equatable, Sendable {
         let reachedFrom = values.first { $0.at > lastBelow && $0.value >= 100 }?.at ?? .distantFuture
         let extra = values.last { $0.extra != nil && $0.at >= latestAt.addingTimeInterval(-2 * 3600) && $0.at >= reachedFrom }?.extra
         let extraUsage = messages.isEmpty && entries.isEmpty && extra.map { $0 < 100 } == true
-        // Claude answered in a session this window ran after the newest sign of this reach of the limit, a sample at
-        // 100% or a limit message, both after the last sample below it: nothing was binding then. Seen, not
-        // estimated. An auto-continue entry alone doesn't say when Claude refused, so a reply proves nothing then,
-        // and neither does an older reach's sample or message.
+        // Claude answered, in a session this window ran, a request sent well after the newest sign of this reach of
+        // the limit, a sample at 100% or a limit message, both after the last sample below it: nothing was binding
+        // then. Seen, not estimated. A reply to a request sent before that, or only just after it, was admitted
+        // before the limit and may still be streaming (`answerMargin`). An auto-continue entry alone doesn't say
+        // when Claude refused, so a reply proves nothing then, and neither does an older reach's sample or message.
         let evidence = [values.last { $0.value >= 100 && $0.at > lastBelow }?.at, messages.map(\.at).max()].compactMap { $0 }.max()
-        if !extraUsage, let answeredAt, let evidence, answeredAt > reachedAt, answeredAt > evidence {
+        if !extraUsage, let answeredAt, let askedAt, let evidence, askedAt > reachedAt, askedAt >= evidence.addingTimeInterval(answerMargin) {
             state.reset = LimitReset(at: answeredAt, source: .inferred)
             state.resetByAnswer = true
             return state
@@ -235,13 +245,23 @@ public struct LimitState: Equatable, Sendable {
         return state
     }
 
-    /// Whether the samples show a reset inside the five-hour window an auto-continue entry belongs to: two samples
-    /// both taken at least ten minutes into that window and before its reset, the later one at least five points
-    /// lower. A drop whose earlier sample is from before that is the previous window ending, not an early reset.
+    /// Whether the samples show a reset inside the five-hour window an auto-continue entry belongs to: a sample at
+    /// least five points below the one before it, taken at least ten minutes into that window and before its reset,
+    /// where the one before was taken ten minutes in too, or reads 100% at least `previousWindowLag` in (the limit
+    /// reached inside the window, then reset). Right after a window starts Claude may still report the previous
+    /// window's value (28.09: 91% at 21:11:50 in a window from 21:10), so a drop from an earlier sample is that
+    /// window ending, not an early reset.
     static func resetEarly(_ values: [(Date, Int)], entry resetsAt: Date) -> Bool {
-        let from = resetsAt.addingTimeInterval(-LimitKind.fiveHour.window + 600)
-        return drops(in: values).contains { $0.from >= from && $0.to < resetsAt }
+        let start = resetsAt.addingTimeInterval(-LimitKind.fiveHour.window)
+        let settled = start.addingTimeInterval(600), reached = start.addingTimeInterval(previousWindowLag)
+        return zip(values, values.dropFirst()).contains { before, after in
+            before.1 - after.1 >= 5 && after.0 >= settled && after.0 < resetsAt && (before.0 >= settled || before.1 >= 100 && before.0 >= reached)
+        }
     }
+
+    /// How long into a five-hour window a sample may still read the previous window's value: the one seen lagged
+    /// under two minutes.
+    static let previousWindowLag: TimeInterval = 300
 
     /// Where a later sample is at least five points lower than the one before: a reset happened in between.
     static func drops(in values: [(Date, Int)]) -> [(from: Date, to: Date)] {
@@ -273,9 +293,11 @@ public struct Limits: Equatable, Sendable {
     ///   - hits: limit messages from sessions this window ran (`LimitTracker`).
     ///   - autoResume: reset times of this window's auto-continue entries (`AutoResume.entries`).
     ///   - answeredAt: the newest reply Claude gave in a session this window ran (`LimitTracker`).
-    public init(samples: [UsageSample], hits: [LimitHit] = [], autoResume: [Date] = [], answeredAt: Date? = nil) {
-        fiveHour = .evaluate(.fiveHour, samples: samples, hits: hits, autoResume: autoResume, answeredAt: answeredAt)
-        week = .evaluate(.week, samples: samples, hits: hits, autoResume: autoResume, answeredAt: answeredAt)
+    ///   - askedAt: the newest time a request was sent in such a session that Claude then answered; a reply counts
+    ///     only through it.
+    public init(samples: [UsageSample], hits: [LimitHit] = [], autoResume: [Date] = [], answeredAt: Date? = nil, askedAt: Date? = nil) {
+        fiveHour = .evaluate(.fiveHour, samples: samples, hits: hits, autoResume: autoResume, answeredAt: answeredAt, askedAt: askedAt)
+        week = .evaluate(.week, samples: samples, hits: hits, autoResume: autoResume, answeredAt: answeredAt, askedAt: askedAt)
     }
 
     /// From one sample alone, the way Baton judged limits before it knew reset times.
@@ -371,15 +393,23 @@ public struct LimitHit: Codable, Equatable, Sendable {
 }
 
 /// A reply Claude gave in a session: an assistant record with a request id that isn't an error and isn't one Claude
-/// Code wrote itself (`<synthetic>`). One after the newest sign of a limit shows that the limit had been reset.
+/// Code wrote itself (`<synthetic>`). One to a request sent well after the newest sign of a limit shows that the limit
+/// had been reset.
 public struct LimitAnswer: Equatable, Sendable {
     public var at: Date
+    /// When Claude was asked for it, at the latest: the time of the record the reply follows once its own request's
+    /// records are passed (the prompt or tool result, or what Claude Code attached to it), written before the request
+    /// went out. `nil` when that record isn't in the part of the transcript read.
+    public var askedAt: Date?
     public var session: String
     public var entrypoint: String?
     public var version: String?
+    /// Its request (`requestId`) and the record it follows (`parentUuid`).
+    var request: String?
+    var parent: String?
 
-    public init(at: Date, session: String, entrypoint: String? = "claude-desktop", version: String? = nil) {
-        self.at = at; self.session = session.lowercased(); self.entrypoint = entrypoint; self.version = version
+    public init(at: Date, askedAt: Date? = nil, session: String, entrypoint: String? = "claude-desktop", version: String? = nil) {
+        self.at = at; self.askedAt = askedAt; self.session = session.lowercased(); self.entrypoint = entrypoint; self.version = version
     }
 
     static let marker = Data(#""type":"assistant""#.utf8)
@@ -395,18 +425,44 @@ public struct LimitAnswer: Equatable, Sendable {
             let at = (object["timestamp"] as? String).flatMap(LimitHit.parseTime),
             let session = object["sessionId"] as? String, !session.isEmpty
         else { return nil }
-        return LimitAnswer(at: at, session: session, entrypoint: object["entrypoint"] as? String, version: object["version"] as? String)
+        var answer = LimitAnswer(at: at, session: session, entrypoint: object["entrypoint"] as? String, version: object["version"] as? String)
+        answer.request = request
+        answer.parent = object["parentUuid"] as? String
+        return answer
     }
 
-    /// The last reply in `data`, a run of whole JSON lines, read from the end.
+    /// The last reply in `data`, a run of whole JSON lines, read from the end, with the time Claude was asked for it:
+    /// its parents are followed back, past the records of its own request, to the first other record. A parent is
+    /// always written before its child, so the walk only goes on towards the start.
     static func newest(in data: Data) -> LimitAnswer? {
+        var reply: LimitAnswer?
+        var wanted: String?
         var end = data.endIndex
         while end > data.startIndex {
             let start = data[..<end].lastIndex(of: 0x0A).map { $0 + 1 } ?? data.startIndex
-            if start < end, let answer = parse(line: data[start..<end]) { return answer }
+            if start < end {
+                let line = data[start..<end]
+                if var found = reply {
+                    if let uuid = wanted, line.range(of: Data(uuid.utf8)) != nil,
+                        let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any], object["uuid"] as? String == uuid
+                    {
+                        if let request = found.request, object["requestId"] as? String == request {
+                            wanted = object["parentUuid"] as? String
+                            if wanted == nil { return found }
+                        } else {
+                            found.askedAt = (object["timestamp"] as? String).flatMap(LimitHit.parseTime)
+                            return found
+                        }
+                    }
+                } else if let found = parse(line: line) {
+                    reply = found
+                    wanted = found.parent
+                    if wanted == nil { return found }
+                }
+            }
             end = start > data.startIndex ? start - 1 : data.startIndex
         }
-        return nil
+        return reply
     }
 }
 
@@ -466,6 +522,9 @@ public final class LimitTracker: @unchecked Sendable {
         var size: UInt64
         var modified: Date
         var offset: UInt64
+        /// Where the next read of a grown file starts: a few lines before `offset`, so a reply there can still be
+        /// followed back to the record it answers (`LimitAnswer.newest`).
+        var resume: UInt64
         var hits: [LimitHit]
         var answer: LimitAnswer?
     }
@@ -475,8 +534,12 @@ public final class LimitTracker: @unchecked Sendable {
         public var hits: [LimitHit] = []
         /// The newest reply Claude gave in one of them.
         public var answeredAt: Date?
+        /// The newest time Claude was asked for a reply it gave in one of them.
+        public var askedAt: Date?
 
-        public init(hits: [LimitHit] = [], answeredAt: Date? = nil) { self.hits = hits; self.answeredAt = answeredAt }
+        public init(hits: [LimitHit] = [], answeredAt: Date? = nil, askedAt: Date? = nil) {
+            self.hits = hits; self.answeredAt = answeredAt; self.askedAt = askedAt
+        }
     }
 
     /// Only transcripts written in this long, and only sightings seen this recently, count.
@@ -580,6 +643,7 @@ public final class LimitTracker: @unchecked Sendable {
                     for: answer.session, at: answer.at, version: answer.version, entrypoint: answer.entrypoint, in: sightings, accounts: accounts)
             else { continue }
             result[window, default: Activity()].answeredAt = max(result[window]?.answeredAt ?? answer.at, answer.at)
+            if let asked = answer.askedAt { result[window, default: Activity()].askedAt = max(result[window]?.askedAt ?? asked, asked) }
         }
         return result
     }
@@ -640,7 +704,7 @@ public final class LimitTracker: @unchecked Sendable {
     }
 
     /// The hits and the newest reply in the last `tail` bytes of a transcript; a file that only grew is read from
-    /// where the last read ended.
+    /// a few lines before where the last read ended, and its hits counted from there.
     func scan(_ url: URL) -> (hits: [LimitHit], answer: LimitAnswer?) {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
             let size = (attributes[.size] as? NSNumber)?.uint64Value, let modified = attributes[.modificationDate] as? Date
@@ -648,10 +712,12 @@ public final class LimitTracker: @unchecked Sendable {
         let cached = lock.withLock { scans[url.path] }
         if let cached, cached.size == size, cached.modified == modified { return (cached.hits, cached.answer) }
         var start = size > Self.tail ? size - Self.tail : 0
+        var fresh = start
         var hits: [LimitHit] = []
         var answer: LimitAnswer?
-        if let cached, size > cached.size, size - cached.offset <= Self.tail {
-            start = cached.offset
+        if let cached, size > cached.size, size - cached.resume <= Self.tail {
+            start = cached.resume
+            fresh = cached.offset
             hits = cached.hits
             answer = cached.answer
         }
@@ -660,11 +726,30 @@ public final class LimitTracker: @unchecked Sendable {
         guard (try? handle.seek(toOffset: start)) != nil, let data = try? handle.readToEnd() else { return ([], nil) }
         // Only whole lines: the rest is read again next time.
         let whole = data.lastIndex(of: 0x0A).map { data[..<($0 + 1)] } ?? Data()
-        hits += LimitHit.hits(in: whole)
-        if let newer = LimitAnswer.newest(in: whole) { answer = newer }
-        let scan = Scan(size: size, modified: modified, offset: start + UInt64(whole.count), hits: hits, answer: answer)
+        let newFrom = min(whole.startIndex + Int(fresh - start), whole.endIndex)
+        hits += LimitHit.hits(in: whole[newFrom...])
+        if var newer = LimitAnswer.newest(in: whole) {
+            // Its request began before what was read: the time an earlier reply was asked for still stands.
+            if newer.askedAt == nil { newer.askedAt = answer?.askedAt }
+            answer = newer
+        }
+        let scan = Scan(
+            size: size, modified: modified, offset: start + UInt64(whole.count), resume: start + UInt64(Self.resumePoint(in: whole) - whole.startIndex),
+            hits: hits, answer: answer)
         lock.withLock { scans[url.path] = scan }
         return (hits, answer)
+    }
+
+    /// The start of the last few whole lines of `data`, at most 256 KB before its end.
+    static func resumePoint(in data: Data, lines: Int = 16, limit: Int = 1 << 18) -> Data.Index {
+        var resume = data.endIndex
+        for _ in 0..<lines {
+            guard resume > data.startIndex else { break }
+            let before = data[..<(resume - 1)].lastIndex(of: 0x0A).map { $0 + 1 } ?? data.startIndex
+            guard data.endIndex - before <= limit else { break }
+            resume = before
+        }
+        return resume
     }
 
     // MARK: Store
@@ -861,11 +946,13 @@ public enum LimitText {
         return asOf(limits, now: now, timeZone: timeZone, locale: locale).map { "at its limit \($0)" } ?? "at its limit"
     }
 
-    /// For a closed window held back by an old sample alone: Claude records usage only while the window is open.
+    /// For a closed window held back by a sample alone, with no reset time or only an estimate that has passed:
+    /// Claude records usage only while the window is open.
     public static func checkHint(_ status: ProfileStatus, now: Date = Date()) -> String? {
-        guard !status.isRunning, status.isSignedIn, status.limits.isAtLimit(now: now), status.limits.binding(now: now)?.sampleOnly == true,
-            status.limits.binding(now: now)?.reset == nil
+        guard !status.isRunning, status.isSignedIn, status.limits.isAtLimit(now: now), let binding = status.limits.binding(now: now),
+            binding.sampleOnly
         else { return nil }
+        if let reset = binding.reset, reset.source != .estimate || reset.at > now { return nil }
         return "Open it to check: Claude records a new sample about 9 s after the window starts."
     }
 
@@ -898,8 +985,8 @@ public enum LimitSchedule {
     }
 
     /// Windows blocked at the previous check that a known reset has freed: an exact reset time passing, a newer
-    /// sample below the limit, or a reply Claude gave since. A sample simply growing old, extra usage taking over, or
-    /// another account signing in to the window isn't announced.
+    /// sample below the limit, or a reply to a request sent since. A sample simply growing old, extra usage taking
+    /// over, or another account signing in to the window isn't announced. `RoomAgainWatch` announces them.
     /// - Parameter blockedBefore: the windows blocked then, each with the account signed in to it (`blocked`).
     public static func freed(blockedBefore: [String: String], _ statuses: [ProfileStatus], now: Date = Date()) -> [ProfileStatus] {
         statuses.filter { status in
@@ -925,4 +1012,54 @@ public enum LimitSchedule {
     public static func roomAgainReason(_ status: ProfileStatus) -> String {
         status.limits.states.contains(where: \.resetByAnswer) ? "Claude answered in it again." : "Its usage limit has reset."
     }
+}
+
+/// Which windows to announce as having room again: freed since a check where they were blocked, and still free, with
+/// the same account, at a check at least `settle` later. A window blocked again in between isn't announced, so a
+/// sign of room that lasts only seconds never becomes a notification.
+public struct RoomAgainWatch: Sendable {
+    /// How long a window must stay free before it is announced.
+    public static let settle: TimeInterval = 60
+
+    struct Waiting: Sendable {
+        var account: String
+        var since: Date
+    }
+
+    /// The windows blocked at the previous check, each with its signed-in account; `nil` before the first.
+    private var blocked: [String: String]?
+    private var waiting: [String: Waiting] = [:]
+
+    public init() {}
+
+    /// Takes one check's statuses.
+    /// - Returns: the windows to announce now, in the order of `statuses`, and those blocked at a limit now.
+    public mutating func update(_ statuses: [ProfileStatus], now: Date = Date()) -> (announce: [ProfileStatus], blocked: Set<String>) {
+        let blockedNow = LimitSchedule.blocked(statuses, now: now)
+        if let before = blocked {
+            for status in LimitSchedule.freed(blockedBefore: before, statuses, now: now) where waiting[status.id] == nil {
+                if let account = before[status.id] { waiting[status.id] = Waiting(account: account, since: now) }
+            }
+        }
+        blocked = blockedNow
+        var announce: [ProfileStatus] = []
+        for status in statuses {
+            guard let wait = waiting[status.id] else { continue }
+            guard !LimitSchedule.freed(blockedBefore: [status.id: wait.account], [status], now: now).isEmpty else {
+                waiting[status.id] = nil
+                continue
+            }
+            if now.timeIntervalSince(wait.since) >= Self.settle {
+                announce.append(status)
+                waiting[status.id] = nil
+            }
+        }
+        // A window that is gone from the list is no longer waiting.
+        let ids = Set(statuses.map(\.id))
+        waiting = waiting.filter { ids.contains($0.key) }
+        return (announce, Set(blockedNow.keys))
+    }
+
+    /// When the next waiting window is due to be announced, if it is still free then.
+    public var nextCheck: Date? { waiting.values.map { $0.since.addingTimeInterval(Self.settle) }.min() }
 }

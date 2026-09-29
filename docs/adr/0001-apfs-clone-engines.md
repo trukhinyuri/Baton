@@ -1,4 +1,4 @@
-# 0001. Each window runs an APFS clone of the unmodified Claude Desktop
+# 0001. Each window runs an APFS clone of Claude Desktop with only its icon changed
 
 Status: accepted
 
@@ -8,7 +8,7 @@ Claude Desktop holds one signed-in account per data directory. Electron's `--use
 
 ## Decision
 
-Each profile runs its own copy of `Claude.app`, made with `clonefile(2)` so it shares disk blocks with the original. The only change is a Finder custom icon. No code, resource or entitlement is modified, and Anthropic's signature still verifies. A small launcher bundle per profile starts the copy with its data directory. Copies are rebuilt, staged and verified, whenever Claude Desktop updates.
+Each profile runs its own copy of `Claude.app`, made with `clonefile(2)` so it shares disk blocks with the original. The only change is a Finder custom icon. No code, resource or entitlement is modified: the copy passes `codesign --verify` and Gatekeeper, and only `codesign --verify --strict` flags the added icon file. A small launcher bundle per profile starts the copy with its data directory. Copies are rebuilt, staged and verified, whenever Claude Desktop updates.
 
 ## Consequences
 

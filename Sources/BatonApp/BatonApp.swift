@@ -114,6 +114,7 @@ struct MenuBarContent: View {
         } else if status.isSignedIn, status.usage != nil {
             usage = " · " + LimitText.describe(status.limits.week)
         }
-        return "\(status.isRunning ? "●" : "○")  \(name) — \(who)\(usage)"
+        // Open or closed in words, as in the window list: VoiceOver reads a dot glyph as "black circle".
+        return "\(name) · \(status.isRunning ? "Open" : "Closed") — \(who)\(usage)"
     }
 }

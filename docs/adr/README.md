@@ -4,7 +4,7 @@ Short records of the decisions that shape Baton, and what would make us revisit 
 
 | # | Decision |
 |---|---|
-| [0001](0001-apfs-clone-engines.md) | Each window runs an APFS clone of the unmodified Claude Desktop |
+| [0001](0001-apfs-clone-engines.md) | Each window runs an APFS clone of Claude Desktop with only its icon changed |
 | [0002](0002-no-network-code.md) | The app has no network code |
 | [0003](0003-sign-in-stays-with-claude.md) | Sign-in stays inside Claude's own flow |
 | [0004](0004-share-cards-copy-only-for-two-writers.md) | Share sidebar cards; copy a transcript only when two windows could write to it |

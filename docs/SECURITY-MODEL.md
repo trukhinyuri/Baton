@@ -9,18 +9,20 @@ What Baton can reach, what it does with it, and what it never does. Report a wea
 | Sign-in: tokens, cookies, Keychain items | Each data directory, the Keychain | Never reads, copies, backs up or forwards them |
 | Account id | `config.json` → `lastKnownAccountUuid` | Reads this one key |
 | Account email | Claude's local IndexedDB cache | Reads the email that belongs to the account id, nothing else |
-| Usage | `plan-usage-history.json` | Reads the latest sample |
+| Usage | `plan-usage-history.json` | Reads its samples |
+| Limit messages and replies | Transcripts in `~/.claude/projects` | Reads when a session was refused at a limit, the reset time Claude gave, and when Claude last answered, to show when a window has room again |
+| Auto-continue entries | `claude_desktop_config.json` → `preferences.epitaxyPrefs` → `autoResumeRateLimit.<account>` | Reads reset times; turns `optedIn` off for one session's entry in the closed window that session was continued from, after a backup; `baton doctor` lists each change |
 | Local Code transcripts | `~/.claude/projects` | Reads; writes only new copies when continuing, and side files after Claude's own fork |
 | Sidebar cards | `claude-code-sessions/` in each data directory | Reads and writes, with backups |
-| Desktop settings | `claude_desktop_config.json`, Local Storage, IndexedDB | Writes selected keys only in closed windows, with backups |
+| Desktop settings | `claude_desktop_config.json`, Local Storage, IndexedDB | Writes selected keys (Local only, the settings merge, Auto-continue above) only in closed windows, with backups |
 | Cowork tasks | `local-agent-mode-sessions/` | Reads only; a continued task gets a new task with copied history and files |
 | History-suppression records | Transcripts | Never writes, edits or removes them |
 
 ## Boundaries
 
 - **No network.** No code in the app or CLI opens a connection. Links it hands to macOS (`claude://` to a Claude window, `https://github.com/…` for a problem report) are opened by macOS in the app the user chose; Baton sends nothing itself.
-- **No privilege.** No administrator rights, no helper tools, no macOS permissions (Accessibility, Automation, Full Disk Access). It runs as the user and touches only the user's files.
-- **Unmodified Claude.** Every window runs Anthropic's signed code; the app copy differs only by a Finder icon, and its signature still verifies. Nothing is injected, patched or preloaded.
+- **No privilege.** No administrator rights, no helper tools, no macOS permissions such as Accessibility, Automation or Full Disk Access. The one prompt it may show is macOS asking whether Baton may post notifications, the first time a window has room again after a limit; declining keeps that notice in Baton's window. It runs as the user and touches only the user's files.
+- **Claude's own code.** Every window runs Anthropic's signed code; the app copy differs only by a Finder custom icon. It passes `codesign --verify` and Gatekeeper; `codesign --verify --strict` flags the added icon file. Nothing is injected, patched or preloaded.
 - **Closed-window writes.** Settings, interface stores and Local only keys are written only while that window's process is not running, checked right before the write. The LevelDB writer refuses to write while another process holds the database's `LOCK`, and only ever adds a new log file.
 - **Backups before changes.** A replaced or removed card or settings file is copied into `Backups/<date>/` first. Removals move to the Trash; nothing is deleted outright. `config.json`, which holds sign-in data, is never copied: its three appearance keys are edited in place with the file's permissions kept.
 - **Account separation.** A card copied into another account's window drops that source account's Remote Control, connector and grant fields; folder rules keep a folder's work out of accounts they do not allow, and fail closed when the rules or an account's email cannot be read. Account-owned workers never cross accounts.

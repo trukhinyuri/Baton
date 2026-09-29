@@ -425,6 +425,13 @@ public enum LegacyMigration {
     /// - Parameter cli: the running `baton`, links resolved.
     public static func command(_ args: [String], home: URL, cli: URL?, environment: Environment = .live) -> (message: String, exitCode: Int32)? {
         guard args.first == "migrate" else { return nil }
+        // Nothing to preview it with: an option it doesn't know must not rename the folder anyway.
+        guard args.count == 1 else {
+            return (
+                "`baton migrate` takes no options (got \(args.dropFirst().joined(separator: " "))), and nothing was renamed. "
+                    + "`baton doctor` shows the folder's state without changing it.", 1
+            )
+        }
         let outcome = run(home: home, cli: cli, environment: environment)
         return (message(for: outcome, home: home, insideApp: insideApp(cli: cli, home: home)), outcome.exitCode)
     }

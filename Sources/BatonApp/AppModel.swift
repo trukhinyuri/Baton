@@ -58,6 +58,9 @@ final class AppModel: ObservableObject {
         // A folder of the earlier name that links nowhere right now (a disk not connected): nothing may write, or a
         // new, empty Baton folder would win for good. The window shows why; open Baton again once it is connected.
         let unreachable = isDemo ? nil : Paths.unreachableFolder(home: home)
+        // Baton's own log first, so the folder rename below reaches the file a problem report reads. The data folder
+        // is never renamed, so this path holds after the rename too.
+        if !isDemo, unreachable == nil { Log.enableFile(in: Paths.stateRoot(home: home)) }
         // Before any path is resolved, timer runs, launcher is rebuilt or session is shared: the manager's paths are
         // whichever folders exist once this is done. Skipped while Baton runs from inside the old launchers folder,
         // and in demo mode, which changes nothing.
@@ -67,7 +70,6 @@ final class AppModel: ObservableObject {
             : LegacyMigration.atAppStart(home: home, app: Bundle.main.bundleURL, cli: cliPath, variables: ProcessInfo.processInfo.environment)
         manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil)
         reload()
-        if !isDemo, unreachable == nil { Log.enableFile(in: manager.paths.stateDir) }
         if let unreachable {
             setupWarning = unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;")
             return
@@ -189,7 +191,7 @@ final class AppModel: ObservableObject {
     func restart(_ id: String) {
         guard !isDemo else { return }
         let manager = manager
-        run("Restarting \(id == "main" ? "Claude" : "Claude \(label(of: id))")…") { try await manager.restart(id) }
+        run("Restarting Claude \(displayLabel(of: id))…") { try await manager.restart(id) }
     }
 
     private func remember(_ message: String?) {
@@ -246,8 +248,8 @@ final class AppModel: ObservableObject {
         statuses.first { $0.id == windowID }?.displayLabel ?? manager.displayLabel(of: windowID)
     }
 
-    /// A window on a button: "Claude (main)", or the profile's label ("Continue in WORK").
-    func buttonLabel(of windowID: String) -> String { windowID == "main" ? "Claude (main)" : label(of: windowID) }
+    /// A window on a button or in a list: "Claude (main)" or "Claude WORK", as everywhere else.
+    func buttonLabel(of windowID: String) -> String { "Claude \(displayLabel(of: windowID))" }
 
     func loadConversations() {
         guard !isDemo else { conversations = DemoData.conversations; return }
@@ -345,7 +347,7 @@ final class AppModel: ObservableObject {
     func open(_ status: ProfileStatus) {
         guard !isDemo else { return }
         let manager = manager
-        run(status.isRunning ? nil : "Opening \(status.isMain ? "Claude" : "Claude \(status.label)")…") {
+        run(status.isRunning ? nil : "Opening Claude \(status.displayLabel)…") {
             if let id = status.profile?.id { try await manager.open(id) } else { try await manager.openMain() }
         }
     }

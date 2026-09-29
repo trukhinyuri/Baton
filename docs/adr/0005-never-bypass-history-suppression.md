@@ -4,7 +4,7 @@ Status: accepted
 
 ## Context
 
-When a session is resumed under a different account, Claude Code may append a `history-suppression` record to its transcript and, in Claude Desktop, fork it into a new session. The record is Anthropic's safeguard that keeps one account's history out of another account's remote channels. Desktop's fork copies the transcript but leaves sub-agents, Workflow history and tool outputs behind, and drops Rewind snapshots from before the fork.
+When a session is resumed under a different account, Claude Code may append a `history-suppression` record to its transcript and, in Claude Desktop, fork it into a new session. Anthropic has not documented the record; Baton treats it as a safeguard Claude applies between accounts and leaves it exactly as Claude wrote it. Desktop's fork copies the transcript but leaves sub-agents, Workflow history and tool outputs behind, and drops Rewind snapshots from before the fork.
 
 ## Decision
 
