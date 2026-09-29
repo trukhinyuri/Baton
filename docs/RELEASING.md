@@ -22,7 +22,9 @@ downloads the ZIP would have to override macOS to open it.
 3. **Signing and notarization secrets are set** in the repository's Actions secrets: `MACOS_CERTIFICATE` (a
    Developer ID Application certificate as a base64 `.p12`), `MACOS_CERTIFICATE_PWD`, `KEYCHAIN_PASSWORD`,
    `APPLE_TEAM_ID`, `AC_API_KEY_ID`, `AC_API_ISSUER_ID`, `AC_API_KEY` (an App Store Connect API key as a base64
-   `.p8`) and `HOMEBREW_TAP_PAT`. With `MACOS_CERTIFICATE` missing the workflow stops before building and publishes
+   `.p8`) and `HOMEBREW_TAP_PAT`. `scripts/set-release-secrets.sh <certificate.p12> <AuthKey_KEYID.p8> <team id>
+   <key id> <issuer id>` checks the certificate and sets all of them through the GitHub CLI without showing a value;
+   it asks for the `.p12` password and the tap token. With `MACOS_CERTIFICATE` missing the workflow stops before building and publishes
    nothing. Only a run started by hand for the tag with `allow_unsigned` ticked publishes an ad-hoc signed, not
    notarized build, with a note saying so in the release, and leaves the tap unchanged.
 
