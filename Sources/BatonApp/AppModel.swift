@@ -23,18 +23,16 @@ final class AppModel: ObservableObject {
     private var lastSyncReport: SyncReport?
     @Published var isAdding = false
     @Published var isContinuing = false
-    @Published private(set) var conversations: [Conversation] = []
-    @Published private(set) var isLoadingConversations = false
-    /// What the limit banner asks the Continue sheet to select: the most recent session of the window at its limit
-    /// (`continueFrom`) and the window the banner named (`continueTo`). Both `nil` for a plain “Continue work…”.
-    private(set) var continueFrom: String?
-    private(set) var continueTo: String?
+    /// The window a window row's “Move work…” opened the Continue sheet for; `nil` for a plain “Continue work…”.
+    private(set) var moveFrom: String?
     /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed;
     /// any other goes after 20 seconds, and a warning it covered shows again.
     @Published private(set) var notices = Notices()
     var notice: String? { notices.current?.text }
     var noticeIsWarning: Bool { notices.current?.isWarning == true }
     private var noticeTask: Task<Void, Never>?
+    /// The line each window waiting for a Dock-started Claude to finish shows, withdrawn once its open ends.
+    private var strayLines: [String: String] = [:]
     /// Brings the Baton window forward; set by the menu bar icon at launch, by the window and by the menu bar's items.
     /// An error while the window is closed (from the menu bar, or from a copy reopened from its own Dock icon) would
     /// otherwise wait unseen until the window next opens.
@@ -52,6 +50,8 @@ final class AppModel: ObservableObject {
     /// Each window's warning from the last time an open action started it (`ProfileManager.openWarning(of:)`).
     @Published private var openWarnings = OpenWarnings()
     @Published var pendingRemoval: ProfileStatus?
+    /// What folder rules kept out of windows in the last sync, for the footer (`ProfileManager.withheldLines`).
+    @Published private(set) var withheldNotice: String?
     /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
     @Published private(set) var installWarning: String?
     /// Which accounts may continue work in which folders; `nil` if the rules file can't be read.
@@ -62,12 +62,16 @@ final class AppModel: ObservableObject {
     @Published var isConfirmingCloudMoveLock = false
     /// Windows blocked at a limit as of the last reload (see `LimitWatch`).
     @Published private(set) var atLimit: Set<String> = []
+    /// What the limit banner says for a window whose work is being handed over (moving, waiting), by window id.
+    @Published private(set) var handoverLines: [String: String] = [:]
+    /// Windows whose work this app is handing over now.
+    private var handingOver: Set<String> = []
+    /// The last reason a window's work couldn't be planned to move, shown once rather than on every reload.
+    private var handoverFailures: [String: String] = [:]
     private let limitWatch = LimitWatch()
 
     let manager: ProfileManager
     let isDemo = DemoMode.isOn()
-    /// In demo mode with `BATON_DEMO_SHEET=wait`, the offer to wait that the Continue sheet shows at once.
-    private(set) var demoOffer: AutoResumeOffer?
     private var refreshTimer: Timer?
     private var syncTimer: Timer?
     /// Profiles whose window was open and not yet signed in at the last check.
@@ -101,25 +105,30 @@ final class AppModel: ObservableObject {
             ? nil
             : LegacyMigration.atAppStart(home: home, app: Bundle.main.bundleURL, cli: cliPath, variables: ProcessInfo.processInfo.environment)
         manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil, misplaced: misplaced)
+        // A profile that waits for a Claude started from its Dock icon to finish its work says so until it opens.
+        manager.onStrayWait = { [weak self] id, line in
+            Task { @MainActor in
+                self?.strayLines[id] = line
+                self?.show(notice: line, isWarning: true)
+            }
+        }
         reload()
         if let unreachable {
             warnAtStartUp(unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;"))
             return
         }
         // Documentation screenshots: BATON_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
-        // …_DEMO_SHEET=continue opens "Continue work…", …=wait the same with its offer to wait for a reset,
-        // …=report "Report a problem…" and …=status a window's status.
+        // …_DEMO_SHEET=continue opens "Continue work…", …=report "Report a problem…" and …=status a window's status.
         // With …_DEMO_SNAPSHOT=<file.png> it draws the window into that file and quits (see DemoSnapshot).
         // Everything below this guard (checks, timers, sync, launchers, the launch observer) never runs in demo mode.
         guard !isDemo else {
             let sheet = ProcessInfo.processInfo.environment["BATON_DEMO_SHEET"]
             isAdding = sheet == "1"
-            isContinuing = sheet == "continue" || sheet == "wait"
+            isContinuing = sheet == "continue"
             isReporting = sheet == "report"
-            if sheet == "wait" { demoOffer = DemoData.autoResumeOffer }
             if sheet == "status" { showStatus(of: "work") }
             if let file = DemoSnapshot.file() {
-                let sheets = demoOffer != nil ? 2 : isAdding || isContinuing || isReporting || statusWindow != nil ? 1 : 0
+                let sheets = isAdding || isContinuing || isReporting || statusWindow != nil ? 1 : 0
                 DemoSnapshot.take(to: file, sheets: sheets)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -169,6 +178,8 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.applyLocalOnlyToClosedWindows() }
         }
         limitWatch.start(self)
+        // Handovers a quit or a crash of Baton left unfinished: a destination to restart once free, a source to close.
+        resumeHandovers()
         // macOS reopens windows at login by starting each app copy without its arguments, possibly before this app.
         manager.recentlyStartedWithoutDataDir(within: 120).forEach(reopenIfStartedWithoutProfile)
     }
@@ -206,13 +217,20 @@ final class AppModel: ObservableObject {
     /// time the window opens.
     func bringWindowForward() { presentWindow?() }
 
-    /// Opens the Continue sheet. From the limit banner it selects the most recent session of the window at its limit
-    /// (`tired`) and the window the banner named (`destination`); from anywhere else, the most recent session of any
-    /// window and the one with the most room.
-    func continueWork(from tired: String? = nil, to destination: String? = nil) {
-        continueFrom = tired
-        continueTo = destination
+    /// Opens the Continue sheet on the work of `window` (a window row's “Move work…”), or of the window at its limit,
+    /// or of the one used most recently.
+    func continueWork(from window: String? = nil) {
+        moveFrom = window
         isContinuing = true
+    }
+
+    /// The window whose work the Continue sheet moves: the one it was opened for, else the open window at its limit,
+    /// else the signed-in window whose usage Claude recorded last.
+    var moveSource: String {
+        if let moveFrom { return moveFrom }
+        if let tired = limitReached { return tired.id }
+        let signedIn = statuses.filter(\.isSignedIn)
+        return signedIn.max { ($0.usage?.sampledAt ?? .distantPast) < ($1.usage?.sampledAt ?? .distantPast) }?.id ?? "main"
     }
 
     func show(_ error: Error) {
@@ -331,13 +349,6 @@ final class AppModel: ObservableObject {
         return FolderRules.allowedAccounts(for: folders, in: rules)
     }
 
-    /// “ · usage of Claude LAB as of 5h ago” when a subscription's sample is too old to compare by; empty otherwise.
-    /// It names the window, since the limit banner shows it next to the one at its limit.
-    func staleNote(_ id: String) -> String {
-        guard let usage = statuses.first(where: { $0.id == id })?.usage, !usage.isFresh() else { return "" }
-        return " · usage of \(buttonLabel(of: id)) as of \(relativeAge(since: usage.sampledAt))"
-    }
-
     func label(of windowID: String) -> String { statuses.first { $0.id == windowID }?.label ?? manager.label(of: windowID) }
 
     /// What follows "Claude " in what the app says: "(main)" or the profile's label.
@@ -347,17 +358,6 @@ final class AppModel: ObservableObject {
 
     /// A window on a button or in a list: "Claude (main)" or "Claude WORK", as everywhere else.
     func buttonLabel(of windowID: String) -> String { "Claude \(displayLabel(of: windowID))" }
-
-    func loadConversations() {
-        guard !isDemo else { conversations = DemoData.conversations; return }
-        isLoadingConversations = true
-        let manager = manager
-        Task {
-            let found = await Task.detached { manager.conversations() }.value
-            if conversations != found { conversations = found }
-            isLoadingConversations = false
-        }
-    }
 
     /// - Parameter isWarning: the text asks for something (choose a model, stop another window continuing a
     ///   session), so it stays until dismissed.
@@ -460,9 +460,11 @@ final class AppModel: ObservableObject {
                     if asked { await MainActor.run { self.show(notice: SyncReport.notice(nil)) } }
                     return
                 }
+                let withheld = manager.withheldLines(report)
                 await MainActor.run {
                     self.lastSync = Date()
                     self.lastSyncReport = report
+                    self.withheldNotice = withheld.isEmpty ? nil : withheld.joined(separator: " ")
                     self.lastSyncChanges = report.changes
                     self.syncError = nil
                     if asked { self.show(notice: SyncReport.notice(report)) }
@@ -549,6 +551,7 @@ final class AppModel: ObservableObject {
                     remember(warning)
                 }
             } catch { show(error) }
+            if let window, let line = strayLines.removeValue(forKey: window) { notices.withdraw(line) }
             operations.finish(operation)
             reload()
             if statusWindow != nil { refreshStatus() }
@@ -556,13 +559,162 @@ final class AppModel: ObservableObject {
     }
 }
 
+// MARK: - Handing work over when a window reaches its limit
+
+extension AppModel {
+    /// The limit banner: a window whose work is being handed over, else an open window at its limit, and its line.
+    var limitBanner: (status: ProfileStatus, line: String)? {
+        if let (id, line) = handoverLines.min(by: { $0.key < $1.key }), let status = statuses.first(where: { $0.id == id }) {
+            return (status, line)
+        }
+        guard let tired = limitReached else { return nil }
+        return (tired, HandoverTrigger.bannerLine(tired, noRoom: manager.noRoomLine(for: tired.id, statuses: statuses)))
+    }
+
+    /// After each reload (`LimitWatch.update`): hands over the work of every open window that has just reached its
+    /// limit while it was used, unless `baton handover auto off` turned that off.
+    func handOverDue(_ statuses: [ProfileStatus]) {
+        guard !isDemo, !manager.isReadOnly else { return }
+        let log = HandoverLog(paths: manager.paths)
+        let due = HandoverTrigger.due(
+            statuses, handled: { log.handled(source: $0, resetsAt: $1) },
+            busy: { self.handingOver.contains($0) || log.inProgress(source: $0) })
+        guard !due.isEmpty, HandoverAuto(paths: manager.paths).isOn else { return }
+        for source in due { handOver(from: source) }
+    }
+
+    /// Hands `source`'s work to the window with the most room (or `destination`), as `baton handover` does: the banner
+    /// says it is moving, then waiting for a busy destination, and the result line shows in the window and as a
+    /// notification. A source left open is closed once nothing works there.
+    func handOver(from source: String, to destination: String? = nil) {
+        guard !isDemo, handingOver.insert(source).inserted else { return }
+        let manager = manager
+        Task {
+            do {
+                let plan = try await Task.detached { try manager.planHandover(from: source, to: destination) }.value
+                guard !plan.picksUpItself else {
+                    handingOver.remove(source)
+                    return
+                }
+                await runHandover(source: source, destination: plan.destination) { progress in
+                    try await manager.handOver(plan, progress: progress)
+                }
+            } catch {
+                // No room, handed over already or elsewhere: the banner says what holds, and the log why.
+                Log.notice("handover", "Didn't hand over window \(source): \(error.localizedDescription)")
+                handingOver.remove(source)
+                // Anything else means the work stays put without the banner saying so: say it, once per reason.
+                if !(error is HandoverError) {
+                    let line = "\(displayLabel(of: source))'s work didn't move: \(error.localizedDescription)"
+                    if handoverFailures.updateValue(line, forKey: source) != line { show(notice: line, isWarning: true) }
+                }
+            }
+        }
+    }
+
+    /// Moves `source`'s work to `destination`, as the Continue sheet asked, the way a handover at a limit does. Planned
+    /// again now, not when the sheet opened: a handover may have moved some of the work meanwhile.
+    func move(from source: String, to destination: String) {
+        guard !isDemo else { return }
+        guard handingOver.insert(source).inserted else {
+            return show(notice: "\(displayLabel(of: source))'s work is moving already.", isWarning: true)
+        }
+        let manager = manager
+        Task {
+            do {
+                let plan = try await Task.detached { try manager.planMove(from: source, to: destination) }.value
+                await runHandover(source: source, destination: plan.destination, atLimit: plan.sourceAtLimit) { progress in
+                    try await manager.handOver(plan, progress: progress)
+                }
+            } catch {
+                handingOver.remove(source)
+                show(notice: "\(displayLabel(of: source))'s work didn't move: \(error.localizedDescription)", isWarning: true)
+            }
+        }
+    }
+
+    /// Takes up the handovers Baton left unfinished: one stopped while it started starts over, one waiting for its
+    /// destination waits again, and a source left open is closed once nothing works there.
+    private func resumeHandovers() {
+        guard !isDemo, !manager.isReadOnly else { return }
+        let log = HandoverLog(paths: manager.paths)
+        for entry in log.unfinished() where !handingOver.contains(entry.source) && !log.inProgress(source: entry.source) {
+            let manager = manager, source = entry.source
+            switch entry.state {
+            case "starting":
+                let to = try? manager.restartStoppedHandover(source: source)
+                handOver(from: source, to: to ?? nil)
+            case "waiting":
+                handingOver.insert(source)
+                Task { await runHandover(source: source, destination: entry.destination) { _ in try await manager.finishWaitingHandover(source: source) } }
+            default:
+                Task.detached { _ = try? await manager.watchHandoverSource(source) }
+            }
+        }
+    }
+
+    /// Runs one handover with its line in the banner and its destination's Open button waiting, then shows the result.
+    private func runHandover(
+        source: String, destination: String, atLimit: Bool = true,
+        _ work: @escaping @Sendable (_ progress: @escaping @Sendable (String) -> Void) async throws -> HandoverResult?
+    ) async {
+        let manager = manager
+        let moving = HandoverText.moving(source: displayLabel(of: source), destination: displayLabel(of: destination), atLimit: atLimit)
+        handoverLines[source] = moving
+        Self.announce(moving)
+        let operation = operations.start(nil, window: destination)
+        // While the handover waits for a busy source, the banner says so instead of "Moving…".
+        let finishing = HandoverText.sourceFinishing(source: manager.displayLabel(of: source), destination: manager.displayLabel(of: destination))
+        let step = { @Sendable (line: String) in
+            guard line == finishing else { return }
+            Task { @MainActor in
+                guard self.handoverLines[source] != nil else { return }
+                self.handoverLines[source] = line
+                Self.announce(line)
+            }
+        }
+        do {
+            guard var result = try await work(step) else { throw CancellationError() }
+            if result.state == .waiting {
+                handoverLines[source] = result.line
+                Self.announce(result.line)
+                if let finished = try await manager.finishWaitingHandover(source: source) { result = finished }
+            }
+            handoverLines[source] = nil
+            handoverFailures[source] = nil
+            // The destination opened as part of the handover: a line saying it waits for a Dock-started Claude is past.
+            if let line = strayLines.removeValue(forKey: destination) { notices.withdraw(line) }
+            show(notice: result.line, isWarning: result.isWarning)
+            let title = atLimit ? "\(displayLabel(of: source)) is at its limit" : "\(displayLabel(of: source))'s work moved"
+            LimitWatch.notify(title: title, body: result.line, id: "handover-\(source)")
+            if result.state == .done { openWarnings.record(manager.openWarning(of: destination), for: destination) }
+            // Closed as soon as its current work finishes, when Claude Code still worked there at the handover.
+            if !result.sourceClosed { Task.detached { _ = try? await manager.watchHandoverSource(source) } }
+        } catch is CancellationError {
+            handoverLines[source] = nil  // nothing was waiting any more
+        } catch {
+            handoverLines[source] = nil
+            show(notice: "\(displayLabel(of: source))'s work didn't move: \(error.localizedDescription)", isWarning: true)
+        }
+        handingOver.remove(source)
+        operations.finish(operation)
+        reload()
+    }
+}
+
 enum DemoData {
     /// When WORK's five-hour limit resets, from now.
     static let workResetsIn: TimeInterval = 9 * 60
 
-    /// WORK picks the first session up by itself after its reset: what the Continue sheet offers to wait for.
-    static var autoResumeOffer: AutoResumeOffer {
-        AutoResumeOffer(label: "WORK", resetsAt: Date().addingTimeInterval(workResetsIn), sessions: ["1"], titles: [conversations[0].title])
+    /// What the Continue sheet lists for WORK in demo mode: its Code sessions, the first two cut by its limit, and its
+    /// Cowork task, which stays.
+    static var moveRows: [MoveWorkSheet.Row] {
+        let code = conversations.filter { $0.kind == .code }
+        return code.enumerated().map { index, conversation in
+            MoveWorkSheet.Row(
+                id: conversation.id, title: conversation.title,
+                detail: conversation.folders.first.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "No folder", resumes: index < 2)
+        } + [MoveWorkSheet.Row(id: "cowork", title: "1 Cowork task stays in WORK", detail: "", stays: true)]
     }
 
     static var conversations: [Conversation] {

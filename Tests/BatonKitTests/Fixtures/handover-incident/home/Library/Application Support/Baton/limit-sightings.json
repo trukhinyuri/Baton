@@ -1,0 +1,705 @@
+{
+  "sightings": [
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/bots",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7000,
+      "session": "5e55e000-0000-4000-8000-000000000001",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/bots",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7001,
+      "session": "5e55e000-0000-4000-8000-000000000002",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/bots",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7002,
+      "session": "5e55e000-0000-4000-8000-000000000003",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/bots",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7003,
+      "session": "5e55e000-0000-4000-8000-000000000004",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/bots",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7004,
+      "session": "5e55e000-0000-4000-8000-000000000005",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/bots",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7005,
+      "session": "5e55e000-0000-4000-8000-000000000006",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/bots/shared",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7006,
+      "session": "5e55e000-0000-4000-8000-000000000007",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/bots/shared",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7007,
+      "session": "5e55e000-0000-4000-8000-000000000008",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7008,
+      "session": "5e55e000-0000-4000-8000-000000000009",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7009,
+      "session": "5e55e000-0000-4000-8000-000000000010",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7010,
+      "session": "5e55e000-0000-4000-8000-000000000011",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7011,
+      "session": "5e55e000-0000-4000-8000-000000000012",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7012,
+      "session": "5e55e000-0000-4000-8000-000000000013",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7013,
+      "session": "5e55e000-0000-4000-8000-000000000014",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7014,
+      "session": "5e55e000-0000-4000-8000-000000000015",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7015,
+      "session": "5e55e000-0000-4000-8000-000000000016",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7016,
+      "session": "5e55e000-0000-4000-8000-000000000017",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7017,
+      "session": "5e55e000-0000-4000-8000-000000000018",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7018,
+      "session": "5e55e000-0000-4000-8000-000000000019",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7019,
+      "session": "5e55e000-0000-4000-8000-000000000020",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7020,
+      "session": "5e55e000-0000-4000-8000-000000000021",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7021,
+      "session": "5e55e000-0000-4000-8000-000000000022",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7022,
+      "session": "5e55e000-0000-4000-8000-000000000023",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7023,
+      "session": "5e55e000-0000-4000-8000-000000000024",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7024,
+      "session": "5e55e000-0000-4000-8000-000000000025",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7025,
+      "session": "5e55e000-0000-4000-8000-000000000026",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7026,
+      "session": "5e55e000-0000-4000-8000-000000000027",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7027,
+      "session": "5e55e000-0000-4000-8000-000000000028",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7028,
+      "session": "5e55e000-0000-4000-8000-000000000029",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7029,
+      "session": "5e55e000-0000-4000-8000-000000000030",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7030,
+      "session": "5e55e000-0000-4000-8000-000000000031",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7031,
+      "session": "5e55e000-0000-4000-8000-000000000032",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7032,
+      "session": "5e55e000-0000-4000-8000-000000000033",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7033,
+      "session": "5e55e000-0000-4000-8000-000000000034",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7034,
+      "session": "5e55e000-0000-4000-8000-000000000035",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7035,
+      "session": "5e55e000-0000-4000-8000-000000000036",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7036,
+      "session": "5e55e000-0000-4000-8000-000000000037",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7037,
+      "session": "5e55e000-0000-4000-8000-000000000038",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7038,
+      "session": "5e55e000-0000-4000-8000-000000000039",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7039,
+      "session": "5e55e000-0000-4000-8000-000000000040",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7040,
+      "session": "5e55e000-0000-4000-8000-000000000041",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/assistant",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7041,
+      "session": "5e55e000-0000-4000-8000-000000000042",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7042,
+      "session": "5e55e000-0000-4000-8000-000000000043",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7043,
+      "session": "5e55e000-0000-4000-8000-000000000044",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7044,
+      "session": "5e55e000-0000-4000-8000-000000000045",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7045,
+      "session": "5e55e000-0000-4000-8000-000000000046",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7046,
+      "session": "5e55e000-0000-4000-8000-000000000047",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7047,
+      "session": "5e55e000-0000-4000-8000-000000000048",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7048,
+      "session": "5e55e000-0000-4000-8000-000000000049",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7049,
+      "session": "5e55e000-0000-4000-8000-000000000050",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7050,
+      "session": "5e55e000-0000-4000-8000-000000000051",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7051,
+      "session": "5e55e000-0000-4000-8000-000000000052",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7052,
+      "session": "5e55e000-0000-4000-8000-000000000053",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7053,
+      "session": "5e55e000-0000-4000-8000-000000000054",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7054,
+      "session": "5e55e000-0000-4000-8000-000000000055",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7055,
+      "session": "5e55e000-0000-4000-8000-000000000056",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7056,
+      "session": "5e55e000-0000-4000-8000-000000000057",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7057,
+      "session": "5e55e000-0000-4000-8000-000000000058",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7058,
+      "session": "5e55e000-0000-4000-8000-000000000059",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7059,
+      "session": "5e55e000-0000-4000-8000-000000000060",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/client",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7060,
+      "session": "5e55e000-0000-4000-8000-000000000061",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7061,
+      "session": "5e55e000-0000-4000-8000-000000000062",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7062,
+      "session": "5e55e000-0000-4000-8000-000000000063",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7063,
+      "session": "5e55e000-0000-4000-8000-000000000064",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7064,
+      "session": "5e55e000-0000-4000-8000-000000000065",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7065,
+      "session": "5e55e000-0000-4000-8000-000000000066",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7066,
+      "session": "5e55e000-0000-4000-8000-000000000067",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7067,
+      "session": "5e55e000-0000-4000-8000-000000000068",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7068,
+      "session": "5e55e000-0000-4000-8000-000000000069",
+      "version": "2.1.284",
+      "window": "atlas"
+    },
+    {
+      "account": "22222222-0000-4000-8000-000000000002",
+      "cwd": "/work/app",
+      "from": "@ISO-10800@",
+      "lastSeen": "@ISO-120@",
+      "pid": 7069,
+      "session": "5e55e000-0000-4000-8000-000000000070",
+      "version": "2.1.284",
+      "window": "atlas"
+    }
+  ],
+  "version": 1
+}

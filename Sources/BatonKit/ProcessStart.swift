@@ -3,7 +3,8 @@ import Foundation
 import MachO
 
 /// Claude's and Anthropic's settings in the environment Baton was started with. Baton reads none of them itself (it
-/// reads only `BATON_DEMO`, `BATON_DEMO_SHEET` and `BATON_DEMO_SNAPSHOT`), and every Claude window it opens must use
+/// reads only `BATON_DEMO`, `BATON_DEMO_SHEET` and `BATON_DEMO_SNAPSHOT`, and in a debug build `BATON_SANDBOX_HOME` and
+/// `BATON_FAKE_LAUNCH`), and every Claude window it opens must use
 /// its own account and settings, not the ones of the terminal or Claude Code session that happened to start Baton.
 public enum InheritedEnvironment {
     /// A variable Claude or Anthropic tools read: its name starts with `CLAUDE` or `ANTHROPIC_`.
@@ -65,6 +66,7 @@ public enum CLIDispatch {
         switch args.first {
         case nil, "list", "doctor", "report", "conversations", "rules": true
         case "local-only": args.dropFirst().first == "status" || args.dropFirst().prefix(2) == ["cloud-lock", "status"]
+        case "handover": args.dropFirst().prefix(2) == ["auto", "status"]
         default: false
         }
     }

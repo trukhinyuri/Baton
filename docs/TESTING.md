@@ -6,6 +6,7 @@ make app verify           # universal build, then scripts/verify-build.sh
 scripts/check-docs.sh     # docs match 1.0: removed features, links, anchors, VERSION
 scripts/check-repo.sh     # contributor and reporter files are in place
 scripts/check-cask.sh     # brew style and brew audit on the cask, in a throwaway tap (404s until the first release)
+scripts/e2e-handover.sh   # the limit handover of 29 September 2026, end to end, in a sandbox home
 ```
 
 ## The suite never touches real data
@@ -17,6 +18,14 @@ Fixtures in `Tests/BatonKitTests/Fixtures` are shaped like real Claude data with
 ## Writing a test
 
 Tests use Swift Testing (`@Test`, `#expect`). For a bug, write the test that fails first, watch it fail, then fix the code. For anything that writes a user's file, test the backup and the closed-window rule as well as the happy path. Keep a test's name a sentence about behavior, such as `crossAccountCopyDropsAccountScopedKeys`.
+
+## End-to-end handover
+
+```sh
+scripts/e2e-handover.sh
+```
+
+replays the limit handover of 29 September 2026 with the debug `baton`. It writes the incident fixture (`Tests/BatonKitTests/Fixtures/handover-incident`, made by `scripts/e2e/make-incident-fixture.py`: a window at its limit with a folder rule, 42 Remote Control cards, a group of 64 sessions, 15 pins and 8 sessions the limit cut, 3 of them with auto-continue) into a new temporary folder, runs `baton handover --from ATLAS --dry-run --json` and then the handover itself, and checks the cards, settings, Baton's log and the order of starts, quits and links with `scripts/e2e/check-handover.py`. `baton` runs with `BATON_SANDBOX_HOME` (the temporary home) and `BATON_FAKE_LAUNCH` (the log of stand-in windows, which start, quit and resume sessions only on paper); only a debug build reads them, and with them it never starts, quits or registers a real Claude. `HandoverScenarioTests` run the same fixture in the suite, with Local Storage and IndexedDB checked too.
 
 ## Optional suites
 
@@ -49,4 +58,4 @@ Changes to the app's windows are also checked by hand: run it with sample data, 
 open -n --env BATON_DEMO=1 "build/Baton.app"
 ```
 
-`scripts/screenshots.sh` then redraws `docs/images/main-window.png`, `add-subscription.png`, `continue-work.png` and `continue-wait.png` from `build/Baton.app`. It runs the app's executable once per picture with only `HOME`, `USER`, `PATH`, `BATON_DEMO=1` and `BATON_DEMO_SNAPSHOT=<file>` (plus `BATON_DEMO_SHEET` for a sheet); the app draws its window, title bar, sheet and an alert on the sheet included, in the light appearance at 2x with AppKit's view caching, writes the PNG and quits. Nothing is captured from the screen, so no screen-recording permission is involved. A run that takes longer than 20 seconds is stopped and reported.
+`scripts/screenshots.sh` then redraws `docs/images/main-window.png`, `add-subscription.png` and `continue-work.png` from `build/Baton.app`. It runs the app's executable once per picture with only `HOME`, `USER`, `PATH`, `BATON_DEMO=1` and `BATON_DEMO_SNAPSHOT=<file>` (plus `BATON_DEMO_SHEET` for a sheet); the app draws its window, title bar, sheet and an alert on the sheet included, in the light appearance at 2x with AppKit's view caching, writes the PNG and quits. Nothing is captured from the screen, so no screen-recording permission is involved. A run that takes longer than 20 seconds is stopped and reported.

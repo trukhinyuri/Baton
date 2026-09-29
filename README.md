@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels and accounts, five-hour and weekly usage for three of them, one at its five-hour limit with a banner that says when it resets and offers to continue in another window, and one waiting to sign in">
+  <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels and accounts, five-hour and weekly usage for three of them, one at its five-hour limit with a banner that says when it resets and that it picks its work up by itself then, and one waiting to sign in">
 </p>
 
 Baton runs several Claude Desktop accounts on one Mac, each in its own window of the official Claude Desktop app, and lets you hand a local conversation from one of your windows to another. Think of it as a relay team where every runner is you.
@@ -109,7 +109,7 @@ If the shell then says `command not found: baton`, add the folder to your `PATH`
 2. Enter the account's email and, if you like, change the Dock label (`WORK`, `LAB`, `TEAM`) and color.
 3. A new Claude window opens. Sign in there with that account, with Google or with email.
 4. To keep a profile in the Dock, drag its launcher from `~/Applications/Baton` (**⋯ → Show Launcher in Finder**) to the Dock. Spotlight finds launchers too ("Claude WORK").
-5. Pick up any local Code session or Cowork task in another of your windows: click **Continue work…** and choose where it goes next.
+5. When a window reaches its limit, its work moves by itself to the window with the most room. To move it yourself, click **Continue work…** and **Continue**.
 
 <p align="center">
   <img src="docs/images/add-subscription.png" width="620" alt="Add Subscription sheet with a live Dock icon preview and fields for the email, Dock label and color">
@@ -122,26 +122,35 @@ Each row shows the account signed in to that window and its five-hour and weekly
 
 ## Continue work in another window
 
-Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue**; the button names the window, as in **Continue in Claude WORK**. When an open subscription reaches its limit, a banner under the header opens the same sheet on the most recent session Baton saw in that window (or of any window, when it saw none there), headed for the window the banner names; when no other window has room, the banner only says when the limit resets ([Limits and resets](#limits-and-resets)). The signed-in subscription with the most room left is preselected, and those at their limit are marked. Room is judged mostly by weekly usage: a weekly limit, once reached, holds a window back for days, a five-hour one for hours at most. Five-hour usage counts a quarter as much, since a full five-hour window is about a quarter of a week, so a window about to reach its five-hour limit isn't chosen over one with nearly the same week. When every window it can go to is at its limit, none is preselected and the sheet names the one that resets first. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may have changed since*.
+When an open subscription reaches its limit while you work in it, Baton moves its work by itself to the subscription with the most room. You don't choose anything: the banner under the header says where the work is going, and one line says what happened, also as a macOS notification if you allow it, such as *WORK is at its limit until 19:10 and was closed. Your work continues in HOME — 3 sessions resumed.*
+
+- **Every session of that window follows**, as the same session, with its group and pin in Claude's sidebar. Sessions the limit cut mid-turn pick up where they stopped: Baton turns their auto-continue on in the new window and shows them one at a time, the top pin last.
+- **Nothing runs in two windows.** The window at its limit is closed first. If Claude Code works in it, Baton waits up to 10 minutes for that step to finish, and the banner says so: *WORK finishes its current step, then your work moves to HOME.* If it still works then, or stays open when asked to quit, it stays open, every session open there continues as a copy, and Baton closes it once that work finishes.
+- **Nothing is interrupted.** A window where Claude Code works isn't chosen when a closed or idle one has nearly as much room; if it is, it restarts by itself once its current work finishes, and the line says so.
+- **What stays is named** in the same line: sessions a folder rule keeps for other accounts, sessions Remote Control still reaches there, and anything that didn't resume.
+
+When no other window has room, or Claude's own reset time for the limit is within 30 minutes, the banner says so and nothing moves: work continues in that window at the reset. An estimated reset time is never waited for ([Limits and resets](#limits-and-resets)). `baton handover auto off` turns this off.
+
+To move a window's work yourself, click **Continue work…** (or **Move work…** in a window's ⋯ menu): it lists the sessions that will move, those the limit cut marked *resumes*, and what stays with its reason; click **Continue in Claude WORK** to move them, or **Change** to pick another window with room. Room is judged mostly by weekly usage: a weekly limit, once reached, holds a window back for days, a five-hour one for hours at most. Five-hour usage counts a quarter as much, since a full five-hour window is about a quarter of a week, so a window about to reach its five-hour limit isn't chosen over one with nearly the same week. To continue a single session, as itself or as a copy, use `baton continue`.
 
 <p align="center">
-  <img src="docs/images/continue-work.png" width="820" alt="Continue work sheet listing local Code sessions and Cowork tasks; the windows to continue in, each with its five-hour and weekly usage or, for one at its limit, when it resets; the choice between Automatic, Same session and As a copy; and Continue All for the session's folder">
+  <img src="docs/images/continue-work.png" width="820" alt="Continue work sheet listing the sessions that move from the window at its limit, those to resume marked, what stays greyed with its reason, and one button to continue in the window with the most room">
 </p>
 
 | Conversation | What happens in the other window |
 |---|---|
 | Code session | The same session opens there with its whole history, or a copy of it (below). Sub-agents, Workflow history and tool outputs come with it. A closed window opens first. |
-| Cowork task | A new Cowork task opens with a prompt to continue, the full history attached as `history.md`, and copies of the files the task was given and made (up to 10 files, 25 MB each, 50 MB in total). Nothing is sent: review it and send it yourself. The original task stays where it was. |
+| Cowork task | It stays in its window when work moves by itself. With `baton continue`, a new Cowork task opens with a prompt to continue, the full history attached as `history.md`, and copies of the files the task was given and made (up to 10 files, 25 MB each, 50 MB in total). Nothing is sent: review it and send it yourself. The original task stays where it was. |
 
-Before you continue, the sheet lists what will not follow into that account: remote connectors, a Remote Control connection, scheduled tasks and cloud sessions. See [What follows and what stays](#what-follows-and-what-stays).
+What stays in its window is named in the sheet and in the result line: sessions a folder rule keeps for other accounts, Remote Control workers and Cowork tasks. Remote connectors, scheduled tasks and cloud sessions don't follow into another account either. See [What follows and what stays](#what-follows-and-what-stays).
 
-**Same session or a copy.** Two windows must not write to one session at the same time. **Automatic** therefore continues as a copy a session that a running Claude Code process still has open, or one with a message in the last 10 minutes. A copy is a new session with the same history, sub-agents, Workflow history, tool outputs, file history and scratchpad notes; its title ends with " · from WORK". Other sessions continue as themselves. **Same session** and **As a copy** override this; for a session that may still be written to, **Same session** needs **I closed it** first.
+**Same session or a copy.** Two windows must not write to one session at the same time. A session a running Claude Code process still has open in the window it leaves therefore continues as a copy (with `baton continue`, also one with a message in the last 10 minutes). A copy is a new session with the same history, sub-agents, Workflow history, tool outputs, file history and scratchpad notes; its title ends with " · from WORK". Other sessions continue as themselves. `baton continue --same` and `--fork` override this for one session; for a session that may still be written to, `--same` needs `--anyway` once you've closed it there.
 
-**Continue All in …** continues the six most recent Code sessions of the selected conversation's folder with a message in the last day, in one step, and can also start a new session there. Each one becomes a session in the destination window, so moving a busy folder at once would spend that subscription quickly; continue older ones one by one, or use `--max` on the command line. Each continued session is confirmed by the card Claude imports for it, and one that does not appear is reported rather than counted.
+`baton continue --folder` continues the six most recent Code sessions of a folder with a message in the last day, in one step, and can also start a new session there. Each one becomes a session in the destination window, so moving a busy folder at once would spend that subscription quickly; continue older ones one by one, or use `--max` on the command line. Each continued session is confirmed by the card Claude imports for it, and one that does not appear is reported rather than counted.
 
-Claude imports every continued session itself, with its usual folder trust and permission checks. A session takes its model from its history; when that differs from the destination's model, the sheet asks you to choose before your first message.
+Claude imports every continued session itself, with its usual folder trust and permission checks. A session takes its model from its history.
 
-**Folder rules** keep work where it belongs. `baton rule ~/Work/client --only me@example.com` lets the work in that folder, and inside it, continue only in that account; continuing it anywhere else, including a new session there, is refused. The closest folder's rule applies. Work reached through a link in one ruled folder that leads into another takes both folders' rules, so it continues only in an account both allow. Session sharing honors the same rules: a session in that folder does not appear in other accounts' windows. A rules file that cannot be read stops continuing and sharing until it is fixed.
+**Folder rules** keep work where it belongs. `baton rule ~/Work/client --only me@example.com` lets the work in that folder, and inside it, continue only in that account; continuing it anywhere else, including a new session there, is refused. The closest folder's rule applies. Work reached through a link in one ruled folder that leads into another takes both folders' rules, so it continues only in an account both allow. Session sharing honors the same rules: a session in that folder does not appear in other accounts' windows, and Baton's footer, `baton sync` and `baton doctor` say how many sessions each rule keeps out of which windows. A rules file that cannot be read stops continuing and sharing until it is fixed.
 
 Continuing needs no macOS permissions: the destination window receives a `claude://` link that only that window handles.
 
@@ -155,11 +164,7 @@ Each row shows the five-hour and weekly usage that Claude Desktop records for th
 
 A window counts as free again when its reset time passes, when a newer sample is below the limit, or when Claude answers a request sent in one of its sessions at least a minute after the limit (shown as *Claude answered since*, because extra usage may be what paid for it). An estimate never frees a window. Once a window that was at its limit has stayed free for a minute, Baton says it has room again, in its own window and, if you allow it, as a macOS notification. macOS asks about notifications once; if you decline, the notice stays in Baton's window.
 
-**Auto-continue.** Claude Desktop can continue a session by itself once its limit resets. When you continue such a session in another window, Baton turns off Auto-continue for that one session in the window it left, so the session is not worked on in two windows. It changes only that session's `optedIn` value in the window's `claude_desktop_config.json`, only while that window is closed (at once if it is; otherwise as soon as it closes while the Baton app runs, or when it is next opened from Baton), and after a dated backup. `baton doctor` lists what Baton turned off; to turn it back on, tick **Auto-continue when limits reset** on that session's limit message in Claude. When the window a session came from resets within 15 minutes and would continue it by itself, **Continue work…** and `baton continue` offer to wait instead; in the app, Cancel or Esc goes back to the sheet to choose another window or session.
-
-<p align="center">
-  <img src="docs/images/continue-wait.png" width="820" alt="The limit resets soon: Claude WORK resets in a few minutes and picks the session up by itself, with the buttons Wait, Continue Now and Cancel over the Continue work sheet">
-</p>
+**Auto-continue.** Claude Desktop can continue a session by itself once its limit resets. When you continue such a session in another window, Baton turns off Auto-continue for that one session in the window it left, so the session is not worked on in two windows. It changes only that session's `optedIn` value in the window's `claude_desktop_config.json` and in Claude's Local Storage copy of it, only while that window is closed (at once if it is; otherwise as soon as it closes while the Baton app runs, or when it is next opened from Baton), and after a dated backup. `baton doctor` lists what Baton turned off; to turn it back on, tick **Auto-continue when limits reset** on that session's limit message in Claude. When work moves because of a limit, Baton also adds an auto-continue entry, its reset already passed, for each session the limit cut, in the window the work moves to while that window is closed, so Claude continues it there once it is shown; it never does so where you turned the option off. When the window a session came from resets within 15 minutes and would continue it by itself, `baton continue` offers to wait instead.
 
 ## What follows and what stays
 
@@ -176,7 +181,7 @@ Windows signed in to different accounts can show different Claude features. Bato
 
 ## Local only
 
-**Local only** is on by default. In each window Baton manages, the main one included, it turns off two Remote Control settings: the default for new sessions (`ccRemoteControlDefaultEnabled`) and, where Claude has it, staying reachable (`remoteControlStayReachable`). It writes these keys only while that window is closed, after a dated backup, and records the previous values so turning Local only off restores them. It does this after every sync and whenever a Claude window quits while Baton runs, so the main Claude changes too, even if you never open it through Baton. A window that is running gets the change once it is closed while Baton runs, or when Baton next opens it; until then its **Status…** lists *Local only turns on* under *Waiting for a restart*.
+**Local only** is on by default. In each window Baton manages, the main one included, it turns off two Remote Control settings: the default for new sessions (`ccRemoteControlDefaultEnabled`) and, where Claude has it, staying reachable (`remoteControlStayReachable`), and empties the list of folders pinned for Remote Control (`remoteControlPinnedFolders`) where Claude wrote one. It writes these keys only while that window is closed, after a dated backup, and records the previous values so turning Local only off restores them. It does this after every sync and whenever a Claude window quits while Baton runs, so the main Claude changes too, even if you never open it through Baton. A window that is running gets the change once it is closed while Baton runs, or when Baton next opens it; until then its **Status…** lists *Local only turns on* under *Waiting for a restart*.
 
 It deliberately leaves alone local scheduled tasks, waking the Mac for them, web search in Cowork and your permission mode. It never touches managed preferences set by an organization, sign-in data or any server. If you turn Remote Control back on inside Claude, Local only turns it off again the same way, and until then that window's **Status…** lists it under *Waiting for a restart*.
 
@@ -237,6 +242,19 @@ baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [-
                                     continues it by itself, nothing happens (exit 3) unless --now
 baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                     Same as `continue`
+baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
+                                    Move the work of a window at its limit to the window with
+                                    the most room: the sessions the limit cut resume there.
+                                    The window at its limit finishes its current step first (up
+                                    to 10 minutes) and is closed, so every session moves as
+                                    itself; if it stays open, its open sessions continue as
+                                    copies. By default the open window at its limit, and the
+                                    best window. A busy window restarts once its current work
+                                    finishes, and one left open at its limit is closed then.
+                                    Run it again to go on after an interrupt.
+                                    Exit 3: Claude's own reset time is within 30 minutes
+baton handover auto on|off|status   Whether the app does this by itself when an open window
+                                    reaches its limit while you work there (on by default)
 baton rules [--json]                Show which accounts may continue the work in which folders
 baton rule <folder> --only <email>[,<email>…] | --remove
                                     Let only these accounts continue work in the folder and

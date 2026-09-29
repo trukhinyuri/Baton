@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {
+      "accounts": [
+        "atlas@example.org",
+        "cedar@example.org"
+      ],
+      "folder": "/work/client"
+    }
+  ],
+  "version": 1
+}

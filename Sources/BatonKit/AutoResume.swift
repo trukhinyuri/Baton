@@ -60,7 +60,12 @@ public struct AutoResume: Sendable {
             guard let next = value as? [String: Any] else { return nil }
             object = next
         }
-        return object.compactMap { key, value -> AutoResumeEntry? in
+        return entries(inBucket: object)
+    }
+
+    /// The entries of one bucket object, by card name.
+    static func entries(inBucket object: [String: Any]) -> [AutoResumeEntry] {
+        object.compactMap { key, value -> AutoResumeEntry? in
             guard key.hasPrefix("local_"), let entry = value as? [String: Any], var resets = UsageHistory.number(entry["resetsAt"]), resets > 0
             else { return nil }
             if resets > 100_000_000_000 { resets /= 1000 }
@@ -75,6 +80,25 @@ public struct AutoResume: Sendable {
     public static func entries(in dataDir: URL, account: String) -> [AutoResumeEntry]? {
         guard let data = try? Data(contentsOf: dataDir.appending(path: LocalOnly.configName)) else { return [] }
         return entries(inConfig: data, account: account)
+    }
+
+    /// The entries Claude will still act on in the window at `dataDir`: armed in the settings or in the Local Storage
+    /// copy, which can disagree (one was seen off while the other was on). Where both are armed, the settings entry.
+    /// `nil` when neither copy is what Claude writes.
+    public static func armedEntries(in dataDir: URL, account: String, now: Date = Date()) -> [AutoResumeEntry]? {
+        let config = entries(in: dataDir, account: account)
+        let mirror = mirrorEntries(in: dataDir, account: account)
+        guard config != nil || mirror != nil else { return nil }
+        var armed: [String: AutoResumeEntry] = [:]
+        for entry in (mirror ?? []) + (config ?? []) where entry.isArmed(now: now) { armed[entry.key] = entry }
+        return armed.values.sorted { $0.key < $1.key }
+    }
+
+    /// The entries in the Local Storage copy of the window at `dataDir`: empty when there is none or it can't be read.
+    static func mirrorEntries(in dataDir: URL, account: String) -> [AutoResumeEntry]? {
+        let storage = LocalStorage(dataDir: dataDir)
+        guard storage.exists, let items = try? storage.items(origin: InterfaceSync.origin), let text = items[mirrorKey(account)] else { return [] }
+        return entries(inMirror: text)
     }
 
     /// The `cliSessionId` of a card, found without parsing the whole file.
@@ -106,6 +130,11 @@ public struct AutoResume: Sendable {
         }
     }
 
+    /// What a change did: turned an entry off where its session no longer runs, or seeded one where it continues.
+    public enum Kind: String, Codable, Equatable, Sendable {
+        case turnedOff, seeded
+    }
+
     /// What Baton changed, to put it back with `undo`.
     public struct Change: Codable, Equatable, Sendable {
         public var window: String
@@ -113,8 +142,14 @@ public struct AutoResume: Sendable {
         public var entry: String
         public var resetsAt: Date
         public var changedAt: Date
-        /// The JSON text `optedIn` had.
+        /// A turn-off: the JSON text `optedIn` had in the settings. A seed: the entry's JSON text before, `null` if none.
         public var prior: String
+        /// `nil` in records written before seeding existed: a turn-off.
+        public var kind: Kind? = nil
+        /// The same as `prior` for Claude's Local Storage copy of the entry; `nil` when that copy wasn't changed.
+        public var priorMirror: String? = nil
+
+        public var action: Kind { kind ?? .turnedOff }
     }
 
     /// An entry to turn off once its window is closed: its session continued elsewhere while that window was open.
@@ -156,6 +191,16 @@ public struct AutoResume: Sendable {
         }
     }
 
+    /// Forgets the pending turn-offs of `entries` (card names) in `window`: their sessions continue there after all.
+    public func dropPending(window: String, entries: Set<String>) {
+        guard !entries.isEmpty else { return }
+        _ = try? FileLock.withLock(lockFile, blocking: true) {
+            var state = readState()
+            state.pending = (state.pending ?? []).filter { !($0.window == window && entries.contains($0.entry)) }
+            try saveState(state)
+        }
+    }
+
     /// Turns off every pending entry whose window is closed now, the way `turnOff` does, and forgets the ones Claude
     /// is done with. Entries in windows still open stay pending.
     /// - Returns: the windows where Baton turned an entry off.
@@ -166,8 +211,8 @@ public struct AutoResume: Sendable {
         var done: [Pending] = []
         var turnedOff: [String] = []
         for item in waiting {
-            let entry = AutoResume.entries(in: dataDir(item.window), account: item.account)?.first { $0.key == item.entry }
-            guard let entry, entry.resetsAt == item.resetsAt, entry.isArmed(now: now) else {
+            let entry = AutoResume.armedEntries(in: dataDir(item.window), account: item.account, now: now)?.first { $0.key == item.entry }
+            guard let entry, entry.resetsAt == item.resetsAt else {
                 done.append(item)
                 continue
             }
@@ -189,8 +234,10 @@ public struct AutoResume: Sendable {
         return turnedOff
     }
 
-    /// Turns `optedIn` off for one entry of a closed window.
-    /// - Returns: `false` when Claude had turned it off already.
+    /// Turns `optedIn` off for one entry of a closed window, in the settings and in Claude's Local Storage copy of the
+    /// same entry, which can disagree with the settings (one was seen off while the other was on). `entry` may come
+    /// from either copy (`armedEntries`); each copy that has it on is turned off.
+    /// - Returns: `false` when both were off already.
     @discardableResult
     public func turnOff(_ entry: AutoResumeEntry, window: String, account: String, now: Date = Date()) throws -> Bool {
         try FileLock.withLock(lockFile, blocking: true) {
@@ -198,26 +245,128 @@ public struct AutoResume: Sendable {
             let url = config(window)
             let original = try Data(contentsOf: url)
             var patch = try JSONPatch(original)
-            guard let member = try Self.optedIn(in: patch, account: account, entry: entry.key),
-                Self.entries(inConfig: original, account: account)?.first(where: { $0.key == entry.key })?.resetsAt == entry.resetsAt
-            else { throw Failure.entryChanged }
-            let prior = patch.text(member)
-            guard prior == "true" else { return false }
-            patch.replace(member, with: "false")
-            let change = Change(window: window, account: account, entry: entry.key, resetsAt: entry.resetsAt, changedAt: now, prior: prior)
+            let member = try Self.optedIn(in: patch, account: account, entry: entry.key)
+            let inConfig = Self.entries(inConfig: original, account: account)?.first { $0.key == entry.key }
+            let copy = mirrorCopy(window, account: account)
+            let inMirror = (copy?.bucket?[entry.key] as? [String: Any]).flatMap { Self.entries(inBucket: [entry.key: $0]).first }
+            guard inConfig?.resetsAt == entry.resetsAt || inMirror?.resetsAt == entry.resetsAt else { throw Failure.entryChanged }
+            let prior = member.map { patch.text($0) } ?? "null"
+            let path = ["preferences", "epitaxyPrefs", Self.bucketKey(account), entry.key, "optedIn"]
+            var configChange: (patch: JSONPatch, expected: [String: Any])?
+            if let member, prior == "true" {
+                patch.replace(member, with: "false")
+                configChange = (patch, Self.setting(false, at: path, in: try JSONPatch(original).dictionary()))
+            }
+            var mirror: MirrorWrite?
+            if let copy, var bucket = copy.bucket, var object = bucket[entry.key] as? [String: Any], Self.isTrue(object["optedIn"]) {
+                object["optedIn"] = false
+                bucket[entry.key] = object
+                mirror = MirrorWrite(copy: copy, bucket: bucket, now: now)
+            }
+            guard configChange != nil || mirror != nil else { return false }
+            let change = Change(
+                window: window, account: account, entry: entry.key, resetsAt: entry.resetsAt, changedAt: now, prior: prior,
+                priorMirror: mirror == nil ? nil : "true")
             var state = readState()
             state.changes.removeAll { $0.window == window && $0.account == account && $0.entry == entry.key }
             state.changes.append(change)
-            try write(patch, over: original, to: url, window: window, value: false, account: account, entry: entry.key) {
-                try saveState(state)
-            }
+            try commit(window: window, url: url, original: original, config: configChange, mirror: mirror) { try saveState(state) }
             return true
         } ?? false
     }
 
-    /// Puts `optedIn` back for a change Baton made, if the entry is still the one it changed and still off. The
-    /// record is dropped either way, unless the window is open.
-    /// - Returns: whether the file changed.
+    /// Adds entries to a closed window's auto-continue for sessions that continue there after another window's limit,
+    /// each with its reset two minutes past, so Claude continues each session once that window shows it. Written to
+    /// the settings and to Claude's Local Storage copy, keeping every other entry, with the same backup and read-back
+    /// as `turnOff`, and recorded so `undo` removes them. Nothing is written when the account turned the option off
+    /// in that window or in `source`, nor for a session the user unticked for its current limit there
+    /// (`sessionOptOuts`): those choices are the user's.
+    /// - Parameter entries: the sessions' card names (`local_<id>`); their own reset times aren't used.
+    /// - Returns: how many entries were written.
+    @discardableResult
+    public func seed(
+        _ entries: [AutoResumeEntry], window: String, account: String, source: (window: String, account: String)? = nil, now: Date = Date()
+    ) throws -> Int {
+        try FileLock.withLock(lockFile, blocking: true) { () throws -> Int in
+            guard !running(window) else { throw Failure.windowOpen(label(window)) }
+            if Self.optedOut(in: dataDir(window), account: account)
+                || source.map({ Self.optedOut(in: dataDir($0.window), account: $0.account) }) == true
+            {
+                Log.notice("continue", "Didn't seed auto-continue in window \(window): the option is off for that account")
+                return 0
+            }
+            var keys: [String] = []
+            var state = readState()
+            let unticked = sessionOptOuts(window, account: account, state: state, now: now).union(
+                source.map { sessionOptOuts($0.window, account: $0.account, state: state, now: now) } ?? [])
+            for key in entries.map(\.key) where key.hasPrefix("local_") && !keys.contains(key) && !unticked.contains(key) { keys.append(key) }
+            if entries.contains(where: { unticked.contains($0.key) }) {
+                Log.notice("continue", "Didn't seed auto-continue in window \(window) for sessions the user unticked")
+            }
+            guard !keys.isEmpty else { return 0 }
+            let resets = Int(now.timeIntervalSince1970) - Self.seedAge
+            let value: [String: Any] = ["resetsAt": resets, "attempt": 0, "optedIn": true]
+            let text = #"{"resetsAt": \#(resets), "attempt": 0, "optedIn": true}"#
+            let url = config(window)
+            let original = try Data(contentsOf: url)
+            var patch = try JSONPatch(original)
+            var expected = try patch.dictionary()
+            var priors: [String: String] = [:]
+            for key in keys {
+                let bucket = try Self.object(at: ["preferences", "epitaxyPrefs", Self.bucketKey(account)], in: &patch)
+                if let member = bucket.members.last(where: { $0.key == key }) {
+                    priors[key] = patch.text(member)
+                    patch.replace(member, with: text)
+                } else {
+                    priors[key] = "null"
+                    patch.insert(key: key, value: text, in: bucket)
+                }
+                expected = Self.setting(value, at: ["preferences", "epitaxyPrefs", Self.bucketKey(account), key], in: expected)
+            }
+            var mirror: MirrorWrite?
+            var mirrorPriors: [String: String] = [:]
+            if let copy = mirrorCopy(window, account: account) {
+                if var bucket = copy.bucket {
+                    for key in keys {
+                        mirrorPriors[key] = bucket[key].map(SidebarLayout.json) ?? "null"
+                        bucket[key] = value
+                    }
+                    mirror = MirrorWrite(copy: copy, bucket: bucket, now: now)
+                } else {
+                    Log.notice("continue", "Left the Local Storage copy of auto-continue in window \(window) as it is: not what Claude writes")
+                }
+            }
+            let resetsAt = Date(timeIntervalSince1970: TimeInterval(resets))
+            for key in keys {
+                state.changes.removeAll { $0.window == window && $0.account == account && $0.entry == key }
+                state.changes.append(
+                    Change(
+                        window: window, account: account, entry: key, resetsAt: resetsAt, changedAt: now, prior: priors[key] ?? "null",
+                        kind: .seeded, priorMirror: mirror == nil ? nil : mirrorPriors[key]))
+            }
+            try commit(window: window, url: url, original: original, config: (patch, expected), mirror: mirror) { try saveState(state) }
+            Log.notice("continue", "Seeded auto-continue for \(keys.count) session\(keys.count == 1 ? "" : "s") in window \(window)")
+            return keys.count
+        } ?? 0
+    }
+
+    /// Cards whose auto-continue the user turned off for the current limit in `window`: `optedIn` false within six
+    /// hours of its reset, in the settings or the Local Storage copy. Baton's own turn-offs don't count.
+    private func sessionOptOuts(_ window: String, account: String, state: State, now: Date) -> Set<String> {
+        let dir = dataDir(window)
+        let baton = Set(state.changes.filter { $0.window == window && $0.account == account && $0.action == .turnedOff }.map(\.entry))
+        let found = (Self.entries(in: dir, account: account) ?? []) + (Self.mirrorEntries(in: dir, account: account) ?? [])
+        return Set(
+            found.filter { !$0.optedIn && $0.resetsAt > now.addingTimeInterval(-AutoResumeEntry.lateLimit) && !baton.contains($0.key) }.map(\.key))
+    }
+
+    /// How far in the past a seeded entry's reset is, so Claude acts on it as soon as the session is shown.
+    static let seedAge = 120
+
+    /// Puts back a change Baton made, if the entry is still the one it made: `optedIn` of a turn-off, or the entry a
+    /// seed replaced (none, if there was none), in the settings and in the Local Storage copy. The record is dropped
+    /// either way, unless the window is open.
+    /// - Returns: whether anything changed.
     @discardableResult
     public func undo(_ change: Change) throws -> Bool {
         try FileLock.withLock(lockFile, blocking: true) {
@@ -225,58 +374,227 @@ public struct AutoResume: Sendable {
             var state = readState()
             state.changes.removeAll { $0 == change }
             let url = config(change.window)
-            guard let original = try? Data(contentsOf: url), var patch = try? JSONPatch(original),
-                let member = try Self.optedIn(in: patch, account: change.account, entry: change.entry), patch.text(member) == "false",
-                Self.entries(inConfig: original, account: change.account)?.first(where: { $0.key == change.entry })?.resetsAt == change.resetsAt
-            else {
+            let bucketPath = ["preferences", "epitaxyPrefs", Self.bucketKey(change.account)]
+            let original = (try? Data(contentsOf: url)) ?? Data()
+            let prior = try? JSONSerialization.jsonObject(with: Data(change.prior.utf8), options: .fragmentsAllowed)
+            let same = Self.entries(inConfig: original, account: change.account)?.first(where: { $0.key == change.entry })?.resetsAt == change.resetsAt
+            var configChange: (patch: JSONPatch, expected: [String: Any])?
+            if same, var patch = try? JSONPatch(original), let whole = try? patch.dictionary() {
+                switch change.action {
+                case .turnedOff:
+                    if change.prior == "true", let prior, let member = try Self.optedIn(in: patch, account: change.account, entry: change.entry),
+                        patch.text(member) == "false"
+                    {
+                        patch.replace(member, with: change.prior)
+                        configChange = (patch, Self.setting(prior, at: bucketPath + [change.entry, "optedIn"], in: whole))
+                    }
+                case .seeded:
+                    if let bucket = try? Self.existingObject(at: bucketPath, in: patch),
+                        let index = bucket.members.lastIndex(where: { $0.key == change.entry })
+                    {
+                        if change.prior == "null" {
+                            patch.remove(index, in: bucket)
+                            configChange = (patch, Self.setting(nil, at: bucketPath + [change.entry], in: whole))
+                        } else if let prior {
+                            patch.replace(bucket.members[index], with: change.prior)
+                            configChange = (patch, Self.setting(prior, at: bucketPath + [change.entry], in: whole))
+                        }
+                    }
+                }
+            }
+            var mirror: MirrorWrite?
+            if let priorMirror = change.priorMirror, let copy = mirrorCopy(change.window, account: change.account), var bucket = copy.bucket,
+                var object = bucket[change.entry] as? [String: Any],
+                Self.entries(inBucket: [change.entry: object]).first?.resetsAt == change.resetsAt
+            {
+                let before = try? JSONSerialization.jsonObject(with: Data(priorMirror.utf8), options: .fragmentsAllowed)
+                switch change.action {
+                case .turnedOff:
+                    if let before, object["optedIn"].map(InterfaceSync.canonical) == "false" {
+                        object["optedIn"] = before
+                        bucket[change.entry] = object
+                        mirror = MirrorWrite(copy: copy, bucket: bucket, now: Date())
+                    }
+                case .seeded:
+                    bucket[change.entry] = priorMirror == "null" ? nil : before
+                    mirror = MirrorWrite(copy: copy, bucket: bucket, now: Date())
+                }
+            }
+            guard configChange != nil || mirror != nil else {
                 try saveState(state)
                 return false
             }
-            patch.replace(member, with: change.prior)
-            let value = try JSONSerialization.jsonObject(with: Data(change.prior.utf8), options: .fragmentsAllowed)
-            try write(patch, over: original, to: url, window: change.window, value: value, account: change.account, entry: change.entry) {
-                try saveState(state)
-            }
+            try commit(window: change.window, url: url, original: original, config: configChange, mirror: mirror) { try saveState(state) }
             return true
         } ?? false
     }
 
     /// The `optedIn` member of one entry, by walking the objects that hold it.
     static func optedIn(in patch: JSONPatch, account: String, entry: String) throws -> JSONPatch.Member? {
-        var object = try patch.top()
-        for key in ["preferences", "epitaxyPrefs", bucketKey(account), entry] {
-            guard let member = object.members.last(where: { $0.key == key }), patch.bytes[member.valueStart] == UInt8(ascii: "{") else { return nil }
-            object = try patch.object(at: member.valueStart)
-        }
+        guard let object = try existingObject(at: ["preferences", "epitaxyPrefs", bucketKey(account), entry], in: patch) else { return nil }
         return object.members.last { $0.key == "optedIn" }
     }
 
-    /// Backup, then the file; read back, and put the original bytes back if it didn't come out as planned. Only a
-    /// write that read back is recorded; if the record can't be saved, the original bytes go back too.
-    private func write(
-        _ patch: JSONPatch, over original: Data, to url: URL, window: String, value: Any, account: String, entry: String,
+    /// The object at `path`, `nil` if a step is missing or isn't an object.
+    static func existingObject(at path: [String], in patch: JSONPatch) throws -> JSONPatch.Object? {
+        var object = try patch.top()
+        for key in path {
+            guard let member = object.members.last(where: { $0.key == key }), patch.bytes[member.valueStart] == UInt8(ascii: "{") else { return nil }
+            object = try patch.object(at: member.valueStart)
+        }
+        return object
+    }
+
+    /// The object at `path`, added empty where a step is missing. A step that isn't an object is refused.
+    static func object(at path: [String], in patch: inout JSONPatch) throws -> JSONPatch.Object {
+        var object = try patch.top()
+        for (depth, key) in path.enumerated() {
+            if let member = object.members.last(where: { $0.key == key }) {
+                guard patch.bytes[member.valueStart] == UInt8(ascii: "{") else {
+                    throw LocalStorageError.corrupt(
+                        "\(path.prefix(depth + 1).joined(separator: ".")) in \(LocalOnly.configName) isn't an object; it was left as it is")
+                }
+                object = try patch.object(at: member.valueStart)
+            } else {
+                patch.insert(key: key, value: "{}", in: object)
+                return try self.object(at: path, in: &patch)
+            }
+        }
+        return object
+    }
+
+    /// Whether the account turned "Auto-continue when limits reset" off in the window at `dataDir`, in its settings or
+    /// in the Local Storage copy. Only an explicit `false` counts: Claude's default is on.
+    public static func optedOut(in dataDir: URL, account: String) -> Bool {
+        let key = "autoResumeRateLimitOptIn." + account
+        let data = (try? Data(contentsOf: dataDir.appending(path: LocalOnly.configName))) ?? Data()
+        let prefs = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]).flatMap {
+            ($0["preferences"] as? [String: Any])?["epitaxyPrefs"] as? [String: Any]
+        }
+        if isFalse(prefs?[key]) { return true }
+        let storage = LocalStorage(dataDir: dataDir)
+        guard storage.exists, let text = (try? storage.items(origin: InterfaceSync.origin))?["LSS-persisted." + key] else { return false }
+        return isFalse(InterfaceSync.object(text)?["value"])
+    }
+
+    /// Whether Claude can continue sessions by itself in the window at `dataDir` for `account`, and whether Baton
+    /// should seed it: not when the server flag is known to be off, nor when the account turned the option off there or
+    /// in `source`.
+    public func seeding(window: String, account: String, source: (window: String, account: String)? = nil, now: Date = Date()) -> Seeding {
+        let optedOut =
+            Self.optedOut(in: dataDir(window), account: account)
+            || source.map { Self.optedOut(in: dataDir($0.window), account: $0.account) } == true
+        return Seeding.decide(flag: ServerFlags.autoResume(dataDir: dataDir(window), now: now), optedOut: optedOut)
+    }
+
+    static func isTrue(_ value: Any?) -> Bool {
+        (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+    }
+
+    static func isFalse(_ value: Any?) -> Bool {
+        (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && !$0.boolValue } ?? false
+    }
+
+    // MARK: Local Storage copy
+
+    static func mirrorKey(_ account: String) -> String { "LSS-persisted." + bucketKey(account) }
+
+    /// The entries in Claude's Local Storage copy of the bucket (`{value, tabId, timestamp}`), `nil` if it isn't that.
+    public static func entries(inMirror text: String) -> [AutoResumeEntry]? {
+        guard let bucket = InterfaceSync.object(text)?["value"] as? [String: Any] else { return nil }
+        return entries(inBucket: bucket)
+    }
+
+    /// A window's Local Storage copy of one account's bucket, read while the window is closed.
+    struct MirrorCopy {
+        var storage: LocalStorage
+        var key: String
+        /// The stored text; `nil` when there is no copy yet.
+        var text: String?
+        /// The entries inside it: empty when there is no copy, `nil` when the copy isn't what Claude writes.
+        var bucket: [String: Any]?
+    }
+
+    /// `nil` when the window has no Local Storage, or it can't be read.
+    private func mirrorCopy(_ window: String, account: String) -> MirrorCopy? {
+        let storage = LocalStorage(dataDir: dataDir(window))
+        guard storage.exists else { return nil }
+        let key = Self.mirrorKey(account)
+        do {
+            let text = try storage.items(origin: InterfaceSync.origin)[key]
+            let bucket = text.map { InterfaceSync.object($0)?["value"] as? [String: Any] } ?? [:]
+            return MirrorCopy(storage: storage, key: key, text: text, bucket: bucket)
+        } catch {
+            Log.error("continue", "Couldn't read the Local Storage of window \(window): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// A new text for one Local Storage copy, and the one it replaces.
+    struct MirrorWrite {
+        var storage: LocalStorage
+        var key: String
+        var old: String?
+        var new: String
+
+        init(copy: MirrorCopy, bucket: [String: Any], now: Date) {
+            storage = copy.storage
+            key = copy.key
+            old = copy.text
+            new = SidebarLayout.mirrorText(bucket, copy.text, Int64(now.timeIntervalSince1970 * 1000))
+        }
+
+        func putBack() throws {
+            try storage.update(origin: InterfaceSync.origin, set: old.map { [key: $0] } ?? [:], remove: old == nil ? [key] : [])
+        }
+    }
+
+    /// Backups, then the settings file and the Local Storage copy; each read back, and everything put back as it was if
+    /// either didn't come out as planned. Only a write that read back is recorded; if the record can't be saved, the
+    /// earlier contents go back too.
+    private func commit(
+        window: String, url: URL, original: Data, config: (patch: JSONPatch, expected: [String: Any])?, mirror: MirrorWrite?,
         record: () throws -> Void
     ) throws {
-        guard SettingsSync.leadsInside(url, dataDir(window)) else { throw Failure.linkedOutside }
-        var expected = try JSONPatch(original).dictionary()
-        expected = Self.setting(value, at: ["preferences", "epitaxyPrefs", Self.bucketKey(account), entry, "optedIn"], in: expected)
+        if config != nil { guard SettingsSync.leadsInside(url, dataDir(window)) else { throw Failure.linkedOutside } }
+        let backup = Backup(paths: paths, now: Date())
         // A linked config is written where it leads, so that file's content is what is backed up, not the link.
-        _ = try Backup(paths: paths, now: Date()).save(LocalOnly.writeTarget(url), everyTime: true)
+        if config != nil { _ = try backup.save(LocalOnly.writeTarget(url), everyTime: true) }
+        if let mirror { _ = try backup.save(mirror.storage.dbDir) }
         guard !running(window) else { throw Failure.windowOpen(label(window)) }
-        try LocalOnly.replace(url, with: Data(patch.bytes))
-        guard let written = try? JSONPatch(Data(contentsOf: url)), let dictionary = try? written.dictionary(),
-            NSDictionary(dictionary: dictionary).isEqual(to: expected)
-        else {
-            try LocalOnly.replace(url, with: original)
-            throw Failure.didNotReadBack
+        if let config {
+            try LocalOnly.replace(url, with: Data(config.patch.bytes))
+            guard let written = try? JSONPatch(Data(contentsOf: url)), let dictionary = try? written.dictionary(),
+                NSDictionary(dictionary: dictionary).isEqual(to: config.expected)
+            else {
+                try LocalOnly.replace(url, with: original)
+                throw Failure.didNotReadBack
+            }
+        }
+        func putBack() {
+            if config != nil { try? LocalOnly.replace(url, with: original) }
+            try? mirror?.putBack()
+        }
+        if let mirror {
+            do {
+                try mirror.storage.update(origin: InterfaceSync.origin, set: [mirror.key: mirror.new], remove: [])
+            } catch {
+                if config != nil { try? LocalOnly.replace(url, with: original) }
+                throw error
+            }
+            guard (try? mirror.storage.items(origin: InterfaceSync.origin))?[mirror.key] == mirror.new else {
+                putBack()
+                throw Failure.didNotReadBack
+            }
         }
         do { try record() } catch {
-            try LocalOnly.replace(url, with: original)
+            putBack()
             throw error
         }
     }
 
-    static func setting(_ value: Any, at path: [String], in object: [String: Any]) -> [String: Any] {
+    /// `object` with `value` at `path`; `nil` removes the last key.
+    static func setting(_ value: Any?, at path: [String], in object: [String: Any]) -> [String: Any] {
         guard let key = path.first else { return object }
         var object = object
         object[key] = path.count == 1 ? value : setting(value, at: Array(path.dropFirst()), in: object[key] as? [String: Any] ?? [:])
@@ -314,6 +632,22 @@ extension JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
+    }
+}
+
+/// Whether a hand-over seeds Claude's own auto-continue in the destination (`AutoResume.seed`).
+public enum Seeding: String, Codable, Equatable, Sendable {
+    /// Seed, then watch whether each session resumed: the server flag is on or can't be told.
+    case seed
+    /// The server flag `ccd_auto_resume_rate_limit` is off: Claude wouldn't act on an entry, so the sessions are opened
+    /// and named instead.
+    case flagOff
+    /// The account turned "Auto-continue when limits reset" off in the destination or the source.
+    case optedOut
+
+    public static func decide(flag: Bool?, optedOut: Bool) -> Seeding {
+        if optedOut { return .optedOut }
+        return flag == false ? .flagOff : .seed
     }
 }
 
@@ -452,7 +786,7 @@ extension ProfileManager {
         guard !sessions.isEmpty else { return result }
         for window in windows where window.id != destination {
             guard let account = DesktopData.accountID(in: window.dataDir),
-                let entries = AutoResume.entries(in: window.dataDir, account: account)?.filter({ $0.isArmed(now: now) }), !entries.isEmpty
+                let entries = AutoResume.armedEntries(in: window.dataDir, account: account, now: now), !entries.isEmpty
             else { continue }
             let folders = cardFolders(in: window.dataDir)
             var isOpen: Bool?

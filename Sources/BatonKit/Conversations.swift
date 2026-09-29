@@ -90,13 +90,18 @@ public enum ConversationIndex {
         let transcripts = transcriptFiles(in: paths.claudeProjectsDir)
         var found: [String: Conversation] = [:]
         var readCards = Set<String>()
+        // Workers Remote Control reaches in a window stay there and are never offered for continuing.
+        let owners = SessionSync.owners(dataDirs: windows.map(\.dataDir), paths: paths, cache: cache)
 
         for (id, dataDir) in windows {
             for pair in (try? SessionSync.sessionPairs(dataDirs: [dataDir], folder: SessionSync.sessionsFolder)) ?? [] {
                 for name in (try? fm.contentsOfDirectory(atPath: pair.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
-                    // Shared copies of a card are the same everywhere; account-bound cards (native Project or
-                    // Remote Control workers) exist only with their account and are never offered for continuing.
-                    guard !readCards.contains(name), let card = readCard(pair.appending(path: name)) else { continue }
+                    // Shared copies of a card are the same everywhere; a copy with a Remote Control marker is never
+                    // offered (a copy without it is, once Remote Control reaches the card nowhere), and a worker Remote
+                    // Control reaches stays with its window.
+                    guard !readCards.contains(name), SessionSync.owner(of: name, in: owners) == nil,
+                        let card = readCard(pair.appending(path: name))
+                    else { continue }
                     guard !card.accountBound else { continue }
                     readCards.insert(name)
                     guard !card.archived, let session = card.session, let transcript = transcripts[session], found[session] == nil else { continue }

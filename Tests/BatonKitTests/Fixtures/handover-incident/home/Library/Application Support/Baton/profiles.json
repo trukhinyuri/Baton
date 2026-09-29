@@ -1,0 +1,23 @@
+[
+  {
+    "color": "#1971C2",
+    "createdAt": "2026-09-01T09:00:00Z",
+    "email": "atlas@example.org",
+    "id": "atlas",
+    "label": "ATLAS"
+  },
+  {
+    "color": "#1971C2",
+    "createdAt": "2026-09-01T09:00:00Z",
+    "email": "bravo@example.org",
+    "id": "bravo",
+    "label": "BRAVO"
+  },
+  {
+    "color": "#1971C2",
+    "createdAt": "2026-09-01T09:00:00Z",
+    "email": "cedar@example.org",
+    "id": "cedar",
+    "label": "CEDAR"
+  }
+]

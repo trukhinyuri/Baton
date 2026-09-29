@@ -38,8 +38,9 @@ struct LaunchContinuityTests {
         let source = try box.pair(box.main, account: Sandbox.accountA)
         let target = try box.pair(box.work, account: Sandbox.accountB)
         try box.write(
-            #"{"title":"Native worker","projectThreadChild":true}"#,
+            #"{"title":"Native worker","cwd":"/shared/repo","projectThreadChild":true}"#,
             to: source.appending(path: "local_native.json"))
+        try box.serveRemoteControl(box.main, account: Sandbox.accountA, folders: ["/shared/repo"])
         try box.write("", to: source.appending(path: "deleted_old"))
         try box.write(#"{"title":"Existing local work"}"#, to: target.appending(path: "local_old.json"))
         let report = try manager.prepareSessionsForLaunch()

@@ -115,6 +115,27 @@ public struct SyncReport: Equatable, Sendable {
     /// What was carried into sessions Claude Desktop copied itself.
     public var carried: [NativeForkCarry.Report] = []
     public var changes: Int { sessions.changes + cowork.changes + carried.reduce(0) { $0 + $1.changes } }
+
+    /// What folder rules kept out of windows, per rule: its folder, how many sessions, and the windows (standardized
+    /// data directory paths) they were kept out of. Sorted by folder.
+    public var withheldSummary: [(rule: String, sessions: Int, windows: [String])] {
+        Dictionary(grouping: sessions.withheld, by: \.rule).map { rule, cards in
+            (rule, Set(cards.map(\.card)).count, Array(Set(cards.flatMap(\.windows))).sorted())
+        }.sorted { $0.rule < $1.rule }
+    }
+
+    /// One line per rule: "A folder rule keeps 19 sessions in …/AcmeAssistant out of PAY, VIR and (main). baton
+    /// rules shows it." `label` names a window by its data directory path, `windowOrder` sorts them.
+    public func withheldLines(label: (String) -> String, windowOrder: [String] = []) -> [String] {
+        withheldSummary.map { summary in
+            let ordered = summary.windows.sorted { (windowOrder.firstIndex(of: $0) ?? .max, $0) < (windowOrder.firstIndex(of: $1) ?? .max, $1) }
+            let names = ordered.map(label)
+            let list = names.count > 1 ? names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1] : names.joined()
+            let folder = "…/" + (summary.rule as NSString).lastPathComponent
+            let count = summary.sessions == 1 ? "1 session" : "\(summary.sessions) sessions"
+            return "A folder rule keeps \(count) in \(folder) out of \(list). baton rules shows it."
+        }
+    }
 }
 
 /// Creates, opens and removes profiles. Every operation is local to this Mac.
@@ -130,6 +151,16 @@ public struct SyncReport: Equatable, Sendable {
 ///    waiting for a file lock, doing I/O or calling out. Across threads of one process the file locks serialize too.
 ///    The one exception is `LimitTracker`'s lock: it is held while reading and writing limit-sightings.json under that
 ///    file's lock and while listing transcripts, and nothing else is taken under it.
+/// How `ProfileManager.open` waits for a copy started without its profile's data to go (`removeStrays`), in seconds.
+struct StrayTiming: Sendable {
+    /// How long a stray gets to quit before one without Claude Code work is force-quit.
+    var grace = 10.0
+    /// How often a stray with Claude Code work is asked again.
+    var every = 5.0
+    /// How often Baton looks whether it is gone.
+    var tick = 0.2
+}
+
 public final class ProfileManager: @unchecked Sendable {
     public let paths: Paths
     public let registry: ProfileRegistry
@@ -210,6 +241,24 @@ public final class ProfileManager: @unchecked Sendable {
     /// `"MAIN"` or the profile's label.
     public func label(of windowID: String) -> String {
         windowID == "main" ? "MAIN" : profiles.first { $0.id == windowID }?.label ?? windowID
+    }
+
+    /// `report.withheldLines` with this Mac's window names, profiles in the order of the list and main last.
+    public func withheldLines(_ report: SyncReport) -> [String] {
+        let windows = windows
+        let order = (windows.filter { $0.id != "main" } + windows.filter { $0.id == "main" }).map(\.dataDir.standardizedFileURL.path)
+        return report.withheldLines(
+            label: { path in windows.first { $0.dataDir.standardizedFileURL.path == path }.map { displayLabel(of: $0.id) } ?? path },
+            windowOrder: order)
+    }
+
+    /// Workers Remote Control reaches in several windows, which Baton leaves alone, one line each. Reads only.
+    public func remoteControlAmbiguities() -> [String] {
+        let windows = windows
+        let owners = SessionSync.owners(dataDirs: windows.map(\.dataDir), paths: paths)
+        return SessionSync.ambiguityLines(owners: owners, dataDirs: windows.map(\.dataDir)) { dataDir in
+            windows.first { $0.dataDir == dataDir }.map { label(of: $0.id) } ?? dataDir.lastPathComponent
+        }
     }
 
     /// What follows "Claude " in what Baton says: `"(main)"` or the profile's label.
@@ -442,6 +491,28 @@ public final class ProfileManager: @unchecked Sendable {
     var whilePreparing: (@Sendable (String) -> Void)?
     /// Whether a running copy shows its main window yet; tests replace it, since their copies have no process.
     var windowShown: (@Sendable (RunningClaude) -> Bool)?
+    /// The running Claude Code processes and their parents, for `WindowActivity`; tests replace it.
+    var processTree: (@Sendable () -> ProcessTree)?
+    /// Whether a live Claude Code process works (`ClaudeWork.isWorking`), given its pid and its session if known;
+    /// tests replace it.
+    var processWorking: (@Sendable (pid_t, String?) -> Bool)?
+    /// How long a handover waits for its busy source to finish its current step, how often it looks, and how long for
+    /// the source to quit once asked, in seconds; tests shorten them.
+    var handoverSourceWait: (limit: TimeInterval, poll: TimeInterval, quit: TimeInterval) = (10 * 60, 10, 20)
+    /// Every session a running Claude Code process has open (`LiveSessions.ids`); tests replace it.
+    var liveSessionIDs: (@Sendable () -> Set<String>)?
+    /// Asks one running copy to quit, as `terminate()` does; tests replace it, since their copies have no process.
+    var quitRequester: (@Sendable (RunningClaude) -> Void)?
+    /// Force-quits one running copy, as `forceTerminate()` does; tests replace it, since their copies have no process.
+    var forceQuitter: (@Sendable (RunningClaude) -> Void)?
+    /// How long a stray gets to quit before it may be forced, how often one with Claude Code work is asked again, and
+    /// how often Baton looks whether it is gone; tests shorten them.
+    var strayTiming = StrayTiming()
+    /// Also told every line `removeStrays` logs; tests read them there, since the log is shared.
+    var strayNoted: (@Sendable (String) -> Void)?
+    /// Told the one line to show while a profile waits for a Claude started from its Dock icon to finish its work
+    /// (`strayLine`); the app shows it in its window and the CLI prints it.
+    public var onStrayWait: (@Sendable (_ id: String, _ line: String) -> Void)?
     /// Whether an app is Claude as Anthropic signs it (`ClaudeSource.isSignedByAnthropic`); tests replace it, since a
     /// sandbox's Claude.app isn't signed.
     var signatureCheck: (@Sendable (URL) -> Bool)?
@@ -460,10 +531,22 @@ public final class ProfileManager: @unchecked Sendable {
     /// Handing them over one by one while the window is still starting could start a second copy of it.
     public func open(_ id: String, links: [URL]) async throws {
         try ensureWritable()
-        try await oneAtATime(id) { try await self.openNow(id, links: links) }
+        try await oneAtATime(id) { try await self.openNow(id, links: links, prepare: nil) }
     }
 
-    private func openNow(_ id: String, links: [URL]) async throws {
+    /// Opens `window` (`"main"` or a profile id) as `open` does; when it has to start it, `prepare` runs first, with
+    /// open.lock held and the window still closed, after the sessions and settings are shared and before Local only
+    /// is applied. A window already running is brought forward without it.
+    func open(_ window: String, links: [URL], prepare: @escaping @Sendable () -> Void) async throws {
+        try ensureWritable()
+        if window == "main" {
+            try await oneAtATime("main") { try await self.openMainNow(links: links, prepare: prepare) }
+        } else {
+            try await oneAtATime(window) { try await self.openNow(window, links: links, prepare: prepare) }
+        }
+    }
+
+    private func openNow(_ id: String, links: [URL], prepare: (@Sendable () -> Void)?) async throws {
         guard let profile = profiles.first(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         let engine = paths.engine(for: profile.id)
         if DesktopData.accountID(in: paths.dataDir(for: profile.id)) == nil {
@@ -472,12 +555,9 @@ public final class ProfileManager: @unchecked Sendable {
         let running = runningClaudes()
         // A copy started without the profile's data shows the main account, next to the main app on the same data.
         // A recently opened window may already have restored active work. Never force-quit it just because it is new.
-        let strays = running.filter { $0.isStartedWithoutDataDir(engine: engine) }.compactMap(\.app)
-        if !strays.isEmpty {
-            try await quit(strays, waiting: 10, force: false)
-            guard strays.allSatisfy(\.isTerminated) else { throw ProfileError.windowStillRunning(profile.label) }
-        }
-        if let window = running.first(where: { window(of: profile.id, is: $0) }) {
+        let strays = running.filter { $0.isStartedWithoutDataDir(engine: engine) }
+        if !strays.isEmpty { try await removeStrays(strays, id: profile.id, label: profile.label) }
+        if let window = runningClaudes().first(where: { window(of: profile.id, is: $0) }) {
             noteOpened(profile.id, warning: nil)
             return try await bringForward(window, app: engine, links: links, label: profile.label)
         }
@@ -513,6 +593,7 @@ public final class ProfileManager: @unchecked Sendable {
                 do { _ = try InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id) } catch {
                     problems.append("Interface: \(error.localizedDescription)")
                 }
+                prepare?()
                 // Last, so no sync above can put a Remote Control switch back.
                 do { _ = try localOnly.reconcile(window: profile.id) } catch { problems.append("Local only: \(error.localizedDescription)") }
                 noteOpened(
@@ -530,6 +611,69 @@ public final class ProfileManager: @unchecked Sendable {
             await self.waitUntilListed { self.runningClaudes().contains { self.window(of: profile.id, is: $0) } }
             openLock.release()
         }
+    }
+
+    /// The line shown while `label`'s window waits for a Claude started from its Dock icon to finish its work.
+    public static func strayLine(_ label: String) -> String {
+        "\(label) opens when the Claude started from its Dock icon finishes its work."
+    }
+
+    /// Removes copies of the profile's app started without its data (from its Dock icon, or by macOS at login), which
+    /// show the main account on main's data. Each is asked to quit. One still running after `strayTiming.grace` with no
+    /// Claude Code process under it is force-quit; one with Claude Code work is never forced: it is asked again every
+    /// `strayTiming.every` until it is gone, and only then does the profile open. Every decision is logged.
+    private func removeStrays(_ strays: [RunningClaude], id: String, label: String) async throws {
+        let started = Date()
+        let isRunning = { (stray: RunningClaude) -> Bool in
+            if let app = stray.app, app.isTerminated { return false }
+            guard let pid = stray.pid else { return false }
+            return self.runningClaudes().contains { $0.pid == pid && $0.app?.isTerminated != true }
+        }
+        let ask = { (stray: RunningClaude) in if let quitRequester = self.quitRequester { quitRequester(stray) } else { stray.app?.terminate() } }
+        let name = { (stray: RunningClaude) in "stray \(stray.pid.map(String.init) ?? "?")" }
+        for stray in strays {
+            ask(stray)
+            noteStray("\(name(stray)) of \(label) asked to quit: started from its Dock icon without the profile's data")
+        }
+        let ticks = { (seconds: Double) in max(1, Int((seconds / self.strayTiming.tick).rounded())) }
+        for _ in 0..<ticks(strayTiming.grace) where strays.contains(where: isRunning) {
+            try await Task.sleep(for: .seconds(strayTiming.tick))
+        }
+        var kept: [RunningClaude] = []
+        for stray in strays where isRunning(stray) {
+            let work = claudeCodeCount(under: stray)
+            if work == 0 {
+                if let forceQuitter { forceQuitter(stray) } else { stray.app?.forceTerminate() }
+                noteStray("\(name(stray)) force-quit after \(Int(strayTiming.grace)) s: no Claude Code work")
+            } else {
+                kept.append(stray)
+                noteStray("\(name(stray)) kept: \(work) Claude Code process\(work == 1 ? "" : "es") under it")
+            }
+        }
+        guard !kept.isEmpty else { return }
+        onStrayWait?(id, Self.strayLine(label))
+        var sinceAsked = 0.0
+        while kept.contains(where: isRunning) {
+            try await Task.sleep(for: .seconds(strayTiming.tick))
+            sinceAsked += strayTiming.tick
+            if sinceAsked >= strayTiming.every {
+                sinceAsked = 0
+                kept.filter(isRunning).forEach(ask)
+            }
+        }
+        for stray in kept { noteStray("\(name(stray)) gone after \(Int(Date().timeIntervalSince(started).rounded())) s") }
+    }
+
+    private func noteStray(_ message: String) {
+        Log.notice("open", message)
+        strayNoted?(message)
+    }
+
+    /// Claude Code processes that descend from `copy`'s process.
+    private func claudeCodeCount(under copy: RunningClaude) -> Int {
+        guard let pid = copy.pid else { return 0 }
+        let tree = processTree?() ?? .current
+        return tree.claudes.filter { tree.descends($0, from: [pid]) }.count
     }
 
     /// Waits until the copy just started shows up among the running apps, as `isRunning` finds it, for at most
@@ -656,10 +800,10 @@ public final class ProfileManager: @unchecked Sendable {
 
     public func openMain(links: [URL]) async throws {
         try ensureWritable()
-        try await oneAtATime("main") { try await self.openMainNow(links: links) }
+        try await oneAtATime("main") { try await self.openMainNow(links: links, prepare: nil) }
     }
 
-    private func openMainNow(links: [URL]) async throws {
+    private func openMainNow(links: [URL], prepare: (@Sendable () -> Void)?) async throws {
         guard isSignedByAnthropic(paths.claudeApp) else {
             guard fm.fileExists(atPath: paths.claudeApp.path) else { throw ProfileError.claudeNotInstalled(paths.claudeApp.path) }
             throw ProfileError.claudeNotFromAnthropic(paths.claudeApp.path)
@@ -687,6 +831,7 @@ public final class ProfileManager: @unchecked Sendable {
                 autoResume.applyPending()
                 var problems: [String] = []
                 do { _ = try prepareSessionsForLaunch() } catch { problems.append("sessions could not be shared first: \(error.localizedDescription)") }
+                prepare?()
                 do { _ = try localOnly.reconcile(window: "main") } catch { problems.append("Local only could not be applied: \(error.localizedDescription)") }
                 noteOpened("main", warning: problems.isEmpty ? nil : "Claude opened, but " + problems.joined(separator: "; "))
                 startedMeanwhile = runningClaudes().contains(where: isMain)
@@ -716,7 +861,7 @@ public final class ProfileManager: @unchecked Sendable {
 
     /// Hands a `claude://` link to the running window of the app at `app`. macOS delivers it to that exact copy,
     /// so no other window sees it and no permission is needed.
-    private func deliver(_ links: [URL], to app: URL) async throws {
+    func deliver(_ links: [URL], to app: URL) async throws {
         if let appActivator { return try await appActivator(app, links) }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
@@ -904,7 +1049,7 @@ public final class ProfileManager: @unchecked Sendable {
     func checkRules(folders: [String], destination: String) throws {
         guard let allowed = try allowedAccounts(for: folders) else { return }
         let dataDir = dataDir(of: destination)
-        let email = DesktopData.accountID(in: dataDir).flatMap { email(in: dataDir, accountID: $0) }
+        let email = DesktopData.accountID(in: dataDir).flatMap { self.email(in: dataDir, accountID: $0) }
         guard let email, allowed.accounts.contains(email.lowercased()) else {
             throw ProfileError.notAllowed(
                 folders: allowed.rules.map(\.folder), accounts: allowed.accounts.sorted(),
@@ -920,7 +1065,7 @@ public final class ProfileManager: @unchecked Sendable {
         return label
     }
 
-    private func dataDir(of window: String) -> URL {
+    func dataDir(of window: String) -> URL {
         window == "main" ? paths.mainDataDir : paths.dataDir(for: window)
     }
 
@@ -1485,6 +1630,24 @@ enum FileLock {
                 close(descriptor)
                 throw error
             }
+        }
+
+        /// Takes the lock only if nobody holds it, another open of it in this process included.
+        /// - Returns: `nil` when it is held.
+        static func attempt(_ url: URL) throws -> Held? {
+            let descriptor = try FileLock.openFile(url)
+            guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+                let code = errno
+                close(descriptor)
+                if code == EWOULDBLOCK || code == EAGAIN { return nil }
+                throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+            }
+            return Held(path: url.standardizedFileURL.path, descriptor: descriptor)
+        }
+
+        private init(path: String, descriptor: Int32) {
+            self.path = path
+            self.descriptor = descriptor
         }
 
         deinit { release() }

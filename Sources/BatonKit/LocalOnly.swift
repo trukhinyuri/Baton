@@ -3,7 +3,8 @@ import Foundation
 /// Local only: a window's new Claude Code sessions stay on this Mac instead of being offered to Remote Control.
 ///
 /// It sets two of Claude Desktop's own preferences in that window's `claude_desktop_config.json` to `false`, the
-/// way the switches in Claude's settings do, and only while the window is closed: Claude writes that file back
+/// way the switches in Claude's settings do, and empties the list of folders pinned for Remote Control, only while the
+/// window is closed: Claude writes that file back
 /// when it quits. Every write starts with a dated backup and a record of the values it replaces, changes only
 /// those values and leaves every other byte of the file as it was, and is read back afterwards. Turning Local only
 /// off puts the recorded values back where they are still the ones Local only set. A settings file that links to a file
@@ -40,14 +41,31 @@ public struct LocalOnly: Sendable {
         let name: String
         /// Added when the window's settings don't have it yet; the others change only where Claude wrote them.
         let required: Bool
+        /// The JSON text Local only writes for this key.
+        let value: String
+
+        /// Whether `text` is Local only's value for this key, however Claude spaced it.
+        func isLocalOnly(_ text: String) -> Bool {
+            guard text != value else { return true }
+            guard let parsed = try? JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed),
+                let own = try? JSONSerialization.jsonObject(with: Data(value.utf8), options: .fragmentsAllowed)
+            else { return false }
+            return InterfaceSync.canonical(parsed) == InterfaceSync.canonical(own)
+        }
+
+        /// Local only's value as the object a read of the file gives.
+        var object: Any { (try? JSONSerialization.jsonObject(with: Data(value.utf8), options: .fragmentsAllowed)) ?? false }
     }
 
-    /// "Remote Control for new sessions" and "Stay reachable".
+    /// "Remote Control for new sessions", "Stay reachable" and the folders pinned for Remote Control: a pinned folder
+    /// keeps a window serving Remote Control even with both switches off.
     static let keys = [
-        Key(name: "ccRemoteControlDefaultEnabled", required: true),
-        Key(name: "remoteControlStayReachable", required: false),
+        Key(name: "ccRemoteControlDefaultEnabled", required: true, value: "false"),
+        Key(name: "remoteControlStayReachable", required: false, value: "false"),
+        Key(name: "remoteControlPinnedFolders", required: false, value: "[]"),
     ]
-    public static let ownedKeys: Set<String> = Set(keys.map(\.name))
+    public static let keyNames = keys.map(\.name)
+    public static let ownedKeys: Set<String> = Set(keyNames)
     /// Preferences Local only must never write: local scheduled tasks and their wake helper, and the switches
     /// an administrator sets through managed preferences.
     public static let neverTouched: Set<String> = [
@@ -55,7 +73,6 @@ public struct LocalOnly: Sendable {
         "isClaudeCodeForDesktopEnabled", "disableMultiAccount", "chatTabEnabled", "isDesktopExtensionEnabled",
         "isLocalDevMcpEnabled", "secureVmFeaturesEnabled",
     ]
-    static let value = "false"
     static let configName = "claude_desktop_config.json"
 
     public let paths: Paths
@@ -163,7 +180,7 @@ public struct LocalOnly: Sendable {
         else { return .pending }
         for key in applicable {
             if let member = prefs.members.first(where: { $0.key == key.name }) {
-                if patch.text(member) != Self.value { return .pending }
+                if !key.isLocalOnly(patch.text(member)) { return .pending }
             } else if key.required {
                 return .pending
             }
@@ -183,21 +200,21 @@ public struct LocalOnly: Sendable {
             let prefs = try patch.preferences()
             if let member = prefs?.members.first(where: { $0.key == key.name }) {
                 let text = patch.text(member)
-                guard text != Self.value else { continue }
+                guard !key.isLocalOnly(text) else { continue }
                 if own.prior[key.name] == nil && !own.inserted.contains(key.name) { own.prior[key.name] = text }
-                patch.replace(member, with: Self.value)
+                patch.replace(member, with: key.value)
             } else if key.required {
                 if prefs == nil {
-                    try patch.insertPreferences(key: key.name, value: Self.value)
+                    try patch.insertPreferences(key: key.name, value: key.value)
                     own.createdPreferences = true
                 } else {
-                    try patch.insertFirst(key: key.name, value: Self.value, inPreferences: true)
+                    try patch.insertFirst(key: key.name, value: key.value, inPreferences: true)
                 }
                 if own.prior[key.name] == nil && !own.inserted.contains(key.name) { own.inserted.append(key.name) }
             } else {
                 continue
             }
-            expectedPrefs[key.name] = false
+            expectedPrefs[key.name] = key.object
         }
         guard patch.bytes != original.map(Array.init) else { return }
         expected["preferences"] = expectedPrefs
@@ -205,7 +222,7 @@ public struct LocalOnly: Sendable {
         try write(patch, over: original, to: url, window: window, recording: own, state: &state) { written in
             for key in applicable where expectedPrefs[key.name] != nil {
                 guard let member = try written.preferences()?.members.first(where: { $0.key == key.name }),
-                    written.text(member) == Self.value
+                    key.isLocalOnly(written.text(member))
                 else { return false }
             }
             return NSDictionary(dictionary: try written.dictionary()).isEqual(to: expected)
@@ -225,16 +242,17 @@ public struct LocalOnly: Sendable {
         var expectedPrefs = expected["preferences"] as? [String: Any] ?? [:]
 
         for (name, prior) in own.prior.sorted(by: { $0.key < $1.key }) {
-            // A value turned back on inside Claude while Local only was on is the user's own choice.
-            guard let member = try patch.preferences()?.members.first(where: { $0.key == name }),
-                patch.text(member) == Self.value
+            // A value turned back on or a list changed inside Claude while Local only was on is the user's own choice.
+            guard let key = Self.keys.first(where: { $0.name == name }),
+                let member = try patch.preferences()?.members.first(where: { $0.key == name }),
+                key.isLocalOnly(patch.text(member))
             else { continue }
             patch.replace(member, with: prior)
             expectedPrefs[name] = try JSONSerialization.jsonObject(with: Data(prior.utf8), options: .fragmentsAllowed)
         }
         for name in own.inserted {
-            guard let prefs = try patch.preferences(), let index = prefs.members.firstIndex(where: { $0.key == name }),
-                patch.text(prefs.members[index]) == Self.value
+            guard let key = Self.keys.first(where: { $0.name == name }), let prefs = try patch.preferences(),
+                let index = prefs.members.firstIndex(where: { $0.key == name }), key.isLocalOnly(patch.text(prefs.members[index]))
             else { continue }
             patch.remove(index, in: prefs)
             expectedPrefs.removeValue(forKey: name)

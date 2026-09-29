@@ -179,6 +179,45 @@ enum IDBKey {
 
 /// The few shapes of a serialized IndexedDB value (Blink's envelope around V8's serializer) that hold one string.
 enum IDBValue {
+    /// `string` serialized with the headers of `header`, an existing record's value that holds one string: its bytes up
+    /// to the string's tag are kept (V8's padding recomputed), then a one-byte string (`0x22`) when every UTF-16 unit
+    /// fits in a byte, or a two-byte one (`0x63`, UTF-16LE, aligned the way V8 aligns it). `nil` when `header` isn't
+    /// one string, or Blink's trailer offset in it isn't zero: a trailer after the value would no longer be where it
+    /// points once the string's length changes.
+    static func encode(_ string: String, like header: [UInt8]) -> [UInt8]? {
+        guard Self.string(in: header) != nil else { return nil }
+        var reader = ByteReader(header)
+        do {
+            while !reader.isAtEnd, reader.data[reader.pos] == 0xFF {
+                _ = try reader.byte()
+                _ = try reader.varint64()
+                if !reader.isAtEnd, reader.data[reader.pos] == 0xFE {
+                    let trailer = try reader.bytes(13)
+                    guard trailer.dropFirst().allSatisfy({ $0 == 0 }) else { return nil }
+                }
+            }
+        } catch {
+            return nil
+        }
+        var bytes = Array(header[..<reader.pos])
+        let units = Array(string.utf16)
+        var length = ByteWriter()
+        if units.allSatisfy({ $0 <= 0xFF }) {
+            length.appendVarint64(UInt64(units.count))
+            bytes.append(0x22)
+            bytes += length.bytes
+            bytes += units.map { UInt8($0) }
+        } else {
+            length.appendVarint64(UInt64(units.count * 2))
+            // V8 reads a two-byte string only from an even offset, so a padding byte goes before its tag when needed.
+            if (bytes.count + 1 + length.bytes.count) % 2 == 1 { bytes.append(0x00) }
+            bytes.append(0x63)
+            bytes += length.bytes
+            for unit in units { bytes += [UInt8(unit & 0xFF), UInt8(unit >> 8)] }
+        }
+        return bytes
+    }
+
     static func string(in bytes: [UInt8]) -> String? {
         var reader = ByteReader(bytes)
         do {

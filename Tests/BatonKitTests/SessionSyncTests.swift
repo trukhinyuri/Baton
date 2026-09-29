@@ -37,6 +37,7 @@ struct Sandbox {
     func sync(propagateDeletions: Bool = false) throws -> SessionSync.Report {
         var sync = SessionSync(paths: paths, dataDirs: [main, work])
         sync.liveSessionIDs = []
+        sync.liveWindows = { [:] }
         return try sync.run(propagateDeletions: propagateDeletions)
     }
 

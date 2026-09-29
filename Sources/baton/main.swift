@@ -49,6 +49,19 @@ let usage = """
                                           continues it by itself, nothing happens (exit 3) unless --now
       baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                           Same as `continue`
+      baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
+                                          Move the work of a window at its limit to the window with
+                                          the most room: the sessions the limit cut resume there.
+                                          The window at its limit finishes its current step first (up
+                                          to 10 minutes) and is closed, so every session moves as
+                                          itself; if it stays open, its open sessions continue as
+                                          copies. By default the open window at its limit, and the
+                                          best window. A busy window restarts once its current work
+                                          finishes, and one left open at its limit is closed then.
+                                          Run it again to go on after an interrupt.
+                                          Exit 3: Claude's own reset time is within 30 minutes
+      baton handover auto on|off|status   Whether the app does this by itself when an open window
+                                          reaches its limit while you work there (on by default)
       baton rules [--json]                Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
                                           Let only these accounts continue work in the folder and
@@ -91,7 +104,13 @@ func value(of flag: String, in args: [String]) -> String? {
 }
 
 let args = CommandAliases.resolve(Array(CommandLine.arguments.dropFirst()))
-let home = FileManager.default.homeDirectoryForCurrentUser
+#if DEBUG
+    // Debug builds only: a sandbox home and stand-in windows for scripts/e2e-handover.sh (`SandboxRun`).
+    let sandbox = SandboxRun(environment: ProcessInfo.processInfo.environment)
+    let home = sandbox?.home ?? FileManager.default.homeDirectoryForCurrentUser
+#else
+    let home = FileManager.default.homeDirectoryForCurrentUser
+#endif
 // Launchers call this path, so it is the real file, not whatever name the shell found it by.
 let cli = RunningExecutable.url() ?? URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
 
@@ -132,14 +151,28 @@ case .manager(let sharedLock):
     if sharedLock, let busy = LegacyMigration.holdShared(home: home) { fail(busy) }
 }
 
-// Run from inside a Baton.app in Downloads or a temporary copy: no profile is added and no launcher points there.
-let manager = ProfileManager(cliPath: cli, misplaced: AppLocation.problem(app: cli, home: home))
+/// Run from inside a Baton.app in Downloads or a temporary copy: no profile is added and no launcher points there.
+func makeManager() -> ProfileManager {
+    #if DEBUG
+        if let sandbox { return sandbox.manager(cliPath: cli) }
+    #endif
+    return ProfileManager(cliPath: cli, misplaced: AppLocation.problem(app: cli, home: home))
+}
+let manager = makeManager()
+// A profile waiting for a Claude started from its Dock icon to finish its work says so once; Ctrl-C stops waiting.
+manager.onStrayWait = { _, line in print(line) }
 
 // Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a missing or unsigned Claude Desktop, a
 // version outside the tested range and managed policies. Informational only: it never blocks the command that follows.
 // A command that only reads leaves Launch Services as it is, so `baton doctor` never changes what it looks into.
-let startUpNotes = manager.startUpChecks(restoringLinks: !CLIDispatch.isReadOnly(args))
-for warning in startUpNotes { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
+func startUpNotes() -> [String] {
+    #if DEBUG
+        // A sandbox run never touches Launch Services or looks for this Mac's Claude.
+        if sandbox != nil { return [] }
+    #endif
+    return manager.startUpChecks(restoringLinks: !CLIDispatch.isReadOnly(args))
+}
+for warning in startUpNotes() { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
 
 func resolve(_ name: String) -> Profile {
     guard let profile = manager.profiles.first(where: { $0.id == name.lowercased() || $0.label.caseInsensitiveCompare(name) == .orderedSame })
@@ -307,6 +340,7 @@ do {
         print(
             "\(r.sessions.accountBoundCards + r.cowork.accountBoundCards) account-linked cards scoped · \(r.sessions.ambiguousAccountBoundCards + r.cowork.ambiguousAccountBoundCards) ambiguous cards left untouched"
         )
+        for line in manager.withheldLines(r) { print(line) }
         let carried = r.carried.reduce(0) { $0 + $1.added.count }
         if carried > 0 { print("\(carried) files carried into \(r.carried.count) sessions Claude Desktop continued as a copy") }
         if dryRun { print("Nothing was changed.") }
@@ -353,7 +387,7 @@ do {
                 for note in ClaudeSource.notes(paths: manager.paths) { print("  \(note)") }
                 switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
                 case nil: print("Local only: Claude.app unreadable, can't check its settings")
-                case []: print("Local only keys present: ccRemoteControlDefaultEnabled, remoteControlStayReachable")
+                case []: print("Local only keys present: \(LocalOnly.keyNames.joined(separator: ", "))")
                 case let missing?: print("Local only: missing in this Claude Desktop: \(missing.joined(separator: ", "))")
                 }
             } else {
@@ -364,7 +398,21 @@ do {
             for policy in policies { print("  \(policy)") }
             for row in manager.localOnlyStatus() { print("Claude \(manager.displayLabel(of: row.window)): \(describe(row.status))") }
             print(describe(manager.cloudMoveLock.status()))
+            for line in manager.remoteControlAmbiguities() { print(line) }
+            // What the next sync would keep out of windows, counted without writing anything.
+            if let preview = try? manager.syncSessions(dryRun: true) {
+                for summary in preview.withheldSummary {
+                    print("Folder rule \(summary.rule): \(summary.sessions) sessions kept out of \(summary.windows.count) windows")
+                }
+                for line in manager.withheldLines(preview) { print("  \(line)") }
+            }
             for change in manager.autoResume.changes() {
+                guard change.action == .turnedOff else {
+                    print(
+                        "Auto-continue added by Baton in Claude \(manager.displayLabel(of: change.window)) for \(change.entry) "
+                            + "(added \(LimitText.time(change.changedAt))), so the session continues there after another window's limit")
+                    continue
+                }
                 print(
                     "Auto-continue turned off by Baton in Claude \(manager.displayLabel(of: change.window)) for "
                         + "\(change.entry) (limit reset \(LimitText.time(change.resetsAt)), turned off \(LimitText.time(change.changedAt))): "
@@ -491,6 +539,98 @@ do {
             print("Prepared files: \(handoff.folder.path)")
         }
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
+    case "handover" where args.dropFirst().first == "auto":
+        let auto = HandoverAuto(paths: manager.paths)
+        switch args.dropFirst(2).first {
+        case "on": try auto.set(true)
+        case "off": try auto.set(false)
+        case "status": break
+        default: fail("handover auto takes on, off or status")
+        }
+        print("Handing work over by itself when a window reaches its limit: \(auto.isOn ? "on" : "off").")
+    case "handover":
+        let json = args.contains("--json")
+        let dryRun = args.contains("--dry-run")
+        let statuses = manager.statuses()
+        let log = HandoverLog(paths: manager.paths)
+        let labels = { (id: String) in manager.displayLabel(of: id) }
+        let say = { @Sendable (step: String) in if !json { print(step) } }
+        let source: String
+        if let name = value(of: "--from", in: args) {
+            source = destinationID(name)
+        } else if !dryRun, let unfinished = log.unfinished().last {
+            source = unfinished.source
+        } else {
+            let atLimit = statuses.filter { DestinationRanking.isAtLimit($0) }
+            guard let found = atLimit.first(where: \.isRunning) ?? atLimit.first else { fail("No window is at its limit, so there is nothing to hand over.") }
+            source = found.id
+        }
+        if !dryRun, log.inProgress(source: source) { fail(HandoverError.inProgress(labels(source)).localizedDescription) }
+        // A handover stopped halfway (Ctrl-C, a crash) goes on where it stopped: its destination restarts once free,
+        // and its source is closed once nothing works there. One stopped before its destination was ready starts
+        // over, towards the same window.
+        var stoppedTo: String?
+        if !dryRun, let unfinished = log.unfinished(source: source).last, unfinished.state == "starting" {
+            stoppedTo = try manager.restartStoppedHandover(source: source)
+        } else if !dryRun, let unfinished = log.unfinished(source: source).last {
+            say("Continuing the handover of Claude \(labels(source))'s work to Claude \(labels(unfinished.destination))…")
+            async let closing = manager.watchHandoverSource(source)
+            let finished = try await manager.finishWaitingHandover(source: source, progress: say)
+            let line = finished?.line ?? unfinished.line
+            if json, let finished { print(try CLIOutput.json(HandoverSummary(result: finished, labels: labels))) } else if !json { print(line) }
+            if try await closing { say("Claude \(labels(source)) was closed once nothing worked there.") }
+            if finished?.state == .failed { exit(1) }
+            break
+        }
+        let chosen = value(of: "--to", in: args).map(destinationID)
+        let plan: HandoverPlan
+        do { plan = try manager.planHandover(from: source, to: chosen ?? stoppedTo) } catch HandoverError.destinationAtLimit where chosen == nil {
+            // The window the stopped handover chose has reached its limit meanwhile: the best one now.
+            plan = try manager.planHandover(from: source)
+        }
+        if dryRun {
+            if json {
+                print(try CLIOutput.json(HandoverSummary(plan: plan, labels: labels)))
+            } else if plan.picksUpItself {
+                print(HandoverText.line(HandoverResult(plan: plan, state: .picksUpItself), labels: labels))
+            } else {
+                let resume = plan.cut.count, copies = plan.sessions.filter(\.asCopy).count
+                print(
+                    "Would hand \(plan.sessions.count) sessions over from Claude \(labels(source)) to Claude \(labels(plan.destination)): "
+                        + "\(resume) to resume, \(copies) as copies.")
+                for session in plan.sessions {
+                    let how = session.asCopy ? "copy" : "same"
+                    let what = session.cut ? "resume" : "move  "
+                    print("\(what)  \(how)  \(session.transcript.prefix(8))  \(session.title)")
+                }
+                for leftover in plan.leftovers {
+                    if let clause = HandoverText.clause(leftover, source: labels(source), destination: labels(plan.destination)) { print("  \(clause)") }
+                }
+                if plan.sourceActivity.isBusy {
+                    print("  " + HandoverText.sourceFinishing(source: labels(source), destination: labels(plan.destination)))
+                    print("  If Claude Code still works there after 10 minutes, its open sessions continue as copies.")
+                }
+                if plan.seeding != .seed { print("  Claude \(labels(plan.destination)) won't resume them by itself; they'll be opened there.") }
+                if plan.destinationActivity.isBusy { print("  Claude \(labels(plan.destination)) is busy; it restarts when its current work finishes.") }
+                print("Nothing was changed.")
+            }
+            if plan.picksUpItself { exit(3) }
+            break
+        }
+        var result = try await manager.handOver(plan, progress: say)
+        // The source stayed open because Claude Code works there: it is closed as soon as that work finishes.
+        async let closing = manager.watchHandoverSource(source)
+        if result.state == .waiting {
+            say(result.line)
+            if let finished = try await manager.finishWaitingHandover(source: source, progress: say) { result = finished }
+        }
+        print(json ? try CLIOutput.json(HandoverSummary(result: result, labels: labels)) : result.line)
+        if !result.sourceClosed, result.state == .done || result.state == .waiting {
+            say("Claude \(labels(source)) is closed as soon as its current work finishes; keep this running until then.")
+        }
+        if try await closing { say("Claude \(labels(source)) was closed once nothing worked there.") }
+        if result.state == .picksUpItself { exit(3) }
+        if result.state == .failed { exit(1) }
     case "rules":
         let rules: [FolderRule]
         do { rules = try FolderRules(paths: manager.paths).load() } catch {
