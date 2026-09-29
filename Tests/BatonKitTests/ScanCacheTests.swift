@@ -75,6 +75,52 @@ struct ScanCacheTests {
         #expect(cache.reads == 2)
     }
 
+    /// Sync keeps what each card says and a digest, not its bytes, and an idle sync compares no copy with its card.
+    @Test func syncKeepsNoCardBytesAndAnIdleRunComparesNothing() throws {
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        let filler = String(repeating: "x", count: 50_000)
+        for i in 0..<20 {
+            let session = String(format: "00000000-0000-4000-8000-%012d", i)
+            try box.write(
+                #"{"sessionId":"local_\#(i)","cliSessionId":"\#(session)","cwd":"/Users/me/src/app","cuGrantFlags":{"x":true},"notes":"\#(filler)"}"#,
+                to: a.appending(path: "local_\(i).json"))
+        }
+        let cache = ScanCache()
+        func sync() throws -> SessionSync.Report {
+            var sync = SessionSync(paths: box.paths, dataDirs: [box.main, box.work])
+            sync.cache = cache
+            sync.liveSessionIDs = []
+            return try sync.run(propagateDeletions: false)
+        }
+
+        #expect(try sync().cardsWritten == 20)
+        // The copies the first run wrote are read once. A copy dated to the second like its card may now count as
+        // the newest, so some cards are compared again in the other window.
+        #expect(try sync().cardsCompared >= 20)
+        let idle = try sync()
+        #expect(idle.changes == 0 && idle.cardsCompared == 0)
+        #expect(cache.bytes < 40 * 1_000, "40 cards of 50 KB each are kept as a few hundred bytes each")
+
+        // One card changes: only its copy is compared again, and gets the change.
+        try box.write(
+            #"{"sessionId":"local_3","cliSessionId":"00000000-0000-4000-8000-000000000003","cwd":"/Users/me/src/app","notes":"new"}"#,
+            to: a.appending(path: "local_3.json"), modified: Date().addingTimeInterval(60))
+        let changed = try sync()
+        #expect(changed.cardsCompared == 2 && changed.cardsWritten == 1, "its copy in each window")
+        #expect(box.read(b.appending(path: "local_3.json"))?.contains(#""notes":"new""#) == true)
+        #expect(try sync().cardsCompared == 1, "the copy written in the run before")
+        // A copy changed in its own window is compared again too.
+        try box.write(
+            #"{"sessionId":"local_4","cliSessionId":"00000000-0000-4000-8000-000000000004","cwd":"/Users/me/src/app","notes":"work"}"#,
+            to: b.appending(path: "local_4.json"), modified: Date().addingTimeInterval(120))
+        let mine = try sync()
+        #expect(mine.cardsCompared == 2 && mine.cardsWritten == 1, "the newer copy in work goes back to main")
+        #expect(box.read(a.appending(path: "local_4.json"))?.contains(#""notes":"work""#) == true)
+    }
+
     /// A fixture of many cards and transcripts: the first sync and Continue list read them all, an idle one reads
     /// none, and a change reads only what changed. Prints the times for the record.
     @Test func anIdleRefreshReadsNothing() throws {

@@ -42,6 +42,8 @@ public struct SessionSync: Sendable {
         public var keptLive = 0
         /// "Session deleted" markers removed after every window had them for 90 days.
         public var tombstonesExpired = 0
+        /// Copies read to compare with their card. An idle run, in which no card changed, reads none.
+        public var cardsCompared = 0
         /// The data folders (standardized paths) that got a session card in this run. A window that was already open
         /// shows those sessions only after a restart.
         public var wroteInto: Set<String> = []
@@ -70,7 +72,7 @@ public struct SessionSync: Sendable {
     /// Whether copies from other accounts keep `permissionMode` in a data directory's cards: the profile's
     /// “carry permission mode” choice. `nil` reads `carryPermissionMode` from each profile in the registry.
     public var carriesPermissionMode: (@Sendable (URL) -> Bool)?
-    /// Cards already read, kept while each file stays the same, so an idle run reads none of them again.
+    /// What each card says, kept while its file stays the same, so an idle run reads none of them again.
     public var cache: ScanCache = .shared
 
     /// - Parameter dataDirs: every Claude Desktop data directory to keep in sync, main one included.
@@ -107,6 +109,7 @@ public struct SessionSync: Sendable {
         var observed = Set<String>()
         var archiveLists: [String: Set<String>] = [:]  // folder path → archived IDs, for folders that have an index
         var archiveVersion: Any = 1
+        var reads: [String: CardRead] = [:]  // card file path → what it says
 
         for pair in pairs {
             let scope = Self.scope(of: pair)
@@ -114,10 +117,11 @@ public struct SessionSync: Sendable {
             for url in try fm.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil) {
                 let name = url.lastPathComponent
                 if name.hasPrefix("local_"), name.hasSuffix(".json") {
-                    let (data, facts) = try cache.value("card", of: url) { url in
-                        let data = try Data(contentsOf: url)
-                        return (data, Self.facts(of: data))
+                    let read = try autoreleasepool {
+                        try cache.value("card", of: url, cost: \CardRead.cost) { url in CardRead(try Data(contentsOf: url), of: url) }
                     }
+                    let facts = read.facts
+                    reads[url.path] = read
                     observed.insert(name)
                     cardScopes[name, default: []].insert(scope)
                     if facts.accountBound { accountBound.insert(name) }
@@ -128,9 +132,8 @@ public struct SessionSync: Sendable {
                         transcriptsByFolder[pair.path, default: [:]][name] = transcript
                         if facts.imported, Self.cardName(for: transcript) == name { importedByFolder[pair.path, default: []].insert(name) }
                     }
-                    guard let modified = SyncFolders.modificationDate(url) else { continue }
-                    let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantFuture
-                    let found = Card(modified: modified, data: data, facts: facts, account: Self.account(of: pair), created: created)
+                    guard let modified = read.modified else { continue }
+                    let found = Card(modified: modified, digest: read.digest, facts: facts, account: Self.account(of: pair), created: read.created, url: url)
                     if let known = cards[name], !found.supersedes(known) { continue }
                     cards[name] = found
                 } else if name.hasPrefix("deleted_") {
@@ -194,6 +197,21 @@ public struct SessionSync: Sendable {
             return live?.contains(transcript) == true
         }
         let backup = Backup(paths: paths, now: now)
+        // Newest first, so a folder that gets one of two cards for a conversation gets the current one.
+        let newestFirst = cards.sorted(by: { $0.value.modified > $1.value.modified })
+        // A card's bytes are read when a copy has to be compared or written, once per run, and only if the file is
+        // still what the scan found.
+        var loaded: [String: Data] = [:]
+        func bytes(of card: Card) -> Data? {
+            if let data = loaded[card.url.path] { return data }
+            guard let data = try? Data(contentsOf: card.url), SHA256.hash(data: data) == card.digest else { return nil }
+            loaded[card.url.path] = data
+            return data
+        }
+        // Before a copy is removed: if it is the newest, the other windows still get it in this run.
+        func keepBytes(of name: String, at target: URL) {
+            if let card = cards[name], card.url.path == target.path { _ = bytes(of: card) }
+        }
         for pair in pairs {
             let dataDir = dataDir(of: pair)
             let scope = Self.scope(of: pair), account = Self.account(of: pair)
@@ -213,6 +231,7 @@ public struct SessionSync: Sendable {
                 guard let transcript = held[imported] else { continue }
                 for (name, other) in held where other == transcript && name != imported && !accountBound.contains(name) {
                     let target = pair.appending(path: name)
+                    keepBytes(of: name, at: target)
                     if !dryRun {
                         if try backup.save(target, everyTime: true) { report.backedUp += 1 }
                         try fm.removeItem(at: target)
@@ -223,15 +242,14 @@ public struct SessionSync: Sendable {
                 }
             }
             var heldTranscripts = Set(held.values)
-            // Newest first, so a folder that gets one of two cards for a conversation gets the current one.
-            for (name, card) in cards.sorted(by: { $0.value.modified > $1.value.modified })
-            where permitted(name, in: scope) && !deletedNames.contains(name) {
+            for (name, card) in newestFirst where permitted(name, in: scope) && !deletedNames.contains(name) {
                 let target = pair.appending(path: name)
                 let native = accountBound.contains(name)
                 if !native, !allows(card, in: pair) {
                     guard present.contains(name) else { report.withheldByRule += 1; continue }
                     // Retire a copy only where Claude can't be holding it, and only once it is safe elsewhere.
                     guard !windowOpen, holders[name, default: []].contains(where: { $0 != pair && allows(card, in: $0) }) else { continue }
+                    keepBytes(of: name, at: target)
                     if !dryRun {
                         if try backup.save(target, everyTime: true) { report.backedUp += 1 }
                         try fm.removeItem(at: target)
@@ -241,6 +259,13 @@ public struct SessionSync: Sendable {
                     continue
                 }
                 if !present.contains(name), let transcript = card.facts.transcript, heldTranscripts.contains(transcript) { continue }
+                // This copy as the scan found it, and what it is compared with. A copy found to match that card in an
+                // earlier run, and unchanged since, still matches.
+                let mine = present.contains(name) ? reads[target.path] : nil
+                let comparison = "\(card.digest)|\(card.modified.timeIntervalSince1970)|\(card.account)|\(native)|\(keepsPermissionMode)"
+                if let mine, mine.matches(comparison) { continue }
+                // Changed since the scan: the next run takes the new card.
+                guard let winner = bytes(of: card) else { continue }
                 // A native worker's cwd is coupled to remoteControlSpawn.folder and its server bridge.
                 // Even within one account/organization, preserve the complete card byte-for-byte.
                 let existing = present.contains(name) ? try? Data(contentsOf: target) : nil
@@ -248,11 +273,12 @@ public struct SessionSync: Sendable {
                 func shared(_ base: Data) -> Data {
                     let local = localized(base, for: dataDir, linking: !dryRun)
                     guard card.account != account else { return local }
-                    return Self.withoutAccountFields(local, winner: card.data, existing: existing, keepPermissionMode: keepsPermissionMode)
+                    return Self.withoutAccountFields(local, winner: winner, existing: existing, keepPermissionMode: keepsPermissionMode)
                 }
-                var data = native ? card.data : shared(card.data), modified = card.modified
+                var data = native ? winner : shared(winner), modified = card.modified
                 if present.contains(name) {
                     guard let current = SyncFolders.modificationDate(target), let own = existing else { continue }
+                    report.cardsCompared += 1
                     let here = Self.facts(of: own)
                     if let transcript = here.transcript, transcript != card.facts.transcript {
                         // Already a fork of the incoming conversation: never point the session back.
@@ -270,7 +296,15 @@ public struct SessionSync: Sendable {
                         data = native ? own : shared(own)
                         modified = current
                     }
-                    guard own != data else { continue }
+                    guard own != data else {
+                        // Remembered for the usual copy only: the same conversation, and no scratch folder to link.
+                        if !dryRun, let mine, here.transcript == card.facts.transcript, !here.scratch, !card.facts.scratch,
+                            SHA256.hash(data: own) == mine.digest
+                        {
+                            mine.match(comparison)
+                        }
+                        continue
+                    }
                     if !dryRun {
                         if try backup.save(target) { report.backedUp += 1 }
                         // Claude may have just updated this copy; never replace a newer card with an older one.
@@ -292,6 +326,7 @@ public struct SessionSync: Sendable {
                 }
                 for name in present where deletedNames.contains(name) && permitted(name, in: scope) {
                     let target = pair.appending(path: name)
+                    keepBytes(of: name, at: target)
                     if !dryRun {
                         if try backup.save(target, everyTime: true) { report.backedUp += 1 }
                         try fm.removeItem(at: target)
@@ -372,11 +407,14 @@ public struct SessionSync: Sendable {
     /// The newest copy of a card found so far, and what it says.
     struct Card {
         var modified: Date
-        var data: Data
+        /// Of the bytes the scan found.
+        var digest: SHA256.Digest
         var facts: CardFacts
         /// The account of the folder this copy was found in.
         var account: String
         var created: Date
+        /// The file this copy was found in.
+        var url: URL
 
         /// Newer than `other`. A fork of the other's conversation is newer whatever the dates say, so a window
         /// still holding the card from before the fork can't point the session back. Of copies that are the same
@@ -386,7 +424,7 @@ public struct SessionSync: Sendable {
                 if facts.priors.contains(theirs) { return true }
                 if other.facts.priors.contains(mine) { return false }
             }
-            if data == other.data { return created < other.created }
+            if digest == other.digest { return created < other.created }
             return modified > other.modified
         }
     }
@@ -509,19 +547,50 @@ public struct SessionSync: Sendable {
         var folders: [String] = []
         /// The conversations Claude forked this session from (`priorCliSessionIds`).
         var priors: Set<String> = []
+        /// `cwd` or `originCwd` is a "No folder" scratch workspace, which each window's copy names in its own data
+        /// directory.
+        var scratch = false
     }
 
     static func facts(of data: Data) -> CardFacts {
         guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return CardFacts() }
-        let folders = ["cwd", "originCwd"].compactMap { card[$0] as? String }
-            .filter { !$0.isEmpty && !$0.contains(scratchFolder) }
+        let paths = ["cwd", "originCwd"].compactMap { card[$0] as? String }
+        let folders = paths.filter { !$0.isEmpty && !$0.contains(scratchFolder) }
         return CardFacts(
             valid: true,
             accountBound: isAccountBoundCard(card),
             transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
             imported: card["adoptedFromOtherSurface"] as? Bool == true,
             folders: Array(Set(folders)).sorted(),
-            priors: Set((card["priorCliSessionIds"] as? [String] ?? []).map { $0.lowercased() }))
+            priors: Set((card["priorCliSessionIds"] as? [String] ?? []).map { $0.lowercased() }),
+            scratch: paths.contains { $0.contains(scratchFolder) })
+    }
+
+    /// What a run keeps of a card between runs, while its file stays the same: what it says and a digest of its
+    /// bytes, not the bytes. A copy found to match its card is remembered here, so an idle run compares nothing.
+    final class CardRead: @unchecked Sendable {
+        let facts: CardFacts
+        let digest: SHA256.Digest
+        let modified: Date?
+        let created: Date
+        private let lock = NSLock()
+        private var matched: String?
+
+        init(_ data: Data, of url: URL) {
+            facts = SessionSync.facts(of: data)
+            digest = SHA256.hash(data: data)
+            modified = SyncFolders.modificationDate(url)
+            created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantFuture
+        }
+
+        /// Roughly what keeping it takes, in bytes.
+        var cost: Int {
+            256 + (facts.transcript?.utf8.count ?? 0) + facts.folders.reduce(0) { $0 + $1.utf8.count + 16 } + facts.priors.count * 64
+        }
+
+        /// Whether this copy was found to match a card as `comparison` describes it.
+        func matches(_ comparison: String) -> Bool { lock.withLock { matched == comparison } }
+        func match(_ comparison: String) { lock.withLock { matched = comparison } }
     }
 
     /// `local_<uuid>.json` names the transcript it was imported from; any other name gives `nil`.
@@ -634,8 +703,8 @@ public struct SessionSync: Sendable {
                     let orgPath = root + account + "/" + org
                     for name in (try? fm.contentsOfDirectory(atPath: orgPath)) ?? [] {
                         let link = orgPath + "/" + name
-                        guard (try? fm.attributesOfItem(atPath: link)[.type] as? FileAttributeType) == .typeSymbolicLink,
-                            let folder = try? fm.destinationOfSymbolicLink(atPath: link), folder.hasPrefix("/"),
+                        // Only a link has a destination.
+                        guard let folder = try? fm.destinationOfSymbolicLink(atPath: link), folder.hasPrefix("/"),
                             folder.hasSuffix(Self.scratchFolder + account + "/" + org + "/" + name),
                             !fm.fileExists(atPath: folder)
                         else { continue }
@@ -866,7 +935,12 @@ enum JSONMembers {
             while true {
                 guard i < json.count, json[i] == UInt8(ascii: "\""), case let keyStart = i, skipString() else { return nil }
                 let key = json[keyStart..<i]
-                guard let name = (try? JSONSerialization.jsonObject(with: Data(key), options: .fragmentsAllowed)) as? String else { return nil }
+                // A key without escapes is its own bytes; one with them is decoded as JSON.
+                let plain = key.dropFirst().dropLast()
+                let decoded =
+                    plain.contains(UInt8(ascii: "\\"))
+                    ? (try? JSONSerialization.jsonObject(with: Data(key), options: .fragmentsAllowed)) as? String : String(bytes: plain, encoding: .utf8)
+                guard let name = decoded else { return nil }
                 skipSpace()
                 guard i < json.count, json[i] == UInt8(ascii: ":") else { return nil }
                 i += 1
