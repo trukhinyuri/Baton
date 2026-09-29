@@ -42,15 +42,18 @@ public struct FeedbackReport: Sendable {
         public var home: String
         public var user: String
         public var profiles: [[String]]
+        /// Folder rules' folders and the missing working folders, hidden by name (see `Redactor`).
+        public var folders: [String]
 
         public init(
             build: BuildInfo, macOS: String, architecture: String, claudeVersion: String?, windows: [Window],
             diagnostics: [Diagnostics.Entry], lastSync: SyncReport?, lastSyncDate: Date?, errors: [String],
-            log: [String], home: String, user: String, profiles: [[String]]
+            log: [String], home: String, user: String, profiles: [[String]], folders: [String] = []
         ) {
             self.build = build; self.macOS = macOS; self.architecture = architecture; self.claudeVersion = claudeVersion
             self.windows = windows; self.diagnostics = diagnostics; self.lastSync = lastSync; self.lastSyncDate = lastSyncDate
             self.errors = errors; self.log = log; self.home = home; self.user = user; self.profiles = profiles
+            self.folders = folders
         }
 
         /// Reads only what the app already shows: window states, the sessions check and version numbers.
@@ -79,7 +82,8 @@ public struct FeedbackReport: Sendable {
                 architecture: FeedbackReport.architecture, claudeVersion: FeedbackReport.shortVersion(of: paths.claudeApp),
                 windows: windows, diagnostics: diagnostics, lastSync: lastSync, lastSyncDate: lastSyncDate,
                 errors: errors, log: log, home: paths.home.path, user: user,
-                profiles: profiles.map { [$0.label, $0.id] })
+                profiles: profiles.map { [$0.label, $0.id] },
+                folders: ((try? FolderRules(paths: paths).load()) ?? []).map(\.folder) + diagnostics.flatMap(\.missingFolders))
         }
     }
 
@@ -89,7 +93,7 @@ public struct FeedbackReport: Sendable {
     public let summary: String
 
     public init(facts: Facts, salt: [UInt8]? = nil) {
-        var redactor = Redactor(home: facts.home, user: facts.user, profiles: facts.profiles, salt: salt)
+        var redactor = Redactor(home: facts.home, user: facts.user, profiles: facts.profiles, folders: facts.folders, salt: salt)
         func r(_ text: String) -> String { redactor.redact(text) }
         let names = Dictionary(facts.windows.map { ($0.id, $0.isMain ? "MAIN" : r($0.label)) }, uniquingKeysWith: { a, _ in a })
 

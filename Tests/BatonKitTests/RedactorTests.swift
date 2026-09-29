@@ -197,6 +197,28 @@ struct RedactorTests {
     @Test func quotedTitlesAreDropped() {
         var r = redactor()
         #expect(r.redact("continue: “Acquire Initech quietly” to WORK") == "continue: “<quoted>” to WORK")
+        #expect(
+            r.redact("“Draft “Project Falcon” memo for Acme” may still be written to in its window.")
+                == "“<quoted>” may still be written to in its window.", "a title with a closing quote of its own")
+        #expect(r.redact("“Buy the 5” screen” may still be written to.") == "“<quoted>” may still be written to.")
+    }
+
+    /// A folder rule's folder with a space in its last name, in an error nothing put in quotes: hidden whole, since
+    /// the report knows the rule.
+    @Test func knownFoldersAreHiddenWhole() throws {
+        let box = try LeakFixture()
+        defer { try? FileManager.default.removeItem(at: box.root) }
+        let folder = box.paths.home.appending(path: "Clients/Acme Merger").path
+        try FolderRules(paths: box.paths).set(folder, accounts: [LeakFixture.emails[0]])
+        let refused = ProfileError.notAllowed(folders: [folder], accounts: [LeakFixture.emails[0]], label: "LAB", email: LeakFixture.emails[1])
+        let missing = "/Volumes/Client Backups/Acme Merger 2026"
+        let facts = FeedbackReport.Facts.collect(paths: box.paths, user: box.user, errors: [refused.localizedDescription], log: [])
+        let report = FeedbackReport(facts: facts).markdown
+        #expect(!report.contains("Merger") && !report.contains("Acme"), "\(report)")
+        #expect(report.contains("Work in <folder> continues only in <email-"))
+
+        var r = Redactor(home: box.home, user: box.user, folders: [folder, missing])
+        #expect(r.redact("Missing: \(missing). Work in ~/Clients/Acme Merger/src/app continues") == "Missing: <folder>. Work in <folder> continues")
     }
 
     @Test func profileLabelsAndUsernameAreReplaced() {

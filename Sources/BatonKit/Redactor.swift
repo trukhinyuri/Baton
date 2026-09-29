@@ -3,21 +3,26 @@ import Foundation
 
 /// Takes out of a problem report whatever identifies the user or their work, before anyone sees it:
 /// the home folder becomes `~`, the macOS username `<user>`, emails `<email-1>`, `<email-2>` in first-seen order,
-/// UUIDs a short `<id-…>` hash salted per report, profile labels and ids `<profile-1>`, folders outside
-/// well-known system locations `<folder>`, anything shaped like a token or key `<token>`, and whatever the app put in
-/// curly quotes (session titles, task and file names) `“<quoted>”`.
+/// UUIDs a short `<id-…>` hash salted per report, profile labels and ids `<profile-1>`, the folders Baton knows (rule
+/// and working folders) and any other folder outside well-known system locations `<folder>`, anything shaped like a
+/// token or key `<token>`, and whatever the app put in curly quotes (session titles, task and file names) `“<quoted>”`.
 /// Works on Unicode text and is idempotent: redacting its own output changes nothing.
 public struct Redactor: Sendable {
     private let home: [String]
     private let user: String
     private let profiles: [[String]]
+    /// Folders known by name, longest first, each as given and under `~`.
+    private let folders: [String]
     /// Random per report and kept only in memory, so the same UUID gets the same tag within one report
     /// and a different one in the next.
     private let salt: [UInt8]
     private var emails: [String: Int] = [:]
 
-    /// - Parameter profiles: each profile's names (label and id), in the order they are numbered.
-    public init(home: String, user: String, profiles: [[String]] = [], salt: [UInt8]? = nil) {
+    /// - Parameters:
+    ///   - profiles: each profile's names (label and id), in the order they are numbered.
+    ///   - folders: folders Baton knows by name, such as folder rules' and working folders. They are hidden whole even
+    ///     where nothing marks their end, as a last folder name with a space in it that the sentence goes on after.
+    public init(home: String, user: String, profiles: [[String]] = [], folders: [String] = [], salt: [UInt8]? = nil) {
         let home = home.precomposedStringWithCanonicalMapping.trimmingSuffix("/")
         // Temporary and some system folders show up both with and without /private.
         var variants = [home]
@@ -27,6 +32,11 @@ public struct Redactor: Sendable {
             variants.append("/private" + home)
         }
         self.home = variants.filter { $0.count > 1 }.sorted { $0.count > $1.count }
+        let homes = self.home
+        let named = folders.map { $0.precomposedStringWithCanonicalMapping.trimmingSuffix("/") }.flatMap { folder in
+            [folder] + homes.filter { folder.hasPrefix($0 + "/") }.map { "~" + folder.dropFirst($0.count) }
+        }
+        self.folders = Set(named.filter { $0.count > 2 && !homes.contains($0) }).sorted { $0.count > $1.count }
         self.user = user.precomposedStringWithCanonicalMapping
         self.profiles = profiles.map { $0.map(\.precomposedStringWithCanonicalMapping).filter { !$0.isEmpty } }
         self.salt = salt ?? (0..<16).map { _ in UInt8.random(in: .min ... .max) }
@@ -34,8 +44,13 @@ public struct Redactor: Sendable {
 
     public mutating func redact(_ text: String) -> String {
         var text = text.precomposedStringWithCanonicalMapping
-        // The app quotes session titles, task names and file names in curly quotes; none of them leave the Mac.
-        text = Self.replace(#"“[^”\n]*”"#, in: text) { _ in "“<quoted>”" }
+        for folder in folders {
+            let end = #"(?=$|/|[^\p{L}\p{N}._-]|\.(?![\p{L}\p{N}_-]))"#
+            text = Self.replace(NSRegularExpression.escapedPattern(for: folder) + end + "(?:\(Self.within))?", in: text) { _ in "<folder>" }
+        }
+        // The app quotes session titles, task names and file names in curly quotes; none of them leave the Mac. A
+        // title can hold a closing quote itself, so the quote runs to the last one on its line.
+        text = Self.replace(#"“[^\n]*”"#, in: text) { _ in "“<quoted>”" }
         for home in home {
             text = Self.replace(NSRegularExpression.escapedPattern(for: home) + #"(?=/|$|[^\p{L}\p{N}._-])"#, in: text) { _ in "~" }
         }
@@ -82,8 +97,11 @@ public struct Redactor: Sendable {
     ]
     /// An absolute or `~` path starting a word; it runs to the next quote or bracket, and past a space while the next
     /// word goes on with a `/`, as in `/Volumes/Backup Disk/Clients`. A last folder name with a space in it can't be
-    /// told from the sentence, so `fail` in the CLI puts the paths it was given in curly quotes (`Log.quoting`).
-    static let path = #"(?<=^|[\s"“”'‘’(\[])~?/[^\s"“”'‘’()\[\],;:]*(?: [^\s"“”'‘’()\[\],;:/~][^\s"“”'‘’()\[\],;:/]*/[^\s"“”'‘’()\[\],;:]*)*"#
+    /// told from the sentence, so `fail` in the CLI puts the paths it was given in curly quotes (`Log.quoting`), and
+    /// the folders Baton knows by name are hidden whole before this runs.
+    static let path = #"(?<=^|[\s"“”'‘’(\[])~?"# + within
+    /// A path from its first `/` on, past a space while the next word goes on with a `/`.
+    static let within = #"/[^\s"“”'‘’()\[\],;:]*(?: [^\s"“”'‘’()\[\],;:/~][^\s"“”'‘’()\[\],;:/]*/[^\s"“”'‘’()\[\],;:]*)*"#
     /// Locations that name no one's work. Anything else, such as `~/src/…` or `/Volumes/…`, becomes `<folder>`.
     /// `~/.claude` and temporary folders are not among them: Claude Code names its folders there after the project's path.
     static let safePaths = [
