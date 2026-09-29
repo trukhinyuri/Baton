@@ -1,0 +1,117 @@
+import Foundation
+import Testing
+
+@testable import BatonKit
+
+/// Running copies that a test starts and quits by hand.
+final class FakeCopies: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [RunningClaude] = []
+    private var asked: [pid_t] = []
+
+    var running: [RunningClaude] { lock.withLock { stored } }
+    var quitRequests: [pid_t] { lock.withLock { asked } }
+    func set(_ copies: [RunningClaude]) { lock.withLock { stored = copies } }
+    func askToQuit(_ copy: RunningClaude, andQuit: Bool) {
+        lock.withLock {
+            asked.append(copy.pid ?? 0)
+            if andQuit { stored.removeAll { $0.pid == copy.pid } }
+        }
+    }
+}
+
+@Suite("Window activity")
+struct WindowActivityTests {
+    static let session = "11111111-2222-3333-4444-555555555555"
+    static let other = "99999999-2222-3333-4444-555555555555"
+
+    /// A manager whose WORK window runs as process 100 when `open`, with the given Claude Code processes and each
+    /// process's parent.
+    func manager(
+        _ box: Sandbox, copies: FakeCopies, open: Bool = true, processes: [LimitTracker.LiveProcess] = [], tree: [pid_t: pid_t] = [:],
+        unregistered: Set<String> = []
+    ) throws -> ProfileManager {
+        let manager = try box.closedWorkWindow(FakeWindows())
+        copies.set(open ? [workCopy(box)] : [])
+        manager.runningCopies = { copies.running }
+        manager.limitTracker.liveProcesses = { _ in processes }
+        // The Claude Code processes are the given ones; the rest of the tree is their helpers.
+        manager.processTree = { ProcessTree(claudes: processes.map(\.pid), parent: { tree[$0] }) }
+        manager.liveSessionIDs = { Set(processes.map(\.session)).union(unregistered) }
+        return manager
+    }
+
+    func workCopy(_ box: Sandbox) -> RunningClaude {
+        let engine = box.paths.engine(for: "work")
+        return RunningClaude(
+            bundlePath: engine.standardizedFileURL.path,
+            arguments: [engine.appending(path: "Contents/MacOS/Claude").path, "--user-data-dir=\(box.work.path)"], pid: 100)
+    }
+
+    func process(_ pid: pid_t, _ session: String, executable: String) -> LimitTracker.LiveProcess {
+        LimitTracker.LiveProcess(pid: pid, session: session, startedAt: Date(), version: "2.1.0", cwd: "/repo", hostSessionID: nil, executable: executable)
+    }
+
+    func inData(_ dir: URL) -> String { dir.appending(path: "claude-code/2.1.0/claude.app/Contents/MacOS/claude").path }
+
+    @Test func closedWhenNoProcess() throws {
+        let box = try Sandbox()
+        let manager = try manager(box, copies: FakeCopies(), open: false)
+        #expect(manager.activity(of: "work") == .closed)
+        #expect(manager.liveSessions(in: "work").isEmpty)
+    }
+
+    @Test func liveProcessByExecutableMakesWindowBusy() throws {
+        let box = try Sandbox()
+        let manager = try manager(
+            box, copies: FakeCopies(),
+            processes: [process(200, Self.session, executable: inData(box.work)), process(201, Self.other, executable: inData(box.main))])
+        #expect(manager.activity(of: "work") == .busy(live: 1))
+        #expect(manager.liveSessions(in: "work") == [Self.session], "main's process isn't this window's")
+    }
+
+    @Test func liveProcessByTreeMakesWindowBusy() throws {
+        let box = try Sandbox()
+        let manager = try manager(
+            box, copies: FakeCopies(), processes: [process(300, Self.session, executable: "/usr/local/bin/claude")],
+            tree: [300: 250, 250: 100, 400: 1])
+        #expect(manager.activity(of: "work") == .busy(live: 1), "started by the window through a helper")
+        #expect(manager.liveSessions(in: "work") == [Self.session])
+    }
+
+    @Test func runningWithoutLiveProcessIsIdle() throws {
+        let box = try Sandbox()
+        let manager = try manager(
+            box, copies: FakeCopies(), processes: [process(201, Self.other, executable: inData(box.main))], tree: [201: 1])
+        #expect(manager.activity(of: "work") == .idle)
+        #expect(manager.liveSessions(in: "work").isEmpty)
+        #expect(!manager.activity(of: "work").isBusy)
+    }
+
+    @Test func unattributedLiveSessionCountsInSource() throws {
+        let box = try Sandbox()
+        let copies = FakeCopies()
+        let manager = try manager(
+            box, copies: copies, processes: [process(201, Self.other, executable: inData(box.main))], unregistered: [Self.session])
+        #expect(manager.liveSessions(in: "work") == [Self.session], "live somewhere Baton can't tell: counted where it could be")
+        copies.set([])
+        #expect(manager.liveSessions(in: "work").isEmpty, "not in a closed window")
+    }
+
+    @Test func quitWindowNeverForces() async throws {
+        let box = try Sandbox()
+        let copies = FakeCopies()
+        let manager = try manager(box, copies: copies)
+        manager.quitRequester = { copies.askToQuit($0, andQuit: false) }
+
+        #expect(await manager.quitWindow("work", seconds: 0.4) == false, "a window that stays is left running")
+        #expect(copies.quitRequests == [100], "asked once, never forced")
+        #expect(copies.running.count == 1)
+
+        manager.quitRequester = { copies.askToQuit($0, andQuit: true) }
+        #expect(await manager.quitWindow("work", seconds: 0.4))
+        #expect(manager.activity(of: "work") == .closed)
+        #expect(await manager.quitWindow("work", seconds: 0.4), "nothing to quit")
+        #expect(copies.quitRequests == [100, 100])
+    }
+}

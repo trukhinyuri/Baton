@@ -481,6 +481,12 @@ public final class ProfileManager: @unchecked Sendable {
     var whilePreparing: (@Sendable (String) -> Void)?
     /// Whether a running copy shows its main window yet; tests replace it, since their copies have no process.
     var windowShown: (@Sendable (RunningClaude) -> Bool)?
+    /// The running Claude Code processes and their parents, for `WindowActivity`; tests replace it.
+    var processTree: (@Sendable () -> ProcessTree)?
+    /// Every session a running Claude Code process has open (`LiveSessions.ids`); tests replace it.
+    var liveSessionIDs: (@Sendable () -> Set<String>)?
+    /// Asks one running copy to quit, as `terminate()` does; tests replace it, since their copies have no process.
+    var quitRequester: (@Sendable (RunningClaude) -> Void)?
     /// Whether an app is Claude as Anthropic signs it (`ClaudeSource.isSignedByAnthropic`); tests replace it, since a
     /// sandbox's Claude.app isn't signed.
     var signatureCheck: (@Sendable (URL) -> Bool)?

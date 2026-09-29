@@ -10,16 +10,20 @@ struct RunningClaude {
     var bundlePath: String?
     /// `nil` if they couldn't be read.
     var arguments: [String]?
+    /// The process, if known; tests give one without an app.
+    var pid: pid_t?
 
     init(app: NSRunningApplication) {
         self.app = app
         bundlePath = app.bundleURL?.standardizedFileURL.path
         arguments = ProcessArguments.of(app.processIdentifier)
+        pid = app.processIdentifier
     }
 
-    init(bundlePath: String?, arguments: [String]?) {
+    init(bundlePath: String?, arguments: [String]?, pid: pid_t? = nil) {
         self.bundlePath = bundlePath
         self.arguments = arguments
+        self.pid = pid
     }
 
     /// Whether this copy shows the data in `dataDir`, which `bundle` uses when it is started the usual way.

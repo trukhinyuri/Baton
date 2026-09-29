@@ -110,15 +110,7 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
 
     /// Claude Code processes that descend from one of `windowPIDs`, walking up through helpers.
     static func liveSessionCount(windowPIDs: Set<pid_t>, claudePIDs: [pid_t], parent: (pid_t) -> pid_t?) -> Int {
-        guard !windowPIDs.isEmpty else { return 0 }
-        return claudePIDs.filter { pid in
-            var current = pid, seen = Set<pid_t>()
-            while let up = parent(current), up > 1, seen.insert(up).inserted {
-                if windowPIDs.contains(up) { return true }
-                current = up
-            }
-            return false
-        }.count
+        claudePIDs.filter { ProcessTree.descends($0, from: windowPIDs, parent: parent) }.count
     }
 
     static func claudeProcesses() -> [pid_t] {
