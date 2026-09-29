@@ -254,7 +254,8 @@ public struct AutoResume: Sendable {
     ) throws {
         var expected = try JSONPatch(original).dictionary()
         expected = Self.setting(value, at: ["preferences", "epitaxyPrefs", Self.bucketKey(account), entry, "optedIn"], in: expected)
-        _ = try Backup(paths: paths, now: Date()).save(url, everyTime: true)
+        // A linked config is written where it leads, so that file's content is what is backed up, not the link.
+        _ = try Backup(paths: paths, now: Date()).save(LocalOnly.writeTarget(url), everyTime: true)
         guard !running(window) else { throw Failure.windowOpen(label(window)) }
         try LocalOnly.replace(url, with: Data(patch.bytes))
         guard let written = try? JSONPatch(Data(contentsOf: url)), let dictionary = try? written.dictionary(),

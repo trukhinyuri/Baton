@@ -482,6 +482,29 @@ struct AutoResumeTests {
         #expect(autoResume.changes().isEmpty)
     }
 
+    /// A config linked into place from a dotfiles folder is changed where it leads, and the backup holds the content
+    /// from before the change, not another link to the changed file.
+    @Test func aLinkedConfigIsBackedUpAsItsContent() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let dotfiles = box.root.appending(path: "dotfiles/claude_desktop_config.json")
+        try fm.createDirectory(at: dotfiles.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = Self.config(Self.armed)
+        try box.write(original, to: dotfiles)
+        try fm.createSymbolicLink(at: box.desktopConfig(box.work), withDestinationURL: dotfiles)
+        let entry = try #require(AutoResume.entries(in: box.work, account: Self.account)?.first)
+
+        #expect(try AutoResume(paths: box.paths, isRunning: { _ in false }).turnOff(entry, window: "work", account: Self.account))
+
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.work).path) == dotfiles.path, "still a link")
+        #expect(box.read(dotfiles)?.contains(#""attempt": 0, "optedIn": false"#) == true, "the linked file got the change")
+        let backups = try #require(fm.enumerator(at: box.paths.backupsDir, includingPropertiesForKeys: nil)?.allObjects as? [URL])
+        let saved = backups.filter { $0.lastPathComponent.hasSuffix(dotfiles.lastPathComponent) }
+        #expect(saved.count == 1)
+        #expect(saved.allSatisfy { (try? fm.destinationOfSymbolicLink(atPath: $0.path)) == nil }, "a copy, not a link")
+        #expect(saved.first.flatMap(box.read) == original, "the content before the change")
+    }
+
     @Test func leavesAnOpenWindowsFileAlone() throws {
         let box = try Sandbox()
         let url = box.desktopConfig(box.work)
