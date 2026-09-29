@@ -10,7 +10,7 @@ let usage = """
     baton — several Claude Desktop accounts on one Mac, and a clean handover between your own windows.
 
     USAGE
-      baton list                          Show every profile, its account and plan usage
+      baton list [--json]                 Show every profile, its account and plan usage
       baton add <email> [--label TEXT] [--color #RRGGBB]
                                           Create a profile and open it to sign in
       baton open <profile>                Open a profile's window (id or label)
@@ -28,7 +28,9 @@ let usage = """
                                           Optional, off by default: also deny the one MCP tool that
                                           moves a Claude Code session to the cloud, Mac-wide, in
                                           ~/.claude/settings.json
-      baton conversations [--all]         Recent local Code sessions and Cowork tasks
+      baton conversations [--all] [--json]
+                                          Recent local Code sessions and Cowork tasks: the 20 most
+                                          recent, or with --all every one
       baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                           Continue a conversation in another profile: a Code session
                                           as itself or as a copy, or a new Cowork task with its history
@@ -45,7 +47,7 @@ let usage = """
                                           continues it by itself, nothing happens (exit 3) unless --now
       baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                           Same as `continue`
-      baton rules                         Show which accounts may continue the work in which folders
+      baton rules [--json]                Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
                                           Let only these accounts continue work in the folder and
                                           inside it, or drop the folder's rule
@@ -55,16 +57,28 @@ let usage = """
                                           --open opens a prefilled GitHub issue to review and submit.
                                           Nothing is sent
       baton --version                     Print the version and commit
+      baton <command> --help              Print this help
+
+    list, doctor, report, conversations, rules and local-only status never change Claude, its data or
+    which Claude receives claude:// links.
+
+    Exit status: 0 done; 1 failed, and the printed line says why; 2 a command or option baton doesn't
+    take, and nothing was changed; 3 nothing was done on purpose (continue, migrate), and the printed
+    line says why.
     """
 
-func fail(_ message: String) -> Never {
-    // The log keeps the folders it was given in curly quotes, so a report hides them whole, spaces and all.
+/// Logs an error with the folders it was given in curly quotes, so a report hides them whole, spaces and all.
+func logError(_ message: String) {
     let given = CommandLine.arguments.dropFirst().filter { $0.contains("/") || $0.hasPrefix("~") || $0 == "." || $0 == ".." }
     let paths = given.flatMap { argument -> [String] in
         let full = URL(fileURLWithPath: (argument as NSString).expandingTildeInPath).standardizedFileURL.path
         return [argument, full, (full as NSString).abbreviatingWithTildeInPath]
     }
     Log.error("cli", Log.quoting(paths: paths, in: message))
+}
+
+func fail(_ message: String) -> Never {
+    logError(message)
     FileHandle.standardError.write(Data("error: \(message)\n".utf8))
     exit(1)
 }
@@ -79,7 +93,18 @@ let home = FileManager.default.homeDirectoryForCurrentUser
 // Launchers call this path, so it is the real file, not whatever name the shell found it by.
 let cli = RunningExecutable.url() ?? URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
 
-switch CLIDispatch.stage(for: args) {
+/// A command or option `baton` doesn't take: says so with that command's lines of the help, and exits with 2.
+func usageError(_ message: String) -> Never {
+    logError(message)
+    FileHandle.standardError.write(Data("error: \(message)\n\n\(CLIArguments.usage(for: args, in: usage))\n".utf8))
+    exit(CLIArguments.usageExitCode)
+}
+
+let stage = CLIDispatch.stage(for: args)
+// A mistyped option stops here, before anything is read or changed, rather than being ignored.
+if stage != .early, let problem = CLIArguments.problem(in: args) { usageError(problem) }
+
+switch stage {
 case .early:
     // Answered before anything reads or changes the profiles.
     let answer = CLIDispatch.runEarly(args, usage: usage)
@@ -108,8 +133,10 @@ case .manager(let sharedLock):
 let manager = ProfileManager(cliPath: cli)
 
 // Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a Claude Desktop version
-// outside the tested range. Informational only: it never blocks the command that follows.
-for warning in manager.startUpChecks() { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
+// outside the tested range. Informational only: it never blocks the command that follows. A command that only reads
+// leaves Launch Services as it is, so `baton doctor` never changes what it looks into.
+let startUpNotes = CLIDispatch.isReadOnly(args) ? [manager.claudeVersionWarning].compactMap { $0 } : manager.startUpChecks()
+for warning in startUpNotes { FileHandle.standardError.write(Data("note: \(warning)\n".utf8)) }
 
 func resolve(_ name: String) -> Profile {
     guard let profile = manager.profiles.first(where: { $0.id == name.lowercased() || $0.label.caseInsensitiveCompare(name) == .orderedSame })
@@ -169,7 +196,7 @@ func duration(_ text: String) -> TimeInterval? {
 }
 
 func continueMode() -> ContinueMode {
-    if args.contains("--same") && args.contains("--fork") { fail("use either --same or --fork") }
+    if args.contains("--same") && args.contains("--fork") { usageError("use either --same or --fork") }
     if args.contains("--fork") { return .fork }
     return args.contains("--same") ? .same : .auto
 }
@@ -223,14 +250,20 @@ func reportUnopened(_ plans: [ContinuePlan], in destination: String) {
 do {
     switch args.first {
     case "list", nil:
+        let statuses = manager.statuses()
+        if args.contains("--json") {
+            if let problem = manager.registryError { FileHandle.standardError.write(Data("note: \(problem)\n".utf8)) }
+            print(try CLIOutput.json(CLIOutput.windows(statuses)))
+            break
+        }
         if let problem = manager.registryError { print("⚠︎ \(problem)") }
-        for s in manager.statuses() {
-            let name = "Claude \(s.displayLabel)"
-            let who = s.email ?? (s.isSignedIn ? "signed in" : "not signed in")
-            let state = s.isRunning ? "open" : "closed"
-            print(
-                "\(name.padding(toLength: 18, withPad: " ", startingAt: 0)) \(state.padding(toLength: 7, withPad: " ", startingAt: 0)) \(who.padding(toLength: 32, withPad: " ", startingAt: 0)) \(describe(s))"
-            )
+        // Each column as wide as its widest value, so a long email is never cut.
+        let rows = CLIOutput.table(
+            statuses.map { s in
+                ["Claude \(s.displayLabel)", s.isRunning ? "open" : "closed", s.email ?? (s.isSignedIn ? "signed in" : "not signed in"), describe(s)]
+            })
+        for (s, row) in zip(statuses, rows) {
+            print(row)
             if s.isUnexpectedAccount, let expected = s.profile?.email { print("  ⚠︎ expected \(expected)") }
             if s.isSignedIn, s.limits.isAtLimit() {
                 print("  ⚠︎ \(LimitText.atLimit(s.limits))." + (LimitText.checkHint(s).map { " " + $0 } ?? ""))
@@ -275,7 +308,7 @@ do {
         if carried > 0 { print("\(carried) files carried into \(r.carried.count) sessions Claude Desktop continued as a copy") }
         if dryRun { print("Nothing was changed.") }
     case "local-only":
-        guard args.count >= 2 else { fail("local-only needs on, off, status or cloud-lock") }
+        guard args.count >= 2 else { usageError("local-only needs on, off, status or cloud-lock") }
         switch args[1] {
         case "on", "off":
             let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
@@ -284,7 +317,8 @@ do {
                 print("\(manager.label(of: id)): \(describe(status))")
             }
         case "status":
-            let rows = manager.localOnlyStatus()
+            let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
+            let rows = manager.localOnlyStatus().filter { window == nil || $0.window == window }
             if args.contains("--json") {
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 let payload = rows.map { ["window": $0.window, "label": $0.label, "status": $0.status.rawValue] }
@@ -293,14 +327,14 @@ do {
                 for row in rows { print("\(row.label): \(describe(row.status))") }
             }
         case "cloud-lock":
-            guard args.count >= 3 else { fail("local-only cloud-lock needs on, off or status") }
+            guard args.count >= 3 else { usageError("local-only cloud-lock needs on, off or status") }
             switch args[2] {
             case "on", "off": print(describe(try manager.setCloudMoveLock(args[2] == "on")))
             case "status": print(describe(manager.cloudMoveLock.status()))
-            default: fail("local-only cloud-lock needs on, off or status")
+            default: usageError("local-only cloud-lock needs on, off or status")
             }
         default:
-            fail("local-only needs on, off, status or cloud-lock")
+            usageError("local-only needs on, off, status or cloud-lock")
         }
     case "doctor":
         let entries = try Diagnostics.inspect(paths: manager.paths)
@@ -315,6 +349,7 @@ do {
                 "Claude Desktop: \(manager.paths.claudeApp.path), version \(installed) (tested \(ClaudeVersion.testedText))"
             )
             if let warning = manager.claudeVersionWarning { print("  \(warning)") }
+            for note in ClaudeSource.notes(paths: manager.paths) { print("  \(note)") }
             switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
             case nil: print("Local only: Claude.app unreadable, can't check its settings")
             case []: print("Local only keys present: ccRemoteControlDefaultEnabled, remoteControlStayReachable")
@@ -341,21 +376,27 @@ do {
         }
     case "conversations":
         let all = manager.conversations()
-        for c in args.contains("--all") ? all : Array(all.prefix(20)) {
+        let shown = args.contains("--all") ? all : Array(all.prefix(20))
+        if args.contains("--json") {
+            print(try CLIOutput.json(CLIOutput.conversations(shown)))
+            break
+        }
+        for c in shown {
             let folder = c.folders.first.map { " · " + $0 } ?? ""
             print("\(c.sessionID.prefix(8))  \(age(c.lastActivity).padding(toLength: 8, withPad: " ", startingAt: 0)) \(c.title) — \(kindName(c))\(folder)")
         }
+        if let more = CLIOutput.moreConversations(shown: shown.count, of: all.count) { print(more) }
         if all.isEmpty { print("Nothing to hand off yet. No local conversations found.") }
     case "continue" where args.count >= 2 && args[1] == "--folder":
         guard let folder = value(of: "--folder", in: args), let to = value(of: "--to", in: args) else {
-            fail("continue --folder needs a folder and --to PROFILE")
+            usageError("continue --folder needs a folder and --to PROFILE")
         }
         let path = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path
         let destination = destinationID(to)
-        guard let since = duration(value(of: "--since", in: args) ?? "24h") else { fail("--since takes a duration such as 24h, 90m or 2d") }
+        guard let since = duration(value(of: "--since", in: args) ?? "24h") else { usageError("--since takes a duration such as 24h, 90m or 2d") }
         let mode = continueMode()
         guard let limit = Int(value(of: "--max", in: args) ?? String(ConversationIndex.continueAllLimit)), limit > 0 else {
-            fail("--max takes a positive number, such as 6")
+            usageError("--max takes a positive number, such as 6")
         }
         let selection = ConversationIndex.continueAllBatch(
             in: path, since: Date().addingTimeInterval(-since),
@@ -394,7 +435,7 @@ do {
         let opened = plans.isEmpty ? "Started a new session in Claude \(label) in \(path)" : "Opened \(plans.count) in Claude \(label)\(started)"
         print("\(opened)\(confirmed). Nothing was sent.\(leftOutNote)")
     case "continue":
-        guard args.count >= 2, let to = value(of: "--to", in: args) else { fail("continue needs a session (or “last”) and --to PROFILE") }
+        guard args.count >= 2, let to = value(of: "--to", in: args) else { usageError("continue needs a session (or “last”) and --to PROFILE") }
         let all = manager.conversations()
         let key = args[1].lowercased()
         let matches = key == "last" ? Array(all.prefix(1)) : all.filter { $0.sessionID.hasPrefix(key) }
@@ -446,10 +487,14 @@ do {
         do { rules = try FolderRules(paths: manager.paths).load() } catch {
             fail(ProfileError.rulesUnreadable(error.localizedDescription).localizedDescription)
         }
+        if args.contains("--json") {
+            print(try CLIOutput.json(rules))
+            break
+        }
         if rules.isEmpty { print("No folder rules: work in any folder can continue in any subscription.") }
         for rule in rules { print("\((rule.folder as NSString).abbreviatingWithTildeInPath) → only \(rule.accounts.joined(separator: ", "))") }
     case "rule":
-        guard args.count >= 3, !args[1].hasPrefix("--") else { fail("rule needs a folder and --only EMAIL[,EMAIL] or --remove") }
+        guard args.count >= 3, !args[1].hasPrefix("--") else { usageError("rule needs a folder and --only EMAIL[,EMAIL] or --remove") }
         let folder = URL(fileURLWithPath: (args[1] as NSString).expandingTildeInPath).standardizedFileURL.path
         let rules = FolderRules(paths: manager.paths)
         if args.contains("--remove") {
@@ -457,11 +502,11 @@ do {
             print("Removed the rule for \(folder).")
         } else if let only = value(of: "--only", in: args) {
             let accounts = only.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            guard !accounts.isEmpty, accounts.allSatisfy(Profile.isValidEmail) else { fail("--only takes email addresses separated by commas") }
+            guard !accounts.isEmpty, accounts.allSatisfy(Profile.isValidEmail) else { usageError("--only takes email addresses separated by commas") }
             guard let rule = try rules.set(folder, accounts: accounts) else { fail("--only needs at least one email address") }
             print("Work in \(rule.folder) and inside it continues only in \(rule.accounts.joined(separator: ", ")).")
         } else {
-            fail("rule needs --only EMAIL[,EMAIL] or --remove")
+            usageError("rule needs --only EMAIL[,EMAIL] or --remove")
         }
     case "refresh":
         try manager.refresh()
@@ -495,7 +540,7 @@ do {
                     NSPasteboard.general.setString(text, forType: .string)
                 }, open: { NSWorkspace.shared.open($0) }))
     default:
-        fail("unknown command “\(args[0])”\n\n\(usage)")
+        usageError("unknown command “\(args[0])”")
     }
 } catch {
     fail(error.localizedDescription)

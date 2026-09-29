@@ -194,7 +194,7 @@ If a Claude Desktop version no longer has one of these settings, the status read
 ## Command line
 
 ```text
-baton list                          Show every profile, its account and plan usage
+baton list [--json]                 Show every profile, its account and plan usage
 baton add <email> [--label TEXT] [--color #RRGGBB]
                                     Create a profile and open it to sign in
 baton open <profile>                Open a profile's window (id or label)
@@ -212,7 +212,9 @@ baton local-only cloud-lock on|off|status
                                     Optional, off by default: also deny the one MCP tool that
                                     moves a Claude Code session to the cloud, Mac-wide, in
                                     ~/.claude/settings.json
-baton conversations [--all]         Recent local Code sessions and Cowork tasks
+baton conversations [--all] [--json]
+                                    Recent local Code sessions and Cowork tasks: the 20 most
+                                    recent, or with --all every one
 baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                     Continue a conversation in another profile: a Code session
                                     as itself or as a copy, or a new Cowork task with its history
@@ -229,7 +231,7 @@ baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [-
                                     continues it by itself, nothing happens (exit 3) unless --now
 baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                     Same as `continue`
-baton rules                         Show which accounts may continue the work in which folders
+baton rules [--json]                Show which accounts may continue the work in which folders
 baton rule <folder> --only <email>[,<email>…] | --remove
                                     Let only these accounts continue work in the folder and
                                     inside it, or drop the folder's rule
@@ -239,6 +241,14 @@ baton report [--save PATH] [--open] Print a redacted problem report; --save writ
                                     --open opens a prefilled GitHub issue to review and submit.
                                     Nothing is sent
 baton --version                     Print the version and commit
+baton <command> --help              Print this help
+
+list, doctor, report, conversations, rules and local-only status never change Claude, its data or
+which Claude receives claude:// links.
+
+Exit status: 0 done; 1 failed, and the printed line says why; 2 a command or option baton doesn't
+take, and nothing was changed; 3 nothing was done on purpose (continue, migrate), and the printed
+line says why.
 ```
 
 `continue` (or `pass`) takes the start of a session id from `conversations`, or `last` for the most recent one. `--fork` always copies; `--same` keeps the same session but refuses one that may still be written to unless you close it there and add `--anyway`. `--dry-run` prints what would happen, how, and with which model, and changes nothing:
