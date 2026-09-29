@@ -412,6 +412,39 @@ struct SettingsSyncTests {
         #expect(box.read(box.work.appending(path: "claude-code/2.0.0/.verified")) == "sha")
     }
 
+    /// A build copy that fails leaves no hidden partial copy, and one left by a crash goes at the next run.
+    @Test func aPartialBuildCopyNeverStays() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let builds = box.main.appending(path: "claude-code"), own = box.work.appending(path: "claude-code")
+        try fm.createDirectory(at: builds.appending(path: "2.0.0/claude.app"), withIntermediateDirectories: true)
+        try box.write("sha", to: builds.appending(path: "2.0.0/.verified"))
+        let unreadable = builds.appending(path: "2.0.0/claude.app/binary")
+        try box.write("binary", to: unreadable)
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: unreadable.path) }
+
+        #expect(throws: (any Error).self) { try SettingsSync(paths: box.paths).run(into: box.work) }
+        #expect(try fm.contentsOfDirectory(atPath: own.path).isEmpty, "the failed copy is gone")
+
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: unreadable.path)
+        let crashed = ".2.0.0-\(UUID().uuidString)"
+        try fm.createDirectory(at: own.appending(path: "\(crashed)/claude.app"), withIntermediateDirectories: true)
+        let other = ".2.0.0-\(UUID().uuidString.lowercased())"  // not a name Baton makes
+        try fm.createDirectory(at: own.appending(path: other), withIntermediateDirectories: true)
+
+        try SettingsSync(paths: box.paths).run(into: box.work)
+
+        #expect(Set(try fm.contentsOfDirectory(atPath: own.path)) == ["2.0.0", other])
+        #expect(box.read(own.appending(path: "2.0.0/claude.app/binary")) == "binary")
+    }
+
+    @Test func partialBuildNames() {
+        #expect(SettingsSync.isPartialBuild(".2.1.0-\(UUID().uuidString)"))
+        #expect(!SettingsSync.isPartialBuild(".DS_Store") && !SettingsSync.isPartialBuild("2.1.0") && !SettingsSync.isPartialBuild(".-\(UUID().uuidString)"))
+        #expect(!SettingsSync.isPartialBuild(".2.1.0-\(UUID().uuidString.lowercased())"), "not a name Baton makes")
+    }
+
     @Test func profileNeverSignedInGetsNoConfigFile() throws {
         let box = try Sandbox()
         try box.write(#"{"userThemeMode":"dark","oauth:tokenCache":"main-secret"}"#, to: box.main.appending(path: "config.json"))
