@@ -9,7 +9,6 @@ anywhere in the project.
 
 ## Reporting
 
-Report unacceptable behavior privately to the maintainer, Yuri Trukhin, through the contact details on
-[his GitHub profile](https://github.com/trukhinyuri). Every report is reviewed promptly and kept
+Report unacceptable behavior privately to the maintainer, Yuri Trukhin, by email to CONDUCT_CONTACT. Every report is reviewed promptly and kept
 confidential. The maintainer may remove comments, commits and issues, and may block people who break
 these rules, following the enforcement guidelines of the Contributor Covenant.
