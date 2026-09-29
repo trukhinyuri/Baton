@@ -426,6 +426,8 @@ public final class ProfileManager: @unchecked Sendable {
     var appActivator: (@Sendable (_ app: URL, _ links: [URL]) async throws -> Void)?
     /// Called while a window is prepared to start, under open.lock; tests use it to overlap other work with it.
     var whilePreparing: (@Sendable (String) -> Void)?
+    /// Whether a running copy shows its main window yet; tests replace it, since their copies have no process.
+    var windowShown: (@Sendable (RunningClaude) -> Bool)?
     /// Whether an app is Claude as Anthropic signs it (`ClaudeSource.isSignedByAnthropic`); tests replace it, since a
     /// sandbox's Claude.app isn't signed.
     var signatureCheck: (@Sendable (URL) -> Bool)?
@@ -463,7 +465,7 @@ public final class ProfileManager: @unchecked Sendable {
         }
         if let window = running.first(where: { window(of: profile.id, is: $0) }) {
             noteOpened(profile.id, warning: nil)
-            return try await bringForward(window, app: engine, links: links)
+            return try await bringForward(window, app: engine, links: links, label: profile.label)
         }
         try FileLock.withLock(registryLock, blocking: true) {
             // It may have been removed while this call waited, and its app copy must not come back then.
@@ -508,7 +510,7 @@ public final class ProfileManager: @unchecked Sendable {
             }
         if let startedMeanwhile {
             openLock.release()
-            return try await bringForward(startedMeanwhile, app: engine, links: links)
+            return try await bringForward(startedMeanwhile, app: engine, links: links, label: profile.label)
         }
         try await launch(engine, arguments: ["--user-data-dir=\(paths.dataDir(for: profile.id).path)"], links: links, label: profile.label) {
             await self.waitUntilListed { self.runningClaudes().contains { self.window(of: profile.id, is: $0) } }
@@ -525,8 +527,38 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     /// Hands `links` to a window that is already running, or brings it forward.
-    private func bringForward(_ window: RunningClaude, app: URL, links: [URL]) async throws {
-        if !links.isEmpty { try await deliver(links, to: app) } else { window.app?.activate() }
+    private func bringForward(_ window: RunningClaude, app: URL, links: [URL], label: String) async throws {
+        if !links.isEmpty { try await handOver(links, to: window, app: app, label: label) } else { window.app?.activate() }
+    }
+
+    /// Hands `links` to a running window. One still starting keeps only the last link it receives until its window
+    /// exists, as in `launch`, so it gets the first one now and the rest once its window is on screen. The call keeps
+    /// its turn in `oneAtATime` meanwhile, so an open queued behind it waits for that window too.
+    private func handOver(_ links: [URL], to window: RunningClaude?, app: URL, label: String) async throws {
+        guard links.count > 1, let window, !isShown(window) else { return try await deliver(links, to: app) }
+        try await deliver([links[0]], to: app)
+        guard try await waitUntilShown(window, seconds: 90) else {
+            throw ProfileError.windowDidNotAppear(label: label, links: links.count - 1)
+        }
+        try await Task.sleep(for: .seconds(1))
+        try await deliver(Array(links.dropFirst()), to: app)
+    }
+
+    /// Whether `window` shows its main window. A copy whose process isn't known counts as shown, as it did before.
+    private func isShown(_ window: RunningClaude) -> Bool {
+        if let windowShown { return windowShown(window) }
+        guard let pid = window.app?.processIdentifier else { return true }
+        return Self.hasWindow(pid)
+    }
+
+    /// Waits until `window` shows its main window, for at most `seconds`; `false` if it doesn't or its process ends.
+    private func waitUntilShown(_ window: RunningClaude, seconds: Double) async throws -> Bool {
+        for _ in 0..<Int(seconds * 4) {
+            if isShown(window) { return true }
+            if window.app?.isTerminated == true { return false }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        return isShown(window)
     }
 
     /// Runs `body` once no other call in this process is opening `window`, in the order the calls came. A second click,
@@ -621,7 +653,7 @@ public final class ProfileManager: @unchecked Sendable {
         let isMain = { (copy: RunningClaude) in copy.uses(dataDir: self.paths.mainDataDir, mainDataDir: self.paths.mainDataDir, bundle: self.paths.claudeApp) }
         if runningClaudes().contains(where: isMain) {
             noteOpened("main", warning: nil)
-            return try await bringMainForward(links: links)
+            return try await bringMainForward(links: links, isMain: isMain)
         }
         var startedMeanwhile = false
         // Kept until the copy started below shows up, as for a profile's window.
@@ -650,7 +682,7 @@ public final class ProfileManager: @unchecked Sendable {
         }
         if startedMeanwhile {
             openLock?.release()
-            return try await bringMainForward(links: links)
+            return try await bringMainForward(links: links, isMain: isMain)
         }
         try await launch(paths.claudeApp, arguments: [], links: links, label: "(main)") {
             await self.waitUntilListed { self.runningClaudes().contains(where: isMain) }
@@ -658,10 +690,11 @@ public final class ProfileManager: @unchecked Sendable {
         }
     }
 
-    private func bringMainForward(links: [URL]) async throws {
-        if let appActivator { return try await appActivator(paths.claudeApp, links) }
+    private func bringMainForward(links: [URL], isMain: (RunningClaude) -> Bool) async throws {
         if !links.isEmpty {
-            try await deliver(links, to: paths.claudeApp)
+            try await handOver(links, to: runningClaudes().first(where: isMain), app: paths.claudeApp, label: "(main)")
+        } else if let appActivator {
+            try await appActivator(paths.claudeApp, [])
         } else {
             _ = try await NSWorkspace.shared.openApplication(at: paths.claudeApp, configuration: NSWorkspace.OpenConfiguration())
         }
