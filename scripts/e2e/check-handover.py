@@ -43,9 +43,12 @@ def entries(home, window):
 
 
 def windows(log, running):
+    """The windows run; ATLAS keeps an idle Claude Code process for each of its 8 cut sessions, as Claude Desktop keeps
+    one for every session it opened, for hours."""
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    live = [{"session": s, "window": "atlas", "since": now, "idle": True} for s in X["cut"]] if "atlas" in running else []
     with open(log + ".state.json", "w") as f:
-        json.dump({"running": {w: now for w in running}, "live": []}, f)
+        json.dump({"running": {w: now for w in running}, "live": live}, f)
 
 
 def dry_run(home, path):
@@ -54,7 +57,7 @@ def dry_run(home, path):
     check(sorted(s["card"] for s in plan["sessions"]) == X["moved"], f"plan: {len(X['moved'])} sessions move ({len(plan['sessions'])})")
     resumes = sorted(s["session"] for s in plan["sessions"] if s["resumes"])
     check(resumes == sorted(X["cut"]), f"plan: {len(X['cut'])} resume ({len(resumes)})")
-    check(not any(s["asCopy"] for s in plan["sessions"]), "plan: nothing live in ATLAS, so no copies")
+    check(not any(s["asCopy"] for s in plan["sessions"]), "plan: 8 idle processes in ATLAS, nothing works there, so no copies")
     check(plan["seeding"] == "seed", f"plan: seeds auto-continue ({plan['seeding']})")
     check(any(l.startswith("19 stay in ATLAS: a folder rule") for l in plan["leftovers"]), "plan: 19 kept by the folder rule")
     check("8 stay in ATLAS: Remote Control reaches them there" in plan["leftovers"], "plan: 8 kept by Remote Control")
@@ -65,7 +68,8 @@ def dry_run(home, path):
 def result(home, log, path):
     out = json.load(open(path))
     print("line: " + out.get("line", ""))
-    check(out.get("state") == "done" and out.get("sourceClosed") is True, f"done, ATLAS closed ({out.get('state')}, {out.get('sourceClosed')})")
+    check(out.get("state") == "done" and out.get("sourceClosed") is True,
+          f"done, ATLAS closed though 8 idle processes were open there ({out.get('state')}, {out.get('sourceClosed')})")
     check(sorted(out.get("resumed", [])) == sorted(X["cut"]), f"{len(X['cut'])} sessions resumed ({len(out.get('resumed', []))})")
     check(out.get("line", "").startswith("ATLAS is at its limit until ") and "and was closed. Your work continues in BRAVO — 8 sessions resumed; "
           "19 stay in ATLAS: a folder rule keeps client for atlas@, cedar@; 8 stay in ATLAS: Remote Control reaches them there." in out.get("line", ""),

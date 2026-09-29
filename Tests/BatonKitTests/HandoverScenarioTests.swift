@@ -254,7 +254,7 @@ struct HandoverScenarioTests {
         let own = "5e55e000" + base.bravoOwn.cards[0].dropFirst("local_ca4d0000".count)
         let scene = try IncidentScene(running: ["atlas", "bravo"], live: [(own, "bravo")])
         let plan = try scene.manager.planHandover(from: "atlas")
-        #expect(plan.destination == "bravo" && plan.destinationActivity == .busy(live: 1), "more than 40 points ahead of CEDAR")
+        #expect(plan.destination == "bravo" && plan.destinationActivity == .busy(working: 1), "more than 40 points ahead of CEDAR")
 
         let waiting = try await scene.manager.handOver(plan, dwell: 5, lastWait: 1)
 

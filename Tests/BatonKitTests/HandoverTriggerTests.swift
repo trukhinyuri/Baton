@@ -45,12 +45,19 @@ struct HandoverTriggerTests {
         #expect(HandoverTrigger.due([atLimit(sampleOnly: true), room()], now: now, handled: never).isEmpty, "the limit must show in its sessions")
     }
 
-    @Test func resetWithinFifteenMinutesIsNotDueAndBannerSaysItPicksUp() {
-        let soon = atLimit(resetsIn: 10 * 60)
-        #expect(HandoverTrigger.due([soon, room()], now: now, handled: never).isEmpty)
+    @Test func resetWithinHalfAnHourIsNotDueAndBannerSaysWorkContinuesThere() {
+        let soon = atLimit(resetsIn: 25 * 60)
+        #expect(HandoverTrigger.due([soon, room()], now: now, handled: never).isEmpty, "Baton waits for a reset 25 minutes away")
         let line = HandoverTrigger.bannerLine(soon, noRoom: nil, now: now)
         #expect(line.hasPrefix("ROBIN is at its limit until "))
-        #expect(line.hasSuffix(" and picks its work up by itself then."))
+        #expect(line.hasSuffix("; work continues there then."))
+        #expect(HandoverTrigger.due([atLimit(resetsIn: 31 * 60), room()], now: now, handled: never) == ["robin"], "not for one 31 away")
+    }
+
+    @Test func unknownResetIsHandedOver() {
+        var status = atLimit()
+        status.limits.fiveHour.reset = nil
+        #expect(HandoverTrigger.due([status, room()], now: now, handled: never) == ["robin"], "no reset time: hand over as before")
     }
 
     @Test func handledOrRunningHandoverIsNotDue() {

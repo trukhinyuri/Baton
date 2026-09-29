@@ -11,6 +11,8 @@ final class HandoverWorld: @unchecked Sendable {
     let box: Sandbox
     private var copies: [RunningClaude] = []
     private var processes: [LimitTracker.LiveProcess] = []
+    /// Processes that hold their session open without working, as Claude Desktop keeps them for hours.
+    private var idlePIDs: Set<pid_t> = []
     private var log: [String] = []
     private var pid: pid_t = 100
     var resumes = true
@@ -44,16 +46,22 @@ final class HandoverWorld: @unchecked Sendable {
         stopWork(in: window)
     }
 
+    /// The window quits, and the Claude Code processes it kept end with it.
     func quit(_ copy: RunningClaude) {
         lock.withLock {
             copies.removeAll { $0.pid == copy.pid }
+            if !copies.contains(where: { $0.bundlePath == copy.bundlePath }) {
+                let window = copy.bundlePath == box.paths.claudeApp.standardizedFileURL.path ? "main" : "work"
+                processes.removeAll { $0.executable == executable(window) }
+            }
             log.append("quit \(copy.bundlePath == box.paths.claudeApp.standardizedFileURL.path ? "main" : "work")")
         }
     }
 
-    func work(_ session: String, in window: String, startedAt: Date = Date().addingTimeInterval(-3600)) {
+    func work(_ session: String, in window: String, startedAt: Date = Date().addingTimeInterval(-3600), idle: Bool = false) {
         lock.withLock {
             pid += 1
+            if idle { idlePIDs.insert(pid) }
             processes.append(
                 LimitTracker.LiveProcess(
                     pid: pid, session: session, startedAt: startedAt, version: "2.1.284", cwd: "/repo", hostSessionID: nil, executable: executable(window)))
@@ -100,6 +108,7 @@ final class HandoverWorld: @unchecked Sendable {
         manager.limitTracker.liveProcesses = { _ in self.live }
         manager.processTree = { ProcessTree(claudes: [], parent: { _ in nil }) }
         manager.liveSessionIDs = { Set(self.live.map(\.session)) }
+        manager.processWorking = { pid, _ in !self.lock.withLock { self.idlePIDs.contains(pid) } }
     }
 }
 
@@ -226,7 +235,7 @@ struct HandoverPlanTests {
         #expect(plan.leftovers.contains(.copies(count: 1)), "the live-only one continues as a copy")
         #expect(plan.leftovers.contains(.keepRunningInSource(count: 1)), "the armed one keeps running in WORK")
         #expect(plan.resumeInSource.map(\.transcript) == [S.a], "its copy isn't to resume")
-        #expect(plan.sourceActivity == .busy(live: 2))
+        #expect(plan.sourceActivity == .busy(working: 2))
     }
 
     @Test func armedButNotLiveMovesAsItself() throws {
@@ -240,6 +249,44 @@ struct HandoverPlanTests {
         #expect(scene.session(plan, S.a)?.cut == true)
         #expect(scene.session(plan, S.a)?.asCopy == false, "an armed entry alone doesn't make a copy")
         #expect(plan.sourceActivity == .idle)
+    }
+
+    @Test func idleProcessesDontMakeCopies() throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Working")
+        try scene.session(S.b, title: "Open, idle")
+        scene.world.start("work")
+        scene.world.work(S.a, in: "work")
+        scene.world.work(S.b, in: "work", idle: true)
+
+        let plan = try scene.plan()
+
+        #expect(plan.sourceActivity == .busy(working: 1))
+        #expect(scene.session(plan, S.a)?.asCopy == true, "working in WORK, so a copy")
+        #expect(scene.session(plan, S.b)?.asCopy == false, "only open there, so itself")
+    }
+
+    @Test func sourceWithOnlyIdleProcessesIsClosedAndEverySessionMovesAsItself() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.session(S.b, title: "Docs")
+        try scene.armed([S.a])
+        scene.world.start("work")
+        scene.world.work(S.a, in: "work", idle: true)
+        scene.world.work(S.b, in: "work", idle: true)
+        let plan = try scene.plan()
+        #expect(plan.sourceActivity == .idle && plan.sessions.allSatisfy { !$0.asCopy })
+
+        let result = try await scene.manager.handOver(plan, dwell: 0.3, lastWait: 0.3)
+
+        #expect(result.sourceClosed && scene.world.events.contains("quit work"), "idle processes don't keep the window open")
+        #expect(result.plan.sessions.allSatisfy { !$0.asCopy }, "nothing works in WORK once it's closed")
+        #expect(scene.world.links.contains("link main \(S.a)"), "the cut session resumes as itself")
+        let copies = result.plan.leftovers.filter {
+            if case .copies = $0 { return true }
+            return false
+        }
+        #expect(copies.isEmpty)
     }
 
     @Test func sourceWithNothingLiveIsClosedFirstAndAllMoveAsThemselves() async throws {
@@ -267,8 +314,8 @@ struct HandoverPlanTests {
         #expect(HandoverLog(paths: scene.box.paths).entries().last?.state == "done")
     }
 
-    @Test func resetWithinFifteenMinutesPlansNothing() async throws {
-        let scene = try S(resetIn: 600)
+    @Test func resetWithinHalfAnHourPlansNothing() async throws {
+        let scene = try S(resetIn: 25 * 60)
         try scene.session(S.a, title: "Armed")
         try scene.armed([S.a])
 
@@ -276,7 +323,7 @@ struct HandoverPlanTests {
         #expect(plan.picksUpItself && plan.sessions.isEmpty)
         let result = try await scene.manager.handOver(plan)
         #expect(result.state == .picksUpItself && scene.world.events.isEmpty)
-        #expect(result.line.hasSuffix("and picks its work up by itself then."))
+        #expect(result.line.hasSuffix("; work continues there then."))
     }
 
     @Test func cutSessionsAreHitsWithoutAnswerPlusArmedEntries() throws {
@@ -420,7 +467,7 @@ struct HandoverRunTests {
 
     @Test func busyDestinationIsNeverSentALink() async throws {
         let (scene, planned) = try busyScene()
-        #expect(planned.plan.destinationActivity == .busy(live: 1))
+        #expect(planned.plan.destinationActivity == .busy(working: 1))
 
         let result = try await scene.manager.handOver(planned.plan, dwell: 0.1, lastWait: 0.1)
 
@@ -803,7 +850,7 @@ struct HandoverTextTests {
         #expect(line(result(.done, resumed: 1, closed: false)) == "ROBIN is at its limit until 19:10. Your work continues in PAY — 1 session resumed.")
         #expect(line(result(.waiting)) == "ROBIN is at its limit until 19:10 and was closed. PAY restarts when its current work finishes.")
         #expect(line(result(.resetFirst, resumed: 9)) == "ROBIN's limit reset before PAY was free, so your work continues in ROBIN — 9 sessions resumed.")
-        #expect(line(result(.picksUpItself)) == "ROBIN is at its limit until 19:10 and picks its work up by itself then.")
+        #expect(line(result(.picksUpItself)) == "ROBIN is at its limit until 19:10; work continues there then.")
         #expect(
             line(result(.failed, failure: "The app couldn't start."))
                 == "ROBIN is at its limit until 19:10 and was closed. PAY didn't open: The app couldn't start. Your sessions are there when you open it.")

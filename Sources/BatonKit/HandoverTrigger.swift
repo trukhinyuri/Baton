@@ -2,8 +2,11 @@ import Foundation
 
 /// When the app hands a window's work over by itself: a window that is open, at its limit, whose limit was reached in
 /// its sessions within the last half hour (the user was working there), not handed over for this limit yet, and whose
-/// reset isn't within minutes (then it picks its work up by itself).
+/// reset isn't within `waitsFor` (then Claude's own auto-continue picks its work up there at the reset).
 public enum HandoverTrigger {
+    /// A limit that resets this soon isn't handed over: Baton waits, and the window continues its work then.
+    public static let waitsFor: TimeInterval = 30 * 60
+
     /// A limit reached longer ago than this was not reached while the user worked there.
     public static let recent: TimeInterval = 30 * 60
 
@@ -19,19 +22,19 @@ public enum HandoverTrigger {
             // A sample alone says nothing about the sessions; the limit must show in them, and lately.
             guard !binding.sampleOnly, let reached = binding.reachedAt, now.timeIntervalSince(reached) <= recent else { return nil }
             let resetsAt = binding.reset?.at
-            if let resetsAt, resetsAt.timeIntervalSince(now) <= AutoResumeOffer.within { return nil }
+            if let resetsAt, resetsAt.timeIntervalSince(now) <= waitsFor { return nil }
             guard !busy(status.id), !handled(status.id, resetsAt) else { return nil }
             return status.id
         }
     }
 
     /// What the limit banner says for `status`, a window at its limit, while no handover of it is under way: that it
-    /// picks its work up by itself when it resets within minutes, that no window has room (`noRoom`), or when it resets.
+    /// continues its work there when it resets within `waitsFor`, that no window has room (`noRoom`), or when it resets.
     public static func bannerLine(_ status: ProfileStatus, noRoom: String?, now: Date = Date()) -> String {
         let resetsAt = status.limits.binding(now: now)?.reset?.at
-        if let resetsAt, resetsAt.timeIntervalSince(now) <= AutoResumeOffer.within {
+        if let resetsAt, resetsAt.timeIntervalSince(now) <= waitsFor {
             let until = HandoverText.untilText(resetsAt, now: now, timeZone: .current, locale: .current)
-            return "\(status.displayLabel) is at its limit until \(until) and picks its work up by itself then."
+            return "\(status.displayLabel) is at its limit until \(until); work continues there then."
         }
         if let noRoom { return noRoom }
         let asOf = LimitText.asOf(status.limits).map { " \($0)" } ?? ""

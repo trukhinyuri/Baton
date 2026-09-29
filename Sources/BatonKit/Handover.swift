@@ -12,7 +12,8 @@ public struct HandoverSession: Codable, Equatable, Sendable {
     public var folders: [String]
     /// The limit cut it mid-turn, so it resumes in the destination.
     public var cut: Bool
-    /// A Claude Code process of it runs in the window at its limit, so a copy continues instead of the session itself.
+    /// A Claude Code process of it works in the window at its limit (`ClaudeWork`), so a copy continues instead of the
+    /// session itself.
     public var asCopy: Bool
     /// Its last message, for the order sessions are shown in.
     public var lastActivity: Date
@@ -71,7 +72,7 @@ public struct HandoverPlan: Equatable, Sendable {
     public var destinationActivity: WindowActivity
     public var seeding: Seeding
     public var leftovers: [HandoverLeftover]
-    /// The reset is minutes away: the window continues its own work then, and nothing is handed over.
+    /// The reset is within `HandoverTrigger.waitsFor`: the window continues its own work then, and nothing is handed over.
     public var picksUpItself = false
     /// Moved by hand (the Continue sheet, `planMove`) rather than because of a limit: it runs even when this limit's
     /// work was handed over already.
@@ -105,7 +106,7 @@ public struct HandoverResult: Equatable, Sendable {
         case done
         /// The destination is busy and restarts once nothing works there (`finishWaitingHandover`).
         case waiting
-        /// The reset is minutes away; nothing was done.
+        /// The reset is within `HandoverTrigger.waitsFor`; nothing was done.
         case picksUpItself
         /// The source's limit reset before the destination was free: the work continues in the source.
         case resetFirst
@@ -368,7 +369,7 @@ public enum HandoverText {
         let head: String
         switch result.state {
         case .picksUpItself:
-            return "\(source) is at its limit\(until) and picks its work up by itself then."
+            return "\(source) is at its limit\(until); work continues there then."
         case .resetFirst:
             head = "\(source)'s limit reset before \(destination) was free, so your work continues in \(source)\(resumedText)"
         case .waiting:
@@ -484,7 +485,7 @@ extension ProfileManager {
         guard atLimit || byHand else { throw HandoverError.notAtLimit(label) }
         let resetsAt = atLimit ? status.limits.binding(now: now)?.reset?.at : nil
         let sourceActivity = activity(of: source)
-        if !byHand, let resetsAt, resetsAt.timeIntervalSince(now) <= AutoResumeOffer.within {
+        if !byHand, let resetsAt, resetsAt.timeIntervalSince(now) <= HandoverTrigger.waitsFor {
             return HandoverPlan(
                 source: source, destination: source, resetsAt: resetsAt, sessions: [], sourceActivity: sourceActivity,
                 destinationActivity: sourceActivity, seeding: .seed, leftovers: [], picksUpItself: true)
@@ -575,7 +576,7 @@ extension ProfileManager {
         let sourceDir = dataDir(of: source)
         let windows = windows
         let transcripts = ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)
-        let live = liveSessions(in: source)
+        let live = liveSessions(in: source), working = workingSessions(in: source)
         let liveIn = limitTracker.liveWindows(paths: paths, windows: windows)
         let lastRan = limitTracker.lastWindows(paths: paths, windows: windows, now: now)
         let owners = SessionSync.owners(dataDirs: windows.map(\.dataDir), paths: paths)
@@ -617,7 +618,7 @@ extension ProfileManager {
                 }
                 let folders = summary.folder.map { $0.contains(SessionSync.scratchFolder) ? [] : [$0] } ?? []
                 let item = HandoverSession(
-                    card: cardName, transcript: session, title: summary.title, folders: folders, cut: cut, asCopy: live.contains(session),
+                    card: cardName, transcript: session, title: summary.title, folders: folders, cut: cut, asCopy: working.contains(session),
                     lastActivity: ConversationIndex.lastActivity(of: transcript) ?? .distantPast, armed: armed.contains(cardName))
                 found.append(HandoverCandidate(session: item, remoteControl: remoteControl))
             }
@@ -672,17 +673,20 @@ extension ProfileManager {
             guard try log.claim(entry, now: now) else { throw HandoverError.alreadyHandedOver(displayLabel(of: plan.source)) }
         }
 
-        // 1. The source: closed when nothing is live there, so every session moves as itself; otherwise its live
-        // sessions continue as copies and its turn-offs wait until it closes. A session open in a `claude` Baton
-        // can't place stays live after the source quits, so it continues as a copy too.
+        // 1. The source: closed when nothing works there, so every session moves as itself; otherwise its working
+        // sessions continue as copies and its turn-offs wait until it closes (D1). A session open in a `claude` Baton
+        // can't place stays live after the source quits, so it continues as a copy too; a source asked to quit that
+        // stays open (Claude asked something) keeps every live session, so each continues as a copy.
         progress("Closing \(displayLabel(of: plan.source))…")
         let liveBefore = liveSessions(in: plan.source)
-        let sourceClosed = activity(of: plan.source).isBusy ? false : await quitWindow(plan.source)
+        let sourceBusy = activity(of: plan.source).isBusy
+        let sourceClosed = sourceBusy ? false : await quitWindow(plan.source)
         entry.sourceClosed = sourceClosed
         plan.sourceActivity = sourceClosed ? .closed : activity(of: plan.source)
         let live =
             sourceClosed
-            ? liveBefore.intersection(liveSessionIDs?() ?? LiveSessions.ids(claudeDir: paths.claudeDir)) : liveSessions(in: plan.source)
+            ? liveBefore.intersection(liveSessionIDs?() ?? LiveSessions.ids(claudeDir: paths.claudeDir))
+            : sourceBusy ? workingSessions(in: plan.source) : liveSessions(in: plan.source)
         // Copies an earlier handover of this episode made before it stopped are used again, so no second card appears.
         let earlier =
             log.entries().last {
@@ -1143,7 +1147,7 @@ extension ProfileManager {
         }
         return HandoverPlan(
             source: entry.source, destination: entry.destination, resetsAt: entry.resetsAt, sessions: sessions, sourceActivity: .closed,
-            destinationActivity: .busy(live: 0), seeding: entry.seeding, leftovers: entry.leftovers)
+            destinationActivity: .busy(working: 0), seeding: entry.seeding, leftovers: entry.leftovers)
     }
 
     private func finished(_ result: HandoverResult, entry: HandoverLog.Entry?) -> HandoverResult {

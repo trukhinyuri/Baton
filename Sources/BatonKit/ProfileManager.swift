@@ -493,6 +493,9 @@ public final class ProfileManager: @unchecked Sendable {
     var windowShown: (@Sendable (RunningClaude) -> Bool)?
     /// The running Claude Code processes and their parents, for `WindowActivity`; tests replace it.
     var processTree: (@Sendable () -> ProcessTree)?
+    /// Whether a live Claude Code process works (`ClaudeWork.isWorking`), given its pid and its session if known;
+    /// tests replace it.
+    var processWorking: (@Sendable (pid_t, String?) -> Bool)?
     /// Every session a running Claude Code process has open (`LiveSessions.ids`); tests replace it.
     var liveSessionIDs: (@Sendable () -> Set<String>)?
     /// Asks one running copy to quit, as `terminate()` does; tests replace it, since their copies have no process.

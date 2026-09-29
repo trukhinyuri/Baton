@@ -26,10 +26,10 @@ struct WindowActivityTests {
     static let other = "99999999-2222-3333-4444-555555555555"
 
     /// A manager whose WORK window runs as process 100 when `open`, with the given Claude Code processes and each
-    /// process's parent.
+    /// process's parent; those in `idle` hold their session open without working.
     func manager(
         _ box: Sandbox, copies: FakeCopies, open: Bool = true, processes: [LimitTracker.LiveProcess] = [], tree: [pid_t: pid_t] = [:],
-        unregistered: Set<String> = []
+        unregistered: Set<String> = [], idle: Set<pid_t> = []
     ) throws -> ProfileManager {
         let manager = try box.closedWorkWindow(FakeWindows())
         copies.set(open ? [workCopy(box)] : [])
@@ -38,6 +38,7 @@ struct WindowActivityTests {
         // The Claude Code processes are the given ones; the rest of the tree is their helpers.
         manager.processTree = { ProcessTree(claudes: processes.map(\.pid), parent: { tree[$0] }) }
         manager.liveSessionIDs = { Set(processes.map(\.session)).union(unregistered) }
+        manager.processWorking = { pid, _ in !idle.contains(pid) }
         return manager
     }
 
@@ -66,7 +67,7 @@ struct WindowActivityTests {
         let manager = try manager(
             box, copies: FakeCopies(),
             processes: [process(200, Self.session, executable: inData(box.work)), process(201, Self.other, executable: inData(box.main))])
-        #expect(manager.activity(of: "work") == .busy(live: 1))
+        #expect(manager.activity(of: "work") == .busy(working: 1))
         #expect(manager.liveSessions(in: "work") == [Self.session], "main's process isn't this window's")
     }
 
@@ -75,7 +76,7 @@ struct WindowActivityTests {
         let manager = try manager(
             box, copies: FakeCopies(), processes: [process(300, Self.session, executable: "/usr/local/bin/claude")],
             tree: [300: 250, 250: 100, 400: 1])
-        #expect(manager.activity(of: "work") == .busy(live: 1), "started by the window through a helper")
+        #expect(manager.activity(of: "work") == .busy(working: 1), "started by the window through a helper")
         #expect(manager.liveSessions(in: "work") == [Self.session])
     }
 
@@ -102,7 +103,7 @@ struct WindowActivityTests {
         let box = try Sandbox()
         let copies = FakeCopies()
         let manager = try manager(box, copies: copies, open: false, processes: [process(200, Self.session, executable: inData(box.work))])
-        #expect(manager.activity(of: "work") == .busy(live: 1), "left running after the window went away")
+        #expect(manager.activity(of: "work") == .busy(working: 1), "left running after the window went away")
         #expect(await manager.quitWindow("work", seconds: 0.2) == false, "not closed while it works")
     }
 
@@ -130,5 +131,70 @@ struct WindowActivityTests {
         #expect(manager.activity(of: "work") == .closed)
         #expect(await manager.quitWindow("work", seconds: 0.4), "nothing to quit")
         #expect(copies.quitRequests == [100, 100])
+    }
+    @Test func idleProcessesLeaveWindowIdle() async throws {
+        let box = try Sandbox()
+        let copies = FakeCopies()
+        let manager = try manager(
+            box, copies: copies,
+            processes: [process(200, Self.session, executable: inData(box.work)), process(201, Self.other, executable: inData(box.work))],
+            idle: [200, 201])
+        #expect(manager.activity(of: "work") == .idle, "Claude Desktop keeps idle processes for hours")
+        #expect(manager.liveSessions(in: "work") == [Self.session, Self.other])
+        #expect(manager.workingSessions(in: "work").isEmpty)
+        manager.quitRequester = { copies.askToQuit($0, andQuit: true) }
+        _ = await manager.quitWindow("work", seconds: 0.2)
+        #expect(copies.quitRequests == [100], "asked to quit, since nothing works there")
+    }
+
+    @Test func oneWorkingProcessMakesWindowBusyAndOnlyItsSessionWorks() throws {
+        let box = try Sandbox()
+        let manager = try manager(
+            box, copies: FakeCopies(),
+            processes: [process(200, Self.session, executable: inData(box.work)), process(201, Self.other, executable: inData(box.work))],
+            idle: [201])
+        #expect(manager.activity(of: "work") == .busy(working: 1))
+        #expect(manager.workingSessions(in: "work") == [Self.session])
+        #expect(manager.liveSessions(in: "work") == [Self.session, Self.other])
+    }
+
+    @Test func idleProcessOutlivingItsWindowIsNotClosed() async throws {
+        let box = try Sandbox()
+        let manager = try manager(
+            box, copies: FakeCopies(), open: false, processes: [process(200, Self.session, executable: inData(box.work))], idle: [200])
+        #expect(manager.activity(of: "work") == .idle, "its session is still open there")
+        #expect(await manager.quitWindow("work", seconds: 0.2) == false)
+    }
+
+    @Test func descendantStartedAfterTheProcessIsWork() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let tree: [pid_t: [pid_t]] = [10: [11], 11: [12], 20: [21]]
+        let started: [pid_t: Date] = [
+            11: start.addingTimeInterval(2), 12: start.addingTimeInterval(600), 21: start.addingTimeInterval(3),
+        ]
+        let after = start.addingTimeInterval(ClaudeWork.serverGrace)
+        let children = { (pid: pid_t) in tree[pid] ?? [] }
+        #expect(ClaudeWork.hasWorkingDescendant(10, children: children, startTime: { started[$0] }, after: after), "a tool under a server")
+        #expect(!ClaudeWork.hasWorkingDescendant(20, children: children, startTime: { started[$0] }, after: after), "a server started with it")
+        #expect(!ClaudeWork.hasWorkingDescendant(30, children: children, startTime: { started[$0] }, after: after), "no children")
+    }
+
+    @Test func recentTranscriptOrBusyRegistryIsWork() throws {
+        let box = try Sandbox()
+        let claudeDir = box.paths.claudeDir
+        let project = claudeDir.appending(path: "projects/-repo")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let transcript = project.appending(path: Self.session + ".jsonl")
+        try Data("{}\n".utf8).write(to: transcript)
+        let pid: pid_t = 999_999
+        #expect(ClaudeWork.isWorking(pid: pid, session: Self.session.uppercased(), claudeDir: claudeDir), "written just now")
+        let later = Date().addingTimeInterval(ClaudeWork.quiet + 5)
+        #expect(!ClaudeWork.isWorking(pid: pid, session: Self.session, claudeDir: claudeDir, now: later), "quiet for over a minute")
+        let sessions = claudeDir.appending(path: "sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try Data(#"{"pid":999999,"sessionId":"x","status":"busy"}"#.utf8).write(to: sessions.appending(path: "999999.json"))
+        #expect(ClaudeWork.isWorking(pid: pid, session: Self.session, claudeDir: claudeDir, now: later), "a turn under way")
+        try Data(#"{"pid":999999,"sessionId":"x","status":"idle"}"#.utf8).write(to: sessions.appending(path: "999999.json"))
+        #expect(!ClaudeWork.isWorking(pid: pid, session: nil, claudeDir: claudeDir, now: later))
     }
 }

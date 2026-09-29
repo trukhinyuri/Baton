@@ -32,7 +32,7 @@ struct HandoverRankingTests {
     @Test func closedOrIdlePreferredWithinFortyPoints() {
         // Keys: best 4 × 10 = 40 (busy), quiet 4 × 20 = 80: 40 points behind.
         let statuses = [status("source", week: 100), status("best", week: 10), status("quiet", week: 20), status("later", week: 21)]
-        let activity = { (id: String) -> WindowActivity in id == "best" ? .busy(live: 2) : id == "quiet" ? .closed : .idle }
+        let activity = { (id: String) -> WindowActivity in id == "best" ? .busy(working: 2) : id == "quiet" ? .closed : .idle }
         #expect(DestinationRanking.forHandover(statuses, excluding: "source", activity: activity) == "quiet")
         let allQuiet = { (_: String) -> WindowActivity in .idle }
         #expect(DestinationRanking.forHandover(statuses, excluding: "source", activity: allQuiet) == "best", "the best, when it isn't busy")
@@ -41,7 +41,7 @@ struct HandoverRankingTests {
     @Test func busyBestWinsBeyondFortyPoints() {
         // Keys: best 40 (busy), quiet 4 × 20 + 1 = 81: 41 points behind.
         let statuses = [status("source", week: 100), status("best", week: 10), status("quiet", week: 20, fiveHour: 1)]
-        let activity = { (id: String) -> WindowActivity in id == "best" ? .busy(live: 1) : .closed }
+        let activity = { (id: String) -> WindowActivity in id == "best" ? .busy(working: 1) : .closed }
         #expect(DestinationRanking.forHandover(statuses, excluding: "source", activity: activity) == "best")
     }
 

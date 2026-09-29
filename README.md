@@ -129,7 +129,7 @@ When an open subscription reaches its limit while you work in it, Baton moves it
 - **Nothing is interrupted.** A window where Claude Code works isn't chosen when a closed or idle one has nearly as much room; if it is, it restarts by itself once its current work finishes, and the line says so.
 - **What stays is named** in the same line: sessions a folder rule keeps for other accounts, sessions Remote Control still reaches there, and anything that didn't resume.
 
-When no other window has room, or the limit resets within 15 minutes, the banner says so and nothing moves ([Limits and resets](#limits-and-resets)). `baton handover auto off` turns this off.
+When no other window has room, or the limit resets within 30 minutes, the banner says so and nothing moves: work continues in that window at the reset ([Limits and resets](#limits-and-resets)). `baton handover auto off` turns this off.
 
 To move a window's work yourself, click **Continue work…** (or **Move work…** in a window's ⋯ menu): it lists the sessions that will move, those the limit cut marked *resumes*, and what stays with its reason; click **Continue in Claude WORK** to move them, or **Change** to pick another window with room. Room is judged mostly by weekly usage: a weekly limit, once reached, holds a window back for days, a five-hour one for hours at most. Five-hour usage counts a quarter as much, since a full five-hour window is about a quarter of a week, so a window about to reach its five-hour limit isn't chosen over one with nearly the same week. To continue a single session, as itself or as a copy, use `baton continue`.
 
@@ -250,7 +250,7 @@ baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
                                     A busy window restarts once its current work finishes, and
                                     one left open at its limit is closed then. Run it again to
                                     go on after an interrupt.
-                                    Exit 3: the limit resets within 15 minutes
+                                    Exit 3: the limit resets within 30 minutes
 baton handover auto on|off|status   Whether the app does this by itself when an open window
                                     reaches its limit while you work there (on by default)
 baton rules [--json]                Show which accounts may continue the work in which folders
