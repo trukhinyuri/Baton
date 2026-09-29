@@ -353,7 +353,7 @@ do {
                 for note in ClaudeSource.notes(paths: manager.paths) { print("  \(note)") }
                 switch LocalOnly.missingKeys(in: manager.paths.claudeApp) {
                 case nil: print("Local only: Claude.app unreadable, can't check its settings")
-                case []: print("Local only keys present: ccRemoteControlDefaultEnabled, remoteControlStayReachable")
+                case []: print("Local only keys present: \(LocalOnly.keyNames.joined(separator: ", "))")
                 case let missing?: print("Local only: missing in this Claude Desktop: \(missing.joined(separator: ", "))")
                 }
             } else {

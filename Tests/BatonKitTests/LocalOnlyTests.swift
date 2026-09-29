@@ -5,7 +5,7 @@ import Testing
 
 extension Sandbox {
     /// A Claude.app whose `app.asar` names `keys`, the way a Claude Desktop version that knows them does.
-    func installClaude(knowing keys: [String] = ["ccRemoteControlDefaultEnabled", "remoteControlStayReachable"]) throws {
+    func installClaude(knowing keys: [String] = LocalOnly.keyNames) throws {
         let asar = paths.claudeApp.appending(path: "Contents/Resources/app.asar")
         try FileManager.default.createDirectory(at: asar.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(("\u{0}asar-header{}" + keys.map { "const k=\"\($0)\";" }.joined() + "\u{0}").utf8).write(to: asar)
@@ -94,6 +94,87 @@ struct LocalOnlyTests {
         try box.write(compact, to: box.desktopConfig(box.main))
         _ = try closed(box).apply(window: "main")
         #expect(box.read(box.desktopConfig(box.main)) == #"{"preferences":{"ccRemoteControlDefaultEnabled":false,"keepAwakeEnabled":true,"zoom":1.0},"x":"é"}"#)
+    }
+
+    static let pinned = """
+        {
+          "preferences": {
+            "ccRemoteControlDefaultEnabled": false,
+            "remoteControlPinnedFolders": [
+              "/Users/someone/Projects/app",
+              "/Users/someone/Projects/site"
+            ],
+            "zoom": 1.0
+          }
+        }
+
+        """
+
+    @Test func pinnedFoldersAreEmptiedInClosedWindowWithBackup() throws {
+        let box = try Sandbox()
+        try box.installClaude()
+        try box.write(Self.pinned, to: box.desktopConfig(box.work))
+        let localOnly = closed(box)
+
+        #expect(try localOnly.apply(window: "work") == .on)
+
+        let expected = Self.pinned.replacingOccurrences(
+            of: "[\n      \"/Users/someone/Projects/app\",\n      \"/Users/someone/Projects/site\"\n    ]", with: "[]")
+        #expect(expected != Self.pinned)
+        #expect(box.read(box.desktopConfig(box.work)) == expected, "only the list changed, byte for byte")
+        let saved = NativeForkCarry.files(under: box.paths.backupsDir).filter { $0.hasSuffix("Profiles/work/claude_desktop_config.json") }
+        #expect(saved.count == 1)
+        #expect(saved.first.flatMap { box.read(box.paths.backupsDir.appending(path: $0)) } == Self.pinned, "the backup holds the list")
+        let state = try String(contentsOf: box.paths.localOnlyFile, encoding: .utf8)
+        #expect(state.contains("remoteControlPinnedFolders") && state.contains("site"), "the list is recorded to put back")
+        #expect(localOnly.status(window: "work") == .on)
+        #expect(try localOnly.apply(window: "work") == .on, "a second run changes nothing")
+        #expect(NativeForkCarry.files(under: box.paths.backupsDir).filter { $0.hasSuffix("Profiles/work/claude_desktop_config.json") }.count == 1)
+    }
+
+    @Test func pinnedFoldersAreRestoredOnOff() throws {
+        let box = try Sandbox()
+        try box.installClaude()
+        try box.write(Self.pinned, to: box.desktopConfig(box.work))
+        let localOnly = closed(box)
+        _ = try localOnly.apply(window: "work")
+
+        #expect(try localOnly.disable(window: "work") == .off)
+
+        #expect(box.read(box.desktopConfig(box.work)) == Self.pinned, "the list comes back, byte for byte")
+    }
+
+    @Test func pinnedFoldersChangedInsideClaudeStayOnOff() throws {
+        let box = try Sandbox()
+        try box.installClaude()
+        try box.write(Self.pinned, to: box.desktopConfig(box.work))
+        let localOnly = closed(box)
+        _ = try localOnly.apply(window: "work")
+        // The user pins a folder again inside Claude while Local only is on.
+        let changed = try String(contentsOf: box.desktopConfig(box.work), encoding: .utf8)
+            .replacingOccurrences(of: #""remoteControlPinnedFolders": []"#, with: #""remoteControlPinnedFolders": ["/Users/someone/new"]"#)
+        try box.write(changed, to: box.desktopConfig(box.work))
+        #expect(localOnly.status(window: "work") == .pending, "drifted: emptied again at the next cold start")
+
+        #expect(try localOnly.disable(window: "work") == .off)
+
+        #expect(try preferences(box.desktopConfig(box.work))["remoteControlPinnedFolders"] as? [String] == ["/Users/someone/new"])
+    }
+
+    @Test func pinnedFoldersMissingAreNotInserted() throws {
+        let box = try Sandbox()
+        try box.installClaude()
+        try box.write(#"{"preferences":{"keepAwakeEnabled":true}}"#, to: box.desktopConfig(box.work))
+        let localOnly = closed(box)
+
+        #expect(try localOnly.apply(window: "work") == .on)
+
+        #expect(try preferences(box.desktopConfig(box.work))["remoteControlPinnedFolders"] == nil)
+        #expect(box.read(box.desktopConfig(box.work)) == #"{"preferences":{"ccRemoteControlDefaultEnabled":false,"keepAwakeEnabled":true}}"#)
+        // An empty list Claude wrote is already Local only's value, however it is spaced.
+        try box.write(#"{"preferences":{"ccRemoteControlDefaultEnabled":false,"remoteControlPinnedFolders":[ ]}}"#, to: box.desktopConfig(box.main))
+        #expect(try localOnly.apply(window: "main") == .on)
+        #expect(box.read(box.desktopConfig(box.main)) == #"{"preferences":{"ccRemoteControlDefaultEnabled":false,"remoteControlPinnedFolders":[ ]}}"#)
     }
 
     @Test func pendingWhileRunning() throws {
@@ -220,7 +301,7 @@ struct LocalOnlyTests {
 
     @Test func reportsMissingKeyForUnknownClaudeVersion() throws {
         let box = try Sandbox()
-        try box.installClaude(knowing: ["remoteControlStayReachable"])
+        try box.installClaude(knowing: ["remoteControlStayReachable", "remoteControlPinnedFolders"])
         try box.write(Self.config, to: box.desktopConfig(box.work))
         let localOnly = closed(box)
 
