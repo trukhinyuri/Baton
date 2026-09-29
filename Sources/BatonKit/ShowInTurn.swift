@@ -28,8 +28,11 @@ public enum ShowInTurn {
         /// Sessions handed to the window, in order.
         public var shown: [String] = []
         public var resumed: [String] = []
-        /// Shown, or never shown because the window went away, and not seen to continue.
+        /// Shown, or never shown because the window went away or a link couldn't be handed over, and not seen to
+        /// continue.
         public var notResumed: [String] = []
+        /// Why links stopped before the last session, when handing one over failed.
+        public var failure: String?
     }
 
     public enum Refusal: LocalizedError, Equatable {
@@ -51,10 +54,11 @@ extension ProfileManager {
     /// Hands `sessions` to the open `window` one resume link at a time, in the order given (`ShowInTurn.order`),
     /// moving on once `done` says a session continued or `dwell` seconds passed; after the last, waits up to `lastWait`
     /// seconds for the ones still going. Only a window that started after its cards were shared is sent links: in one
-    /// that started before, a link imports the session under a new name. If the window closes on the way, no more
-    /// links go out, since a link would start Claude on the main app's data.
+    /// that started before, a link imports the session under a new name. `sharedAt` is when the caller shared them, for
+    /// a share Baton made before it last started (this run remembers only its own). If the window closes on the way,
+    /// or a link can't be handed over, no more links go out and the rest are named in `notResumed`.
     public func showInTurn(
-        _ window: String, sessions: [String], dwell: Double = 25, lastWait: Double = 60, poll: Double = 1,
+        _ window: String, sessions: [String], sharedAt: Date? = nil, dwell: Double = 25, lastWait: Double = 60, poll: Double = 1,
         done: @escaping @Sendable (String) -> Bool
     ) async throws -> ShowInTurn.Result {
         var result = ShowInTurn.Result()
@@ -66,7 +70,8 @@ extension ProfileManager {
         guard !copies.isEmpty else { throw ShowInTurn.Refusal.windowClosed(label) }
         let dataDir = window == "main" ? paths.mainDataDir : paths.dataDir(for: window)
         let started = copies.compactMap(\.launchDate).min()
-        guard !WindowStatus.sessionsWaitForRestart(shared: lastCardShared(into: dataDir), windowStarted: started) else {
+        let shared = [lastCardShared(into: dataDir), sharedAt].compactMap { $0 }.max()
+        guard !WindowStatus.sessionsWaitForRestart(shared: shared, windowStarted: started) else {
             throw ShowInTurn.Refusal.startedBeforeShare(label)
         }
         let app = window == "main" ? paths.claudeApp : paths.engine(for: window)
@@ -76,7 +81,11 @@ extension ProfileManager {
                 Log.notice("continue", "Window \(window) closed while its sessions were shown; \(sessions.count - result.shown.count) not shown")
                 break
             }
-            try await deliver([ClaudeLink.resume(session)], to: app)
+            do { try await deliver([ClaudeLink.resume(session)], to: app) } catch {
+                result.failure = error.localizedDescription
+                Log.error("continue", "Couldn't show a session in window \(window): \(error.localizedDescription)")
+                break
+            }
             result.shown.append(session)
             let until = Date().addingTimeInterval(dwell)
             while !done(session), Date() < until { try await Task.sleep(for: .seconds(poll)) }

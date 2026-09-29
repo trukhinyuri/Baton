@@ -87,10 +87,28 @@ struct ShowInTurnTests {
         }
         #expect(handed.links.isEmpty, "no link that would import a session or start Claude on the main app's data")
 
+        let afterRestart = try manager(box, handed: handed, started: now.addingTimeInterval(-60))
+        await #expect(throws: ShowInTurn.Refusal.startedBeforeShare("WORK"), "a share from before Baton's restart, given by the caller") {
+            try await afterRestart.showInTurn("work", sessions: Self.sessions, sharedAt: now) { _ in true }
+        }
+
         let restarted = try manager(box, handed: handed, started: now.addingTimeInterval(1))
         restarted.noteCardsShared(into: [box.work.standardizedFileURL.path], at: now)
         let result = try await restarted.showInTurn("work", sessions: Self.sessions, dwell: 0, lastWait: 0, poll: 0.01) { _ in true }
         #expect(result.resumed == Self.sessions && handed.links.count == 3)
+    }
+
+    @Test func failedLinkStopsAndNamesTheRest() async throws {
+        let box = try Sandbox()
+        let handed = Handed()
+        let manager = try manager(box, handed: handed)
+        manager.appActivator = { _, links in
+            guard handed.links.isEmpty else { throw CocoaError(.fileReadUnknown) }
+            handed.add(links)
+        }
+        let result = try await manager.showInTurn("work", sessions: Self.sessions, dwell: 0, lastWait: 0, poll: 0.01) { _ in true }
+        #expect(result.shown == [Self.sessions[0]] && result.resumed == [Self.sessions[0]])
+        #expect(result.notResumed == Array(Self.sessions.dropFirst()) && result.failure != nil)
     }
 
     @Test func resumedMeansLiveThereAndTranscriptGrew() throws {
