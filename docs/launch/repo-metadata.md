@@ -44,3 +44,21 @@ entry is the release candidate's entry renamed, so the release keeps its full no
 
 `desc "Run one Claude Desktop window per account and hand sessions between them"`, in
 `packaging/homebrew/Casks/baton.rb`.
+
+## Demo GIF
+
+There is none yet. `scripts/screenshots.sh` draws each picture from one still frame in demo mode
+(`BATON_DEMO_SNAPSHOT`), so it cannot make the frames of an animation, and nothing else may launch the app to film it.
+The limit and its reset time are already in `docs/images/main-window.png` (the banner "Claude WORK is at its limit. It
+resets at 6:07 AM." and the WORK row).
+
+To record one by hand later, on a Mac where running the app is fine:
+
+1. `make app`, then start it with the sample data and nothing from your shell:
+   `env -i HOME="$HOME" USER="$USER" PATH=/usr/bin:/bin BATON_DEMO=1 build/Baton.app/Contents/MacOS/Baton`.
+   Demo mode changes nothing on the Mac.
+2. Record only the Baton window with **Screenshot.app** (⇧⌘5 → **Record Selected Portion**), about 10 seconds: the
+   limit banner, **Continue in Claude LAB…**, the sheet naming what follows and what stays, and back.
+3. Turn it into a GIF of at most 5 MB and 820 px wide, for example
+   `ffmpeg -i demo.mov -vf "fps=12,scale=820:-1:flags=lanczos" -loop 0 docs/images/continue-demo.gif`.
+4. Put it in the README under the main screenshot, with an `alt` that says what happens in it.
