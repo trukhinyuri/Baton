@@ -172,8 +172,8 @@ struct InterfaceSyncTests {
             try writePrefs(box, box.main, ["epitaxy-transcript-links-in-preview": true])
             let target = (inside ? box.work.appending(path: "kept") : box.root.appending(path: "dotfiles")).appending(path: "work.json")
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let before = #"{"mcpServers":{"files":{"command":"/usr/bin/true","env":{"TOKEN":"x"}}},"preferences":{"epitaxyPrefs":{"#
-                + #""epitaxy-transcript-links-in-preview":false}}}"#
+            let servers = #""mcpServers":{"files":{"command":"/usr/bin/true","env":{"TOKEN":"x"}}}"#
+            let before = "{\(servers),\"preferences\":{\"epitaxyPrefs\":{\"epitaxy-transcript-links-in-preview\":false}}}"
             try box.write(before, to: target)
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             let config = box.work.appending(path: InterfaceSync.desktopConfig)
