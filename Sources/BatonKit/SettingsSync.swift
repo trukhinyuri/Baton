@@ -89,7 +89,8 @@ public struct SettingsSync: Sendable {
             for key in Self.mainOnlyPreferences { prefs[key] = false }
             if !prefs.isEmpty || current["preferences"] != nil { result["preferences"] = prefs }
             if !NSDictionary(dictionary: result).isEqual(to: current) {
-                if fm.fileExists(atPath: desktop.path) { _ = try backup.save(desktop) }
+                // A linked config is written where it leads, so that file's content is what is backed up.
+                if fm.fileExists(atPath: desktop.path) { _ = try backup.save(LocalOnly.writeTarget(desktop)) }
                 try Self.writeJSON(result, to: desktop)
                 changed += 1
             }
@@ -455,10 +456,9 @@ public struct SettingsSync: Sendable {
         return object
     }
 
+    /// A link stays a link: the file it leads to is written, with that file's permissions (see `LocalOnly.replace`).
     private static func writeJSON(_ object: [String: Any], to url: URL) throws {
-        let permissions = (try? FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions]) ?? NSNumber(value: 0o600)
-        try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]).write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+        try LocalOnly.replace(url, with: JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]))
     }
 
     /// Copies theme, zoom and language into the profile's `config.json`, leaving everything else in it untouched.

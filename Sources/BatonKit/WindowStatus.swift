@@ -159,6 +159,7 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
         case let error as ProfileError:
             switch error {
             case .claudeNotInstalled: "Claude Desktop isn't installed"
+            case .claudeNotFromAnthropic: "This Claude isn't signed by Anthropic"
             case .invalidLabel, .reservedLabel, .invalidEmail, .duplicateLabel: "Check the subscription details"
             case .notFound: "Subscription not found"
             case .cloneFailed: "Couldn't create the app copy"

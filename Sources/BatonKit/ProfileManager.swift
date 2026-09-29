@@ -3,6 +3,8 @@ import Darwin
 
 public enum ProfileError: LocalizedError, Equatable {
     case claudeNotInstalled(String)
+    /// The Claude found isn't signed by Anthropic, so it is neither opened nor given `claude://` links.
+    case claudeNotFromAnthropic(String)
     case invalidLabel
     /// MAIN and CLAUDE name the main Claude window.
     case reservedLabel(String)
@@ -29,6 +31,9 @@ public enum ProfileError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .claudeNotInstalled(let path): "Claude Desktop is not installed at \(path). Install it from claude.ai/download."
+        case .claudeNotFromAnthropic(let path):
+            "\(path) isn't Claude Desktop as Anthropic signs it, so Baton doesn't open it or send claude:// links to it. "
+                + "Install Claude Desktop from Anthropic in Applications."
         case .invalidLabel: "Use 1–\(Profile.maxLabelLength) letters, digits, “-” or “_” for the label."
         case .reservedLabel(let label): "“\(label)” is the name of the main Claude window. Choose another label."
         case .invalidEmail: "That doesn't look like an email address."
@@ -123,7 +128,8 @@ public struct SyncReport: Equatable, Sendable {
 public final class ProfileManager: @unchecked Sendable {
     public let paths: Paths
     public let registry: ProfileRegistry
-    public let signInRouting: SignInRouting
+    /// Set once at start; a test substitutes one that records instead of calling `lsregister`.
+    public internal(set) var signInRouting: SignInRouting
     /// The `baton` executable that launchers call. `nil` makes launchers open the engine directly.
     public var cliPath: URL?
     private var fm: FileManager { .default }
@@ -244,7 +250,12 @@ public final class ProfileManager: @unchecked Sendable {
             return ["Claude Desktop wasn't found in Applications. Install it, then open Baton again."]
         }
         var warnings: [String] = []
-        do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) } catch { warnings.append(error.localizedDescription) }
+        // `Paths.findClaude` names an unsigned /Applications/Claude.app only when no Claude Anthropic signed is found.
+        if ClaudeSource.isSignedByAnthropic(paths.claudeApp) {
+            do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) } catch { warnings.append(error.localizedDescription) }
+        } else {
+            warnings.append(ProfileError.claudeNotFromAnthropic(paths.claudeApp.path).localizedDescription)
+        }
         if let warning = claudeVersionWarning { warnings.append(warning) }
         warnings += ManagedPolicy.warnings(in: managedPreferences, user: NSUserName())
         return warnings + Self.reservedIDWarnings(profiles)
@@ -566,6 +577,10 @@ public final class ProfileManager: @unchecked Sendable {
     }
 
     private func openMainNow(links: [URL]) async throws {
+        guard ClaudeSource.isSignedByAnthropic(paths.claudeApp) else {
+            guard fm.fileExists(atPath: paths.claudeApp.path) else { throw ProfileError.claudeNotInstalled(paths.claudeApp.path) }
+            throw ProfileError.claudeNotFromAnthropic(paths.claudeApp.path)
+        }
         let isMain = { (copy: RunningClaude) in copy.uses(dataDir: self.paths.mainDataDir, mainDataDir: self.paths.mainDataDir, bundle: self.paths.claudeApp) }
         if runningClaudes().contains(where: isMain) {
             noteOpened("main", warning: nil)

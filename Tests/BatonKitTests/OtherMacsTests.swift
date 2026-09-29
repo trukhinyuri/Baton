@@ -79,6 +79,25 @@ struct OtherMacsTests {
         #expect(find([downloaded], signed: []) == installed.path)
     }
 
+    /// The unsigned app `findClaude` names when no Claude Anthropic signed is found is never opened as the main window
+    /// nor registered for `claude://` links; start-up says why instead.
+    @Test func anUnsignedClaudeIsNeitherOpenedNorRegistered() async throws {
+        let box = try Sandbox()
+        // Not Claude's bundle id, so nothing on this Mac could take it for Claude even if it were opened.
+        try box.claudeBundle(at: box.paths.claudeApp, identifier: "com.example.lookalike")
+        let manager = ProfileManager(paths: box.paths)
+        let recorder = Recorder()
+        manager.signInRouting = SignInRouting(paths: box.paths) { app, on in recorder.calls.append((app.lastPathComponent, on)) }
+        let refusal = ProfileError.claudeNotFromAnthropic(box.paths.claudeApp.path)
+
+        await #expect(throws: refusal) { try await manager.openMain() }
+        #expect(manager.startUpChecks().contains(refusal.localizedDescription))
+        #expect(recorder.calls.isEmpty, "not registered for claude:// links")
+
+        try FileManager.default.removeItem(at: box.paths.claudeApp)
+        await #expect(throws: ProfileError.claudeNotInstalled(box.paths.claudeApp.path)) { try await manager.openMain() }
+    }
+
     @Test func restoresMainAfterStaleSignIn() throws {
         let box = try Sandbox()
         let recorder = Recorder()

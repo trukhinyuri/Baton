@@ -188,4 +188,26 @@ struct SessionSyncRulesTests {
         #expect(onTmp.covers(other + "/gone/deeper"), "\(other) against \(onTmp.folder)")
         #expect(onTmp.covers(resolved + "/gone"))
     }
+
+    /// Work reached through a link from one ruled folder into another keeps the rule of the folder it is in: a link
+    /// in a personal folder never lets a client's work continue in the personal account.
+    @Test func aLinkIntoAnotherRuledFolderKeepsThatFoldersRule() throws {
+        let box = try Sandbox()
+        let fm = FileManager.default
+        let acme = box.root.appending(path: "Clients/acme/src", directoryHint: .isDirectory)
+        let notes = box.root.appending(path: "Personal/Notes", directoryHint: .isDirectory)
+        try fm.createDirectory(at: acme, withIntermediateDirectories: true)
+        try fm.createDirectory(at: notes, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: notes.appending(path: "acme-link"), withDestinationURL: acme.deletingLastPathComponent())
+        let rules = [
+            FolderRule(folder: box.root.appending(path: "Clients").path, accounts: ["client@corp.example"]),
+            FolderRule(folder: notes.path, accounts: ["me@home.example"]),
+        ]
+
+        let linked = notes.appending(path: "acme-link/src").path
+        #expect(FolderRules.rule(for: linked, in: rules)?.accounts == ["client@corp.example"])
+        #expect(FolderRules.allowedAccounts(for: [linked], in: rules)?.accounts == ["client@corp.example"])
+        #expect(FolderRules.rule(for: notes.appending(path: "acme-link/gone").path, in: rules)?.accounts == ["client@corp.example"])
+        #expect(FolderRules.rule(for: notes.appending(path: "diary").path, in: rules)?.accounts == ["me@home.example"])
+    }
 }

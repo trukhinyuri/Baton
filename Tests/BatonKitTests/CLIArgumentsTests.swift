@@ -66,6 +66,21 @@ struct CLIArgumentsTests {
         #expect(CLIArguments.usage(for: ["frobnicate"], in: Self.usage) == Self.usage, "the whole help")
     }
 
+    /// `baton --help` shows `--json` for exactly the commands that take it: `local-only on --json` stops with exit 2,
+    /// so its line must not offer it.
+    @Test func theHelpOffersJSONOnlyWhereItIsTaken() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let main = try String(contentsOf: repo.appending(path: "Sources/baton/main.swift"), encoding: .utf8)
+        let help = try #require(main.components(separatedBy: "let usage = \"\"\"\n").last?.components(separatedBy: "    \"\"\"").first)
+        for args in [
+            ["list"], ["doctor"], ["rules"], ["conversations"], ["sync"], ["local-only", "on"], ["local-only", "off"],
+            ["local-only", "status"], ["local-only", "cloud-lock", "status"],
+        ] {
+            let offered = CLIArguments.usage(for: args, in: help).contains("--json")
+            #expect(offered == (CLIArguments.problem(in: args + ["--json"]) == nil), "\(args)")
+        }
+    }
+
     /// Only the commands that read skip re-registering the main Claude with Launch Services at start.
     @Test func readOnlyCommandsAreKnown() {
         for args in [

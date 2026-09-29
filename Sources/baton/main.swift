@@ -21,9 +21,11 @@ let usage = """
                                           every Claude window closed. Exit 3: kept for now; the printed line
                                           says why
       baton doctor [--json]               Read-only session and folder checks
-      baton local-only on|off|status [PROFILE|main] [--json]
+      baton local-only on|off [PROFILE|main]
                                           Keep new Claude Code sessions off Remote Control; on by
                                           default. No profile: every window without its own choice
+      baton local-only status [PROFILE|main] [--json]
+                                          Show whether Local only is on in each window, or in one
       baton local-only cloud-lock on|off|status
                                           Optional, off by default: also deny the one MCP tool that
                                           moves a Claude Code session to the cloud, Mac-wide, in
