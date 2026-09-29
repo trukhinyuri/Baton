@@ -120,7 +120,9 @@ public struct SyncReport: Equatable, Sendable {
 /// 1. File locks (`FileLock`) first, outermost first: registry.lock, engines.lock, open.lock (which auto-continue's
 ///    state uses too), sync.lock, local-only.lock. A lock never waits for one earlier in this list, so work that needs
 ///    open.lock after a sync (Local only for closed windows) runs only once sync.lock is released. The leaf file locks
-///    (continue-copies.lock, limit-sightings.lock, the log's) are taken last and wait for nothing while held.
+///    (continue-copies.lock, limit-sightings.lock, the log's) are taken last and wait for nothing while held. Opening
+///    a window keeps open.lock until the copy it starts shows up among the running apps (`FileLock.Held`), and takes no
+///    other lock meanwhile.
 /// 2. In-process locks (`stateLock`, `cardsSharedLock`) last, held only while reading or writing memory: never while
 ///    waiting for a file lock, doing I/O or calling out. Across threads of one process the file locks serialize too.
 ///    The one exception is `LimitTracker`'s lock: it is held while reading and writing limit-sightings.json under that
@@ -141,6 +143,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// Each window's warning from the last time this manager prepared it to start, and the latest of them.
     private var openWarnings: [String: String] = [:]
     private var openWarning: String?
+    /// The problems the last `applyLocalOnlyToClosedWindows()` found, reported only when new.
+    private var localOnlyProblems: Set<String> = []
     /// Windows this manager is opening, each with the calls waiting for their turn (see `oneAtATime`).
     private var opening: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// Opening can succeed using the profile's saved settings even if portable setup could not be refreshed.
@@ -417,6 +421,9 @@ public final class ProfileManager: @unchecked Sendable {
     var runningCopies: (@Sendable () -> [RunningClaude])?
     /// Starts a new copy of an app with these arguments and links; tests replace it so nothing is started.
     var appLauncher: (@Sendable (_ app: URL, _ arguments: [String], _ links: [URL]) async throws -> Void)?
+    /// Hands links to a running copy of an app, or brings it forward without any; tests replace it so nothing reaches
+    /// Launch Services.
+    var appActivator: (@Sendable (_ app: URL, _ links: [URL]) async throws -> Void)?
     /// Called while a window is prepared to start, under open.lock; tests use it to overlap other work with it.
     var whilePreparing: (@Sendable (String) -> Void)?
 
@@ -461,10 +468,16 @@ public final class ProfileManager: @unchecked Sendable {
             }
         }
         // The app and the CLI may open a profile at the same moment; the merges read and write without Claude's locks.
+        // Kept until the copy started below shows up, so an open waiting for it, in another process, finds it running.
+        let openLock = try FileLock.Held(paths.stateDir.appending(path: "open.lock"))
+        defer { openLock.release() }
         let startedMeanwhile =
-            try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) { () -> RunningClaude? in
+            openLock.run { () -> RunningClaude? in
                 // Started while this call waited, from its Dock icon or by another Baton: its data is in use now.
-                if let window = runningClaudes().first(where: { window(of: profile.id, is: $0) }) { return window }
+                if let window = runningClaudes().first(where: { window(of: profile.id, is: $0) }) {
+                    noteOpened(profile.id, warning: nil)
+                    return window
+                }
                 whilePreparing?(id)
                 // Auto-continue entries a Continue had to leave on in windows open at the time: this window stays
                 // closed until it starts below, so its own are turned off now, app or no app (`AutoResumeNote.stillOn`).
@@ -487,9 +500,23 @@ public final class ProfileManager: @unchecked Sendable {
                         ? nil : "Claude \(profile.label) opened, but some shared settings could not be refreshed. " + problems.joined(separator: " "))
                 // Once more, just before starting it: a second copy on the same data would find its storage in use.
                 return runningClaudes().first { window(of: profile.id, is: $0) }
-            } ?? nil
-        if let startedMeanwhile { return try await bringForward(startedMeanwhile, app: engine, links: links) }
-        try await launch(engine, arguments: ["--user-data-dir=\(paths.dataDir(for: profile.id).path)"], links: links, label: profile.label)
+            }
+        if let startedMeanwhile {
+            openLock.release()
+            return try await bringForward(startedMeanwhile, app: engine, links: links)
+        }
+        try await launch(engine, arguments: ["--user-data-dir=\(paths.dataDir(for: profile.id).path)"], links: links, label: profile.label) {
+            await self.waitUntilListed { self.runningClaudes().contains { self.window(of: profile.id, is: $0) } }
+            openLock.release()
+        }
+    }
+
+    /// Waits until the copy just started shows up among the running apps, as `isRunning` finds it, for at most
+    /// `seconds`: Launch Services lists a new copy only once it has started.
+    private func waitUntilListed(_ isRunning: () -> Bool, seconds: Double = 5) async {
+        for _ in 0..<Int(seconds * 10) where !isRunning() {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
     }
 
     /// Hands `links` to a window that is already running, or brings it forward.
@@ -530,20 +557,25 @@ public final class ProfileManager: @unchecked Sendable {
     /// Starts a new copy of the app at `app` and hands it `links`. Until its window exists, Claude keeps only the
     /// last link it receives (`open-url` stores one pending URL), so only the first goes with the launch; the rest
     /// follow once the window is on screen.
-    private func launch(_ app: URL, arguments: [String], links: [URL], label: String) async throws {
-        if let appLauncher { return try await appLauncher(app, arguments, links) }
+    /// - Parameter started: called once the copy has started, before the rest of the links are handed over.
+    private func launch(_ app: URL, arguments: [String], links: [URL], label: String, started: () async -> Void) async throws {
+        if let appLauncher {
+            try await appLauncher(app, arguments, links)
+            return await started()
+        }
         let configuration = NSWorkspace.OpenConfiguration()
         // Profile windows run the same app; a new instance keeps one window from reusing another's.
         configuration.createsNewApplicationInstance = true
         configuration.arguments = arguments
         guard let first = links.first else {
             _ = try await NSWorkspace.shared.openApplication(at: app, configuration: configuration)
-            return
+            return await started()
         }
-        let started = try await NSWorkspace.shared.open([first], withApplicationAt: app, configuration: configuration)
+        let copy = try await NSWorkspace.shared.open([first], withApplicationAt: app, configuration: configuration)
+        await started()
         let rest = Array(links.dropFirst())
         guard !rest.isEmpty else { return }
-        guard try await waitForWindow(of: started.processIdentifier, seconds: 90) else {
+        guard try await waitForWindow(of: copy.processIdentifier, seconds: 90) else {
             throw ProfileError.windowDidNotAppear(label: label, links: rest.count)
         }
         try await Task.sleep(for: .seconds(1))
@@ -587,11 +619,17 @@ public final class ProfileManager: @unchecked Sendable {
             return try await bringMainForward(links: links)
         }
         var startedMeanwhile = false
+        // Kept until the copy started below shows up, as for a profile's window.
+        var openLock: FileLock.Held?
+        defer { openLock?.release() }
         do {
-            _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {
+            let held = try FileLock.Held(paths.stateDir.appending(path: "open.lock"))
+            openLock = held
+            held.run {
                 // Started while this call waited, from the Dock for instance: its data is in use now.
                 if runningClaudes().contains(where: isMain) {
                     startedMeanwhile = true
+                    noteOpened("main", warning: nil)
                     return
                 }
                 whilePreparing?("main")
@@ -605,11 +643,18 @@ public final class ProfileManager: @unchecked Sendable {
         } catch {
             noteOpened("main", warning: "Claude opened, but sessions could not be shared first: \(error.localizedDescription)")
         }
-        if startedMeanwhile { return try await bringMainForward(links: links) }
-        try await launch(paths.claudeApp, arguments: [], links: links, label: "(main)")
+        if startedMeanwhile {
+            openLock?.release()
+            return try await bringMainForward(links: links)
+        }
+        try await launch(paths.claudeApp, arguments: [], links: links, label: "(main)") {
+            await self.waitUntilListed { self.runningClaudes().contains(where: isMain) }
+            openLock?.release()
+        }
     }
 
     private func bringMainForward(links: [URL]) async throws {
+        if let appActivator { return try await appActivator(paths.claudeApp, links) }
         if !links.isEmpty {
             try await deliver(links, to: paths.claudeApp)
         } else {
@@ -620,6 +665,7 @@ public final class ProfileManager: @unchecked Sendable {
     /// Hands a `claude://` link to the running window of the app at `app`. macOS delivers it to that exact copy,
     /// so no other window sees it and no permission is needed.
     private func deliver(_ links: [URL], to app: URL) async throws {
+        if let appActivator { return try await appActivator(app, links) }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         _ = try await NSWorkspace.shared.open(links, withApplicationAt: app, configuration: configuration)
@@ -833,7 +879,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// Applies Local only to every closed window still waiting for it (`LocalOnly.Status.pending`), so a window started
     /// from the Dock or Spotlight rather than through Baton starts with it too. It takes open.lock, so it never runs
     /// while sync.lock is held (see the lock order).
-    /// - Returns: a line for each window it couldn't apply to.
+    /// - Returns: a line for each window it couldn't apply to, unless the previous call gave the same line: a window
+    ///   that fails every time is tried after every sync but reported once, so the log isn't filled with it.
     @discardableResult
     public func applyLocalOnlyToClosedWindows() -> [String] {
         guard !isReadOnly else { return [] }
@@ -844,7 +891,10 @@ public final class ProfileManager: @unchecked Sendable {
                 problems.append("Local only could not be applied to Claude \(displayLabel(of: window)): \(error.localizedDescription)")
             }
         }
-        return problems
+        return stateLock.withLock {
+            defer { localOnlyProblems = Set(problems) }
+            return problems.filter { !localOnlyProblems.contains($0) }
+        }
     }
 
     /// Each window's Local only status, MAIN first, for the window list and `doctor`.
@@ -1079,6 +1129,8 @@ public final class ProfileManager: @unchecked Sendable {
     public func finishFirstSignIn(_ id: String) async throws {
         try ensureWritable()
         guard profiles.contains(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
+        // Nothing is prepared unless the window is opened again below, so a warning from an earlier start is not shown.
+        noteOpened(id, warning: nil)
         _ = try? syncSessions()
         let engine = paths.engine(for: id).standardizedFileURL
         let running = claudeProcesses().filter { $0.bundleURL?.standardizedFileURL == engine }
@@ -1307,25 +1359,70 @@ enum FileLock {
     /// - Returns: the body's result, or `nil` if `blocking` is false and the lock is held elsewhere.
     static func withLock<T>(_ url: URL, blocking: Bool, _ body: () throws -> T) throws -> T? {
         let path = url.standardizedFileURL.path
+        if (Thread.current.threadDictionary[heldKey] as? Set<String>)?.contains(path) == true { return blocking ? try body() : nil }
+        return try holding(path) {
+            let descriptor = try openFile(url)
+            defer { close(descriptor) }
+            guard flock(descriptor, LOCK_EX | (blocking ? 0 : LOCK_NB)) == 0 else {
+                if !blocking && (errno == EWOULDBLOCK || errno == EAGAIN) { return nil }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            defer { flock(descriptor, LOCK_UN) }
+            return try body()
+        }
+    }
+
+    /// Runs `body` with `path` among the locks the current thread holds.
+    private static func holding<T>(_ path: String, _ body: () throws -> T) rethrows -> T {
         let thread = Thread.current.threadDictionary
-        var held = thread[heldKey] as? Set<String> ?? []
-        if held.contains(path) { return blocking ? try body() : nil }
-        held.insert(path)
-        thread[heldKey] = held
+        thread[heldKey] = (thread[heldKey] as? Set<String> ?? []).union([path])
         defer {
             var after = thread[heldKey] as? Set<String> ?? []
             after.remove(path)
             thread[heldKey] = after
         }
+        return try body()
+    }
+
+    private static func openFile(_ url: URL) throws -> Int32 {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR, 0o644)
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        defer { close(descriptor) }
-        guard flock(descriptor, LOCK_EX | (blocking ? 0 : LOCK_NB)) == 0 else {
-            if !blocking && (errno == EWOULDBLOCK || errno == EAGAIN) { return nil }
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        return descriptor
+    }
+
+    /// A lock taken at once and kept across `await`s until `release()`, such as open.lock while a window starts.
+    /// `flock` belongs to the open file, not to a thread, so any thread may let it go.
+    final class Held: @unchecked Sendable {
+        private let path: String
+        private let lock = NSLock()
+        private var descriptor: Int32
+
+        /// Waits for the lock.
+        init(_ url: URL) throws {
+            path = url.standardizedFileURL.path
+            descriptor = try FileLock.openFile(url)
+            guard flock(descriptor, LOCK_EX) == 0 else {
+                let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                close(descriptor)
+                throw error
+            }
         }
-        defer { flock(descriptor, LOCK_UN) }
-        return try body()
+
+        deinit { release() }
+
+        /// Runs `body` on this thread with the lock counted as this thread's, so a `withLock` for it in there runs
+        /// its body at once instead of waiting for itself.
+        func run<T>(_ body: () throws -> T) rethrows -> T { try FileLock.holding(path, body) }
+
+        /// Lets the lock go; later calls do nothing.
+        func release() {
+            lock.withLock {
+                guard descriptor >= 0 else { return }
+                flock(descriptor, LOCK_UN)
+                close(descriptor)
+                descriptor = -1
+            }
+        }
     }
 }

@@ -48,7 +48,9 @@ public struct SessionSync: Sendable {
         public var tombstonesRetired = 0
         /// Copies that had a grant or rule another account's copy held too, which was taken out of them.
         public var grantsRemoved = 0
-        /// Copies read to compare with their card. An idle run, in which no card changed, reads none.
+        /// Copies read to compare with their card. An idle run, in which no card changed, reads only the copies no match
+        /// is remembered for, such as those of "No folder" sessions, which may need this window's link, and those that name
+        /// another conversation than their card.
         public var cardsCompared = 0
         /// The data folders (standardized paths) that got a session card in this run. A window that was already open
         /// shows those sessions only after a restart.
@@ -225,21 +227,28 @@ public struct SessionSync: Sendable {
             return carriesPermissionMode?(dataDir) ?? carriers.contains(dataDir.standardizedFileURL.path)
         }
         // Grants and rules that copies by older releases carried into other accounts. Looked for once, in the first
-        // run of a release that keeps them apart; each is then taken out of every copy of its card.
+        // run of a release that keeps them apart, entry by entry (`grantItems`), so what one account added since
+        // doesn't hide what the other gave; each is then taken out of every copy of its card.
         let leakedFile = paths.stateDir.appending(path: "cross-account-grants.json")
-        let savedLeaks = LeakedGrants.load(from: leakedFile)
+        var savedLeaks = LeakedGrants.load(from: leakedFile)
         var leaks = savedLeaks ?? LeakedGrants()
         if savedLeaks == nil {
             for (name, folders) in holders where !accountBound.contains(name) {
-                var accounts: [String: Set<String>] = [:]  // "field digest" → accounts whose copy has it
+                var accounts: [String: Set<String>] = [:]  // grant item → accounts whose copy has it
                 for pair in folders {
                     guard let facts = reads[pair.appending(path: name).path]?.facts else { continue }
-                    for (field, digest) in facts.grants where !Self.permissionModeFields.contains(field) || !keepsPermissionMode(pair) {
-                        accounts[field + " " + digest, default: []].insert(Self.account(of: pair))
+                    for (field, items) in facts.grants where !Self.permissionModeFields.contains(field) || !keepsPermissionMode(pair) {
+                        for item in items { accounts[item, default: []].insert(Self.account(of: pair)) }
                     }
                 }
                 let shared = accounts.filter { $0.value.count > 1 }.keys
                 if !shared.isEmpty { leaks.cards[name] = shared.sorted() }
+            }
+            // Saved before any copy loses a grant: a run that stopped partway would look again and no longer find a
+            // grant it already took out of one of the two accounts.
+            if !dryRun {
+                try leaks.save(to: leakedFile)
+                savedLeaks = leaks
             }
         }
         var live: Set<String>?
@@ -468,7 +477,7 @@ public struct SessionSync: Sendable {
                 for (name, grants) in leaks.cards {
                     let held = Set(
                         (holders[name] ?? []).flatMap { pair in
-                            (reads[pair.appending(path: name).path]?.facts.grants ?? [:]).map { $0.key + " " + $0.value }
+                            (reads[pair.appending(path: name).path]?.facts.grants ?? [:]).values.flatMap { $0 }
                         })
                     leaks.cards[name] = grants.filter(held.contains)
                     if leaks.cards[name]?.isEmpty == true { leaks.cards[name] = nil }
@@ -512,7 +521,7 @@ public struct SessionSync: Sendable {
     }
 
     /// Grants and session rules found in copies of one card in two accounts, which older releases copied between
-    /// accounts: `cross-account-grants.json` in the state folder. Card name → "<field> <SHA-256 of its value>".
+    /// accounts: `cross-account-grants.json` in the state folder. Card name → its grant items (`grantItems`).
     /// Its absence means it was never looked for; a damaged file is looked for again, which only takes more out.
     struct LeakedGrants: Codable, Equatable {
         var version = 1
@@ -532,15 +541,36 @@ public struct SessionSync: Sendable {
         }
     }
 
-    /// `card` without the members `grants` names ("<field> <digest of its value>"); the rest keeps its bytes.
+    /// `card` without the grant items `grants` names (`grantItems`): a value goes whole, an element of a list or an
+    /// entry of an object on its own, and a field left with nothing goes too. Everything else keeps its bytes.
     static func without(_ grants: Set<String>, in card: Data) -> Data {
         guard !grants.isEmpty, let members = JSONMembers.parse([UInt8](card)) else { return card }
-        let kept = members.filter { member in
-            guard isGrant(member.name), let value = try? JSONSerialization.jsonObject(with: Data(member.value), options: .fragmentsAllowed)
-            else { return true }
-            return !grants.contains(member.name + " " + grantDigest(value))
+        var changed = false
+        let kept = members.compactMap { member -> JSONMembers.Member? in
+            guard isGrant(member.name) else { return member }
+            let left = remaining(member.value, of: member.name, without: grants)
+            changed = changed || left != member.value
+            return left.map { JSONMembers.Member(name: member.name, key: member.key, value: $0) }
         }
-        return kept.count == members.count ? card : Data(JSONMembers.object(kept))
+        return changed ? Data(JSONMembers.object(kept)) : card
+    }
+
+    /// The value of grant field `field` without the items `grants` names, or `nil` if nothing is left of it.
+    private static func remaining(_ bytes: ArraySlice<UInt8>, of field: String, without grants: Set<String>) -> ArraySlice<UInt8>? {
+        func decoded(_ bytes: ArraySlice<UInt8>) -> Any? { try? JSONSerialization.jsonObject(with: Data(bytes), options: .fragmentsAllowed) }
+        guard let value = decoded(bytes) else { return bytes }
+        if grants.contains(field + " " + grantDigest(value)) { return nil }
+        if value is [Any], let elements = JSONMembers.elements(bytes) {
+            let kept = elements.filter { element in decoded(element).map { !grants.contains(field + "[] " + grantDigest($0)) } ?? true }
+            return kept.count == elements.count ? bytes : kept.isEmpty ? nil : JSONMembers.array(kept)
+        }
+        if value is [String: Any], let members = JSONMembers.parse(Array(bytes)) {
+            let kept = members.filter { member in
+                decoded(member.value).map { !grants.contains(field + "{} " + grantDigest([member.name: $0])) } ?? true
+            }
+            return kept.count == members.count ? bytes : kept.isEmpty ? nil : JSONMembers.object(kept)
+        }
+        return bytes
     }
 
     /// Each session folder's archive list as the last run left it, keyed by the folder's path. Only session IDs.
@@ -625,6 +655,18 @@ public struct SessionSync: Sendable {
     /// The grants and rules older releases copied between accounts: computer-use fields and the permission fields.
     static func isGrant(_ key: String) -> Bool {
         isComputerUse(key) || permissionModeFields.contains(key) || permissionRuleFields.contains(key)
+    }
+
+    /// What the value of grant field `field` allows, item by item: each element of a list (an allowed app, one change
+    /// to the session's rules) as "<field>[] <digest>", each entry of an object (one computer-use flag) as
+    /// "<field>{} <digest of {key: value}>", and any other value as "<field> <digest>". Only items that allow
+    /// something (`grantsSomething`) count, so an entry one account added doesn't change the others.
+    static func grantItems(_ field: String, _ value: Any) -> Set<String> {
+        switch value {
+        case let list as [Any]: return Set(list.filter(grantsSomething).map { field + "[] " + grantDigest($0) })
+        case let object as [String: Any]: return Set(object.filter { grantsSomething($0.value) }.map { field + "{} " + grantDigest([$0.key: $0.value]) })
+        default: return grantsSomething(value) ? [field + " " + grantDigest(value)] : []
+        }
     }
 
     /// Of a value as JSON with sorted keys, so equal values in differently written cards match.
@@ -736,9 +778,8 @@ public struct SessionSync: Sendable {
         /// When a window made this card, by creating the session or importing it: the later of `createdAt` and
         /// `indexedAt`.
         var made: Date?
-        /// A digest of each computer-use and permission field's value (`grantDigest`), by field, for values that allow
-        /// something (`grantsSomething`).
-        var grants: [String: String] = [:]
+        /// What each computer-use and permission field allows (`grantItems`), by field, for fields that allow something.
+        var grants: [String: Set<String>] = [:]
     }
 
     static func facts(of data: Data) -> CardFacts {
@@ -755,7 +796,11 @@ public struct SessionSync: Sendable {
             priors: Set((card["priorCliSessionIds"] as? [String] ?? []).map { $0.lowercased() }),
             scratch: paths.contains { $0.contains(scratchFolder) },
             made: made.map { Date(timeIntervalSince1970: $0 / 1000) },
-            grants: card.filter { isGrant($0.key) && grantsSomething($0.value) }.mapValues(grantDigest))
+            grants: card.reduce(into: [:]) { grants, member in
+                guard isGrant(member.key) else { return }
+                let items = grantItems(member.key, member.value)
+                if !items.isEmpty { grants[member.key] = items }
+            })
     }
 
     /// Whether a computer-use or permission value allows anything: not empty, false, zero or `"default"`, the values
@@ -776,7 +821,8 @@ public struct SessionSync: Sendable {
     }
 
     /// What a run keeps of a card between runs, while its file stays the same: what it says and a digest of its
-    /// bytes, not the bytes. A copy found to match its card is remembered here, so an idle run compares nothing.
+    /// bytes, not the bytes. A copy found to match its card is remembered here, so an idle run doesn't compare it again
+    /// (see `Report.cardsCompared` for the copies it does compare).
     final class CardRead: @unchecked Sendable {
         let facts: CardFacts
         /// SHA-256 of the bytes, in hex.
@@ -804,7 +850,7 @@ public struct SessionSync: Sendable {
 
         /// Roughly what keeping it takes, in bytes: measured at about 1 KB for a card with one folder and no priors.
         var cost: Int {
-            let strings = [facts.transcript ?? ""] + facts.folders + Array(facts.priors) + facts.grants.map { $0.key + $0.value }
+            let strings = [facts.transcript ?? ""] + facts.folders + Array(facts.priors) + facts.grants.values.flatMap { $0 }
             return 640 + strings.reduce(0) { $0 + $1.utf8.count + 48 }
         }
 
@@ -1102,6 +1148,53 @@ enum JSONMembers {
 
     static func values(_ members: [Member]) -> [String: ArraySlice<UInt8>] {
         Dictionary(members.map { ($0.name, $0.value) }, uniquingKeysWith: { _, last in last })
+    }
+
+    /// Compact, the way `JSON.stringify` writes it.
+    static func array(_ elements: [ArraySlice<UInt8>]) -> ArraySlice<UInt8> {
+        var bytes: [UInt8] = [UInt8(ascii: "[")]
+        for (i, element) in elements.enumerated() {
+            if i > 0 { bytes.append(UInt8(ascii: ",")) }
+            bytes += element
+        }
+        bytes.append(UInt8(ascii: "]"))
+        return bytes[...]
+    }
+
+    /// The elements of the array `json` as written, spaces around them left out, or `nil` if it isn't one array.
+    static func elements(_ json: ArraySlice<UInt8>) -> [ArraySlice<UInt8>]? {
+        let space: [UInt8] = [0x20, 0x09, 0x0A, 0x0D]
+        func trimmed(_ bytes: ArraySlice<UInt8>) -> ArraySlice<UInt8> {
+            var bytes = bytes
+            while let first = bytes.first, space.contains(first) { bytes = bytes.dropFirst() }
+            while let last = bytes.last, space.contains(last) { bytes = bytes.dropLast() }
+            return bytes
+        }
+        let json = trimmed(json)
+        guard json.count >= 2, json.first == UInt8(ascii: "["), json.last == UInt8(ascii: "]") else { return nil }
+        let end = json.endIndex - 1
+        var result: [ArraySlice<UInt8>] = []
+        var depth = 0, inString = false, start = json.startIndex + 1, i = start
+        while i < end {
+            if inString {
+                if json[i] == UInt8(ascii: "\\") { i += 1 } else if json[i] == UInt8(ascii: "\"") { inString = false }
+            } else {
+                switch json[i] {
+                case UInt8(ascii: "\""): inString = true
+                case UInt8(ascii: "{"), UInt8(ascii: "["): depth += 1
+                case UInt8(ascii: "}"), UInt8(ascii: "]"): depth -= 1
+                case UInt8(ascii: ",") where depth == 0:
+                    result.append(trimmed(json[start..<i]))
+                    start = i + 1
+                default: break
+                }
+            }
+            i += 1
+        }
+        let last = trimmed(json[start..<end])
+        if !last.isEmpty || !result.isEmpty { result.append(last) }
+        guard !inString, depth == 0, !result.contains(where: \.isEmpty) else { return nil }
+        return result
     }
 
     /// Compact, the way `JSON.stringify` writes it.

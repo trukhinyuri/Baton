@@ -277,4 +277,25 @@ struct LocalOnlyTests {
         #expect(box.read(dotfiles) == Self.config, "put back in the linked file")
         #expect(try fm.destinationOfSymbolicLink(atPath: box.desktopConfig(box.work).path) == dotfiles.path)
     }
+
+    /// A closed window whose Local only fails every time is tried again after every sync, and its problem is reported
+    /// once, and again only after it went away and came back.
+    @Test func aProblemThatStaysIsReportedOnce() throws {
+        let box = try Sandbox()
+        try box.installClaude()
+        try ProfileRegistry(paths: box.paths).save([Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")])
+        let manager = ProfileManager(paths: box.paths)
+        manager.runningCopies = { [] }
+        try box.write("{ damaged", to: box.desktopConfig(box.work))
+
+        #expect(manager.applyLocalOnlyToClosedWindows().count == 1)
+        #expect(manager.applyLocalOnlyToClosedWindows().isEmpty, "the same problem again")
+        #expect(manager.localOnly.status(window: "work") == .pending, "still tried")
+
+        try box.write("{}", to: box.desktopConfig(box.work))
+        #expect(manager.applyLocalOnlyToClosedWindows().isEmpty)
+        #expect(manager.localOnly.status(window: "work") == .on)
+        try box.write("{ damaged", to: box.desktopConfig(box.work))
+        #expect(manager.applyLocalOnlyToClosedWindows().count == 1, "it came back")
+    }
 }
