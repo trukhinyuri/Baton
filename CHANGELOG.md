@@ -82,7 +82,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 ### The window
 
 - The result of an action shows above the list in full and can be selected. A warning stays until you close it; a later notice shows over it, and the warning comes back when that notice goes
-- Start-up warnings (Baton running from Downloads, an unreachable data folder, the Claude version, managed policies) show at launch and stay until Baton quits. Opening a window shows that window's warning; a window that was already running shows none
+- Start-up warnings (Baton running from Downloads, an unreachable data folder, the Claude version, managed policies) show at launch and stay until Baton quits. Opening a window shows that window's warning, which stays until that window is opened again, whatever is opened or shown after it; a window that was already running shows none
 - An error from the menu bar, such as opening a window or Share Sessions Now, opens Baton's window to show it. Each action clears only its own message, and a window's Open button waits while an action on it runs, so two clicks start it once
 - Text, badges and warnings reach a contrast of 4.5:1 in the light and dark appearances, a selected session's details stay readable, and Dock labels are darker. Limits read "5-hour" and "weekly" throughout the app
 - VoiceOver reads a window row as its account and its usage, and a session in the Continue sheet as one item; section and sheet titles are headings, and results and what Baton is doing are read out

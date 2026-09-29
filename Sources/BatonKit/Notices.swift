@@ -41,3 +41,26 @@ public struct Notices: Equatable, Sendable {
         if passing == text { passing = nil }
     }
 }
+
+/// What the footer says about opening windows: each window's warning from its last open, oldest first, so opening or
+/// showing another window never hides one. A window's warning changes only when that window is opened again.
+public struct OpenWarnings: Equatable, Sendable {
+    struct Warning: Equatable, Sendable {
+        var window: String
+        var text: String
+    }
+
+    private var warnings: [Warning] = []
+
+    public init() {}
+
+    /// What an open of `window` left: its warning (`ProfileManager.openWarning(of:)`), or `nil`, which clears the
+    /// one from its earlier open.
+    public mutating func record(_ warning: String?, for window: String) {
+        warnings.removeAll { $0.window == window }
+        if let warning { warnings.append(Warning(window: window, text: warning)) }
+    }
+
+    /// Every window's warning, one after another; `nil` when there is none.
+    public var text: String? { warnings.isEmpty ? nil : warnings.map(\.text).joined(separator: " ") }
+}

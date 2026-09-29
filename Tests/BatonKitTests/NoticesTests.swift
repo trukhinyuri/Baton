@@ -54,3 +54,28 @@ struct NoticesTests {
         #expect(notices.current == nil)
     }
 }
+
+@Suite("Open warnings")
+struct OpenWarningsTests {
+    /// Opening LAB cleanly, or showing the main window, leaves WORK's warning in the footer: WORK still runs without
+    /// the settings it couldn't refresh.
+    @Test func anotherWindowsOpenKeepsAWindowsWarning() {
+        let work = "Claude WORK opened, but some shared settings could not be refreshed. Sessions: damaged file."
+        var warnings = OpenWarnings()
+        warnings.record(work, for: "work")
+        warnings.record(nil, for: "lab")
+        warnings.record(nil, for: "main")
+        #expect(warnings.text == work)
+
+        let lab = "Claude LAB opened, but some shared settings could not be refreshed. Setup: disk full."
+        warnings.record(lab, for: "lab")
+        #expect(warnings.text == work + " " + lab)
+        // WORK opened again, cleanly this time: only its own warning goes.
+        warnings.record(nil, for: "work")
+        #expect(warnings.text == lab)
+        warnings.record("Newer.", for: "lab")
+        #expect(warnings.text == "Newer.")
+        warnings.record(nil, for: "lab")
+        #expect(warnings.text == nil)
+    }
+}

@@ -39,16 +39,16 @@ final class AppModel: ObservableObject {
     var presentWindow: (@MainActor () -> Void)?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
-    /// What the footer shows: the start-up warnings, which stay until Baton quits, then the last open's warning.
+    /// What the footer shows: the start-up warnings, which stay until Baton quits, then each window's open warning.
     /// Worked out when read, not kept by a didSet: Swift runs no didSet for what a class sets in its own init.
     var setupWarning: String? {
-        let shown = [startUpWarning, openWarning].compactMap { $0 }.joined(separator: " ")
+        let shown = [startUpWarning, openWarnings.text].compactMap { $0 }.joined(separator: " ")
         return shown.isEmpty ? nil : shown
     }
     /// Set once, in init, through `warnAtStartUp`.
     @Published private var startUpWarning: String?
-    /// The warning of the window the last open action started (`ProfileManager.openWarning(of:)`).
-    @Published private var openWarning: String? { didSet { remember(openWarning) } }
+    /// Each window's warning from the last time an open action started it (`ProfileManager.openWarning(of:)`).
+    @Published private var openWarnings = OpenWarnings()
     @Published var pendingRemoval: ProfileStatus?
     /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
     @Published private(set) var installWarning: String?
@@ -506,8 +506,8 @@ final class AppModel: ObservableObject {
     /// Runs `work` with `message` in the footer.
     /// - Parameters:
     ///   - window: the window the action is on, whose Open button waits for it.
-    ///   - opens: the action opens `window`, so that window's warning replaces the last open's; the start-up warnings
-    ///     stay either way.
+    ///   - opens: the action opens `window`, so that window's warning replaces its earlier one; other windows' warnings
+    ///     and the start-up warnings stay.
     private func run(_ message: String?, window: String? = nil, opens: Bool = false, _ work: @escaping @Sendable () async throws -> Void) {
         runOpening(message, window: window) {
             try await work()
@@ -523,7 +523,11 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 // Never waits: the manager guards warnings with a lock it holds only while reading or writing them.
-                if let window = try await work() { openWarning = manager.openWarning(of: window) }
+                if let window = try await work() {
+                    let warning = manager.openWarning(of: window)
+                    openWarnings.record(warning, for: window)
+                    remember(warning)
+                }
             } catch { show(error) }
             operations.finish(operation)
             reload()
