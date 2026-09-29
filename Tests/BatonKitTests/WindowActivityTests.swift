@@ -80,6 +80,20 @@ struct WindowActivityTests {
         #expect(manager.liveSessions(in: "work") == [Self.session])
     }
 
+    @Test func wrapperOfAClaudeCodeProcessIsNotOneItself() throws {
+        let box = try Sandbox()
+        let manager = try manager(
+            box, copies: FakeCopies(), processes: [process(300, Self.session, executable: inData(box.work))], tree: [300: 250, 250: 100])
+        let judged = Steps()
+        manager.processWorking = { pid, _ in
+            judged.add("\(pid)")
+            return true
+        }
+        manager.processTree = { ProcessTree(claudes: [250, 300], parent: { [300: 250, 250: 100][$0] }) }
+        #expect(manager.activity(of: "work") == .busy(working: 1), "the disclaimer helper 250 runs Claude Code 300")
+        #expect(judged.all == ["300"])
+    }
+
     @Test func runningWithoutLiveProcessIsIdle() throws {
         let box = try Sandbox()
         let manager = try manager(
@@ -141,21 +155,28 @@ struct WindowActivityTests {
             idle: [200, 201])
         #expect(manager.activity(of: "work") == .idle, "Claude Desktop keeps idle processes for hours")
         #expect(manager.liveSessions(in: "work") == [Self.session, Self.other])
-        #expect(manager.workingSessions(in: "work").isEmpty)
+        #expect(manager.sessionsOutlivingQuit(of: "work").isEmpty, "both end when the window quits")
         manager.quitRequester = { copies.askToQuit($0, andQuit: true) }
         _ = await manager.quitWindow("work", seconds: 0.2)
         #expect(copies.quitRequests == [100], "asked to quit, since nothing works there")
     }
 
-    @Test func oneWorkingProcessMakesWindowBusyAndOnlyItsSessionWorks() throws {
+    @Test func oneWorkingProcessMakesWindowBusy() throws {
         let box = try Sandbox()
         let manager = try manager(
             box, copies: FakeCopies(),
             processes: [process(200, Self.session, executable: inData(box.work)), process(201, Self.other, executable: inData(box.work))],
             idle: [201])
         #expect(manager.activity(of: "work") == .busy(working: 1))
-        #expect(manager.workingSessions(in: "work") == [Self.session])
         #expect(manager.liveSessions(in: "work") == [Self.session, Self.other])
+    }
+
+    @Test func sessionOpenInAnUnplacedClaudeOutlivesTheWindow() throws {
+        let box = try Sandbox()
+        let manager = try manager(
+            box, copies: FakeCopies(), processes: [process(200, Self.session, executable: inData(box.work))], unregistered: [Self.other])
+        #expect(manager.liveSessions(in: "work") == [Self.session, Self.other])
+        #expect(manager.sessionsOutlivingQuit(of: "work") == [Self.other], "its own process ends with the window; the other doesn't")
     }
 
     @Test func idleProcessOutlivingItsWindowIsNotClosed() async throws {
@@ -166,20 +187,43 @@ struct WindowActivityTests {
         #expect(await manager.quitWindow("work", seconds: 0.2) == false)
     }
 
-    @Test func descendantStartedAfterTheProcessIsWork() {
-        let start = Date(timeIntervalSince1970: 1_000)
-        let tree: [pid_t: [pid_t]] = [10: [11], 11: [12], 20: [21]]
+    /// Measured on this Mac: a `zsh -c` running a tool, a background shell hours old, a `shasum` stuck on its input.
+    @Test func onlyYoungDescendantsAreWork() {
+        let now = Date(timeIntervalSince1970: 100_000)
+        let start = now.addingTimeInterval(-3 * 3600)
+        let tree: [pid_t: [pid_t]] = [10: [11], 20: [21], 30: [31], 31: [32], 40: [41], 50: [51], 51: [52]]
         let started: [pid_t: Date] = [
-            11: start.addingTimeInterval(2), 12: start.addingTimeInterval(600), 21: start.addingTimeInterval(3),
+            11: now.addingTimeInterval(-5 * 60),  // a tool, or a background child started 5 minutes ago
+            21: now.addingTimeInterval(-3.5 * 3600 + 60),  // a shell stuck in shasum for 3.5 hours
+            31: start.addingTimeInterval(2), 32: start.addingTimeInterval(3),  // a server started with the session, its helper
+            41: start.addingTimeInterval(60),  // a background shell from long ago
         ]
-        let after = start.addingTimeInterval(ClaudeWork.serverGrace)
         let children = { (pid: pid_t) in tree[pid] ?? [] }
-        #expect(ClaudeWork.hasWorkingDescendant(10, children: children, startTime: { started[$0] }, after: after), "a tool under a server")
-        #expect(!ClaudeWork.hasWorkingDescendant(20, children: children, startTime: { started[$0] }, after: after), "a server started with it")
-        #expect(!ClaudeWork.hasWorkingDescendant(30, children: children, startTime: { started[$0] }, after: after), "no children")
+        let young = { (pid: pid_t, processStart: Date) in
+            ClaudeWork.hasYoungDescendant(pid, children: children, startTime: { started[$0] }, processStart: processStart, now: now)
+        }
+        #expect(young(10, start), "a young child counts")
+        #expect(!young(20, start), "a stuck descendant 3.5 hours old doesn't")
+        #expect(!young(30, start), "a server started with the session, and an old helper under it, don't")
+        #expect(!young(40, start), "an old background shell doesn't")
+        #expect(!young(60, start), "no children")
+
+        // A session auto-continued 5 s ago: its server is exempt, but not what runs below it, and not a later child.
+        let fresh = now.addingTimeInterval(-60)
+        let justStarted: [pid_t: Date] = [51: fresh.addingTimeInterval(2), 52: fresh.addingTimeInterval(5), 11: fresh.addingTimeInterval(11)]
+        #expect(
+            ClaudeWork.hasYoungDescendant(50, children: children, startTime: { justStarted[$0] }, processStart: fresh, now: now),
+            "the grace covers only the direct child that ran 10 s after the start")
+        #expect(
+            !ClaudeWork.hasYoungDescendant(
+                50, children: { $0 == 50 ? [51] : [] }, startTime: { justStarted[$0] }, processStart: fresh, now: now),
+            "the direct child alone is exempt")
+        #expect(
+            ClaudeWork.hasYoungDescendant(10, children: children, startTime: { justStarted[$0] }, processStart: fresh, now: now),
+            "a direct child started 11 s after the start counts")
     }
 
-    @Test func recentTranscriptOrBusyRegistryIsWork() throws {
+    @Test func recentTranscriptOrFreshBusyRegistryIsWork() throws {
         let box = try Sandbox()
         let claudeDir = box.paths.claudeDir
         let project = claudeDir.appending(path: "projects/-repo")
@@ -190,11 +234,30 @@ struct WindowActivityTests {
         #expect(ClaudeWork.isWorking(pid: pid, session: Self.session.uppercased(), claudeDir: claudeDir), "written just now")
         let later = Date().addingTimeInterval(ClaudeWork.quiet + 5)
         #expect(!ClaudeWork.isWorking(pid: pid, session: Self.session, claudeDir: claudeDir, now: later), "quiet for over a minute")
+        let agents = project.appending(path: Self.session + "/subagents/workflows/wf_1")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let agent = agents.appending(path: "agent-1.jsonl")
+        try Data("{}\n".utf8).write(to: agent)
+        try FileManager.default.setAttributes([.modificationDate: later.addingTimeInterval(-10)], ofItemAtPath: agent.path)
+        #expect(
+            ClaudeWork.isWorking(pid: pid, session: Self.session, claudeDir: claudeDir, now: later),
+            "a workflow it runs writes its agents' transcripts, not its own")
+        try FileManager.default.removeItem(at: project.appending(path: Self.session))
         let sessions = claudeDir.appending(path: "sessions")
         try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
-        try Data(#"{"pid":999999,"sessionId":"x","status":"busy"}"#.utf8).write(to: sessions.appending(path: "999999.json"))
+        let registry = { (status: String, updated: Date?) in
+            let at = updated.map { #","statusUpdatedAt":\#(Int64($0.timeIntervalSince1970 * 1000))"# } ?? ""
+            try Data(#"{"pid":999999,"sessionId":"x","status":"\#(status)"\#(at)}"#.utf8).write(to: sessions.appending(path: "999999.json"))
+        }
+        try registry("busy", later.addingTimeInterval(-60))
         #expect(ClaudeWork.isWorking(pid: pid, session: Self.session, claudeDir: claudeDir, now: later), "a turn under way")
-        try Data(#"{"pid":999999,"sessionId":"x","status":"idle"}"#.utf8).write(to: sessions.appending(path: "999999.json"))
+        try registry("busy", later.addingTimeInterval(-ClaudeWork.busyFresh - 60))
+        #expect(
+            !ClaudeWork.isWorking(pid: pid, session: Self.session, claudeDir: claudeDir, now: later),
+            "a busy left over from 11 minutes ago, with the transcript quiet since")
+        try registry("busy", nil)
+        #expect(!ClaudeWork.isWorking(pid: pid, session: nil, claudeDir: claudeDir, now: later), "a busy without its time can't be told fresh")
+        try registry("idle", later)
         #expect(!ClaudeWork.isWorking(pid: pid, session: nil, claudeDir: claudeDir, now: later))
     }
 }

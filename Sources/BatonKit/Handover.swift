@@ -12,8 +12,9 @@ public struct HandoverSession: Codable, Equatable, Sendable {
     public var folders: [String]
     /// The limit cut it mid-turn, so it resumes in the destination.
     public var cut: Bool
-    /// A Claude Code process of it works in the window at its limit (`ClaudeWork`), so a copy continues instead of the
-    /// session itself.
+    /// It stays open in the window at its limit after the handover, so a copy continues instead of the session itself:
+    /// that window stayed open (it still worked after the wait, or didn't quit), or the session is open in a `claude`
+    /// Baton can't place. Nothing moves as itself while its window is open.
     public var asCopy: Bool
     /// Its last message, for the order sessions are shown in.
     public var lastActivity: Date
@@ -72,7 +73,8 @@ public struct HandoverPlan: Equatable, Sendable {
     public var destinationActivity: WindowActivity
     public var seeding: Seeding
     public var leftovers: [HandoverLeftover]
-    /// The reset is within `HandoverTrigger.waitsFor`: the window continues its own work then, and nothing is handed over.
+    /// The reset is waited for (`HandoverTrigger.waitedFor`): the window continues its own work then, and nothing is
+    /// handed over.
     public var picksUpItself = false
     /// Moved by hand (the Continue sheet, `planMove`) rather than because of a limit: it runs even when this limit's
     /// work was handed over already.
@@ -82,21 +84,6 @@ public struct HandoverPlan: Equatable, Sendable {
 
     /// Sessions that resume in the destination.
     public var cut: [HandoverSession] { sessions.filter(\.cut) }
-
-    /// Sessions the limit cut that continue in the source at its reset instead, while the source stays open, with
-    /// their auto-continue on there: moved as themselves (`waitsForSource`), or still running there, whose copies
-    /// move without resuming (`keepsRunning`). A busy source is expected to stay open.
-    public var resumeInSource: [HandoverSession] {
-        sourceActivity.isBusy ? sessions.filter { Self.waitsForSource($0) || Self.keepsRunning($0) } : []
-    }
-
-    /// A cut session, not a copy, whose auto-continue is on in the source: the source continues it at its reset if
-    /// it is still open then.
-    static func waitsForSource(_ session: HandoverSession) -> Bool { session.cut && session.armed && !session.asCopy }
-
-    /// A cut session still running in the source with its auto-continue on there: it continues there, so its copy
-    /// in the destination is never seeded or resumed.
-    static func keepsRunning(_ session: HandoverSession) -> Bool { session.cut && session.armed && session.asCopy }
 }
 
 /// What a handover did.
@@ -106,7 +93,7 @@ public struct HandoverResult: Equatable, Sendable {
         case done
         /// The destination is busy and restarts once nothing works there (`finishWaitingHandover`).
         case waiting
-        /// The reset is within `HandoverTrigger.waitsFor`; nothing was done.
+        /// The reset is waited for (`HandoverTrigger.waitedFor`); nothing was done.
         case picksUpItself
         /// The source's limit reset before the destination was free: the work continues in the source.
         case resetFirst
@@ -485,7 +472,7 @@ extension ProfileManager {
         guard atLimit || byHand else { throw HandoverError.notAtLimit(label) }
         let resetsAt = atLimit ? status.limits.binding(now: now)?.reset?.at : nil
         let sourceActivity = activity(of: source)
-        if !byHand, let resetsAt, resetsAt.timeIntervalSince(now) <= HandoverTrigger.waitsFor {
+        if !byHand, atLimit, let resetsAt = HandoverTrigger.waitedFor(status.limits, now: now) {
             return HandoverPlan(
                 source: source, destination: source, resetsAt: resetsAt, sessions: [], sourceActivity: sourceActivity,
                 destinationActivity: sourceActivity, seeding: .seed, leftovers: [], picksUpItself: true)
@@ -543,14 +530,8 @@ extension ProfileManager {
             leftovers.append(.folderRule(count: found.count, folder: folder, accounts: found.accounts))
         }
         if remoteControl > 0 { leftovers.append(.remoteControl(count: remoteControl)) }
-        let running = sourceActivity.isBusy ? sessions.filter(HandoverPlan.keepsRunning).count : 0
-        if running > 0 { leftovers.append(.keepRunningInSource(count: running)) }
-        let copies = sessions.filter(\.asCopy).count - running
+        let copies = sessions.filter(\.asCopy).count
         if copies > 0 { leftovers.append(.copies(count: copies)) }
-        if sourceActivity.isBusy {
-            let later = sessions.filter(HandoverPlan.waitsForSource).count
-            if later > 0 { leftovers.append(.resumeInSource(count: later)) }
-        }
         let cowork = ConversationIndex.scan(paths: paths, windows: windows).filter {
             $0.kind == .cowork && $0.ownerID == source && now.timeIntervalSince($0.lastActivity) < LimitKind.fiveHour.window
         }.count
@@ -571,12 +552,13 @@ extension ProfileManager {
 
     /// The source's work: its cards whose session last ran in it, runs in it now, or was cut by this limit, with a
     /// transcript on this Mac and not archived. Cards Remote Control reaches in another window are left out; those it
-    /// reaches in the source are marked.
+    /// reaches in the source are marked. Each is planned to move as itself, since the source is closed first, once
+    /// nothing works there (`handOver`); only one open in a `claude` Baton can't place outlives that and is a copy.
     func handoverCandidates(source: String, account: String, resetsAt: Date?, now: Date) -> [HandoverCandidate] {
         let sourceDir = dataDir(of: source)
         let windows = windows
         let transcripts = ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)
-        let live = liveSessions(in: source), working = workingSessions(in: source)
+        let live = liveSessions(in: source), outliving = sessionsOutlivingQuit(of: source)
         let liveIn = limitTracker.liveWindows(paths: paths, windows: windows)
         let lastRan = limitTracker.lastWindows(paths: paths, windows: windows, now: now)
         let owners = SessionSync.owners(dataDirs: windows.map(\.dataDir), paths: paths)
@@ -618,7 +600,7 @@ extension ProfileManager {
                 }
                 let folders = summary.folder.map { $0.contains(SessionSync.scratchFolder) ? [] : [$0] } ?? []
                 let item = HandoverSession(
-                    card: cardName, transcript: session, title: summary.title, folders: folders, cut: cut, asCopy: working.contains(session),
+                    card: cardName, transcript: session, title: summary.title, folders: folders, cut: cut, asCopy: outliving.contains(session),
                     lastActivity: ConversationIndex.lastActivity(of: transcript) ?? .distantPast, armed: armed.contains(cardName))
                 found.append(HandoverCandidate(session: item, remoteControl: remoteControl))
             }
@@ -637,11 +619,11 @@ extension ProfileManager {
         return "\(source.displayLabel) is at its limit\(until ?? ""). No window has room\(frees)."
     }
 
-    /// Hands the work `plan` describes over: closes the source if nothing is live there (otherwise its live sessions
-    /// continue as copies), turns its auto-continue off for the sessions that go, carries their pins and groups,
-    /// seeds Claude's own auto-continue in the destination, opens it and shows each session to resume until Claude
-    /// continues it. A busy destination is never interrupted and never sent a link: the handover waits
-    /// (`finishWaitingHandover`) and says so. Nothing is imported by link.
+    /// Hands the work `plan` describes over: closes the source once nothing works there, waiting up to
+    /// `handoverSourceWait` for a busy one (otherwise its open sessions continue as copies), turns its auto-continue
+    /// off for the sessions that go, carries their pins and groups, seeds Claude's own auto-continue in the destination,
+    /// opens it and shows each session to resume until Claude continues it. A busy destination is never interrupted and
+    /// never sent a link: the handover waits (`finishWaitingHandover`) and says so. Nothing is imported by link.
     /// - Parameters:
     ///   - dwell: seconds each session stays on screen; by default 25 when Claude resumes them, 3 when it can't.
     ///   - lastWait: seconds to wait for the last sessions after the last is shown.
@@ -673,20 +655,29 @@ extension ProfileManager {
             guard try log.claim(entry, now: now) else { throw HandoverError.alreadyHandedOver(displayLabel(of: plan.source)) }
         }
 
-        // 1. The source: closed when nothing works there, so every session moves as itself; otherwise its working
-        // sessions continue as copies and its turn-offs wait until it closes (D1). A session open in a `claude` Baton
-        // can't place stays live after the source quits, so it continues as a copy too; a source asked to quit that
-        // stays open (Claude asked something) keeps every live session, so each continues as a copy.
+        // 1. The source. Nothing moves as itself while it is open, or one session could run in two windows: an idle
+        // process there wakes when a sibling messages its session, the user types there, or a timer fires. A busy
+        // source is waited out, checked every `handoverSourceWait.poll` seconds for up to `handoverSourceWait.limit`,
+        // then asked to quit, never forced. Closed, every session moves as itself, but for one open in a `claude`
+        // Baton can't place, which stays live and continues as a copy. Still working after the wait, or declining to
+        // quit (Claude asked something), it stays open: every session open there continues as a copy, and its
+        // turn-offs wait until it closes.
+        if activity(of: plan.source).isBusy {
+            progress(HandoverText.sourceFinishing(source: displayLabel(of: plan.source), destination: displayLabel(of: plan.destination)))
+            let (limit, poll, _) = handoverSourceWait
+            let free = try await waitUntilNothingWorks(in: plan.source, limit: limit, poll: poll)
+            if !free {
+                Log.notice("handover", "Claude Code still worked in window \(plan.source) after \(Int(limit)) s; its open sessions continue as copies")
+            }
+        }
         progress("Closing \(displayLabel(of: plan.source))…")
         let liveBefore = liveSessions(in: plan.source)
-        let sourceBusy = activity(of: plan.source).isBusy
-        let sourceClosed = sourceBusy ? false : await quitWindow(plan.source)
+        let sourceClosed = await quitWindow(plan.source, seconds: handoverSourceWait.quit)
         entry.sourceClosed = sourceClosed
         plan.sourceActivity = sourceClosed ? .closed : activity(of: plan.source)
         let live =
             sourceClosed
-            ? liveBefore.intersection(liveSessionIDs?() ?? LiveSessions.ids(claudeDir: paths.claudeDir))
-            : sourceBusy ? workingSessions(in: plan.source) : liveSessions(in: plan.source)
+            ? liveBefore.intersection(liveSessionIDs?() ?? LiveSessions.ids(claudeDir: paths.claudeDir)) : liveSessions(in: plan.source)
         // Copies an earlier handover of this episode made before it stopped are used again, so no second card appears.
         let earlier =
             log.entries().last {
@@ -1212,11 +1203,8 @@ public struct HandoverSummary: Encodable, Equatable {
         self.destination = destination
         resetsAt = plan.resetsAt
         seeding = plan.seeding.rawValue
-        let later = Set(plan.resumeInSource.map(\.card))
         sessions = plan.sessions.map {
-            Session(
-                card: $0.card, session: $0.transcript, title: $0.title, folders: $0.folders, resumes: $0.cut && !later.contains($0.card),
-                asCopy: $0.asCopy)
+            Session(card: $0.card, session: $0.transcript, title: $0.title, folders: $0.folders, resumes: $0.cut, asCopy: $0.asCopy)
         }
         let at = plan.resetsAt.map { LimitText.time($0) }
         leftovers = plan.leftovers.compactMap { HandoverText.clause($0, source: source, destination: destination, at: at) }

@@ -16,6 +16,8 @@ final class HandoverWorld: @unchecked Sendable {
     private var log: [String] = []
     private var pid: pid_t = 100
     var resumes = true
+    /// The window asked to quit stays open, as when Claude asks the user something first.
+    var declinesQuit = false
 
     init(_ box: Sandbox) { self.box = box }
 
@@ -49,6 +51,8 @@ final class HandoverWorld: @unchecked Sendable {
     /// The window quits, and the Claude Code processes it kept end with it.
     func quit(_ copy: RunningClaude) {
         lock.withLock {
+            log.append("asked \(copy.bundlePath == box.paths.claudeApp.standardizedFileURL.path ? "main" : "work") to quit")
+            guard !declinesQuit else { return }
             copies.removeAll { $0.pid == copy.pid }
             if !copies.contains(where: { $0.bundlePath == copy.bundlePath }) {
                 let window = copy.bundlePath == box.paths.claudeApp.standardizedFileURL.path ? "main" : "work"
@@ -66,6 +70,11 @@ final class HandoverWorld: @unchecked Sendable {
                 LimitTracker.LiveProcess(
                     pid: pid, session: session, startedAt: startedAt, version: "2.1.284", cwd: "/repo", hostSessionID: nil, executable: executable(window)))
         }
+    }
+
+    /// The current step in `window` finishes: its Claude Code processes stay, holding their sessions open, idle.
+    func finishStep(in window: String) {
+        lock.withLock { idlePIDs.formUnion(processes.filter { $0.executable == executable(window) }.map(\.pid)) }
     }
 
     func stopWork(in window: String? = nil) {
@@ -109,7 +118,16 @@ final class HandoverWorld: @unchecked Sendable {
         manager.processTree = { ProcessTree(claudes: [], parent: { _ in nil }) }
         manager.liveSessionIDs = { Set(self.live.map(\.session)) }
         manager.processWorking = { pid, _ in !self.lock.withLock { self.idlePIDs.contains(pid) } }
+        manager.handoverSourceWait = (limit: 0.6, poll: 0.1, quit: 0.4)
     }
+}
+
+/// The steps a handover reports, in order.
+final class Steps: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    var all: [String] { lock.withLock { lines } }
+    func add(_ line: String) { lock.withLock { lines.append(line) } }
 }
 
 /// WORK at its limit with sessions in /repo; (main) signed in with room.
@@ -218,24 +236,23 @@ struct HandoverPlanTests {
         #expect(work.limits.binding(now: scene.now)?.reset?.at == scene.reset)
     }
 
-    @Test func liveInSourceBecomesCopyWhateverItsEntry() throws {
+    @Test func busySourceIsPlannedToCloseSoEverySessionMovesAsItself() throws {
         let scene = try S()
-        try scene.session(S.a, title: "Armed and live")
-        try scene.session(S.b, title: "Live only")
+        try scene.session(S.a, title: "Armed and working")
+        try scene.session(S.b, title: "Working")
+        try scene.session(S.c, title: "Open, idle")
         try scene.armed([S.a])
         scene.world.start("work")
         scene.world.work(S.a, in: "work")
         scene.world.work(S.b, in: "work")
+        scene.world.work(S.c, in: "work", idle: true)
 
         let plan = try scene.plan()
 
-        #expect(plan.destination == "main")
-        #expect(scene.session(plan, S.a)?.asCopy == true && scene.session(plan, S.a)?.cut == true)
-        #expect(scene.session(plan, S.b)?.asCopy == true && scene.session(plan, S.b)?.cut == false, "live, so a copy, though nothing is armed")
-        #expect(plan.leftovers.contains(.copies(count: 1)), "the live-only one continues as a copy")
-        #expect(plan.leftovers.contains(.keepRunningInSource(count: 1)), "the armed one keeps running in WORK")
-        #expect(plan.resumeInSource.map(\.transcript) == [S.a], "its copy isn't to resume")
-        #expect(plan.sourceActivity == .busy(working: 2))
+        #expect(plan.destination == "main" && plan.sourceActivity == .busy(working: 2))
+        #expect(plan.sessions.allSatisfy { !$0.asCopy }, "WORK finishes its current step and is closed first")
+        #expect(scene.session(plan, S.a)?.cut == true && HandoverSummary(plan: plan, labels: { $0 }).sessions.first { $0.session == S.a }?.resumes == true)
+        #expect(!plan.leftovers.contains { if case .copies = $0 { true } else { false } })
     }
 
     @Test func armedButNotLiveMovesAsItself() throws {
@@ -249,21 +266,6 @@ struct HandoverPlanTests {
         #expect(scene.session(plan, S.a)?.cut == true)
         #expect(scene.session(plan, S.a)?.asCopy == false, "an armed entry alone doesn't make a copy")
         #expect(plan.sourceActivity == .idle)
-    }
-
-    @Test func idleProcessesDontMakeCopies() throws {
-        let scene = try S()
-        try scene.session(S.a, title: "Working")
-        try scene.session(S.b, title: "Open, idle")
-        scene.world.start("work")
-        scene.world.work(S.a, in: "work")
-        scene.world.work(S.b, in: "work", idle: true)
-
-        let plan = try scene.plan()
-
-        #expect(plan.sourceActivity == .busy(working: 1))
-        #expect(scene.session(plan, S.a)?.asCopy == true, "working in WORK, so a copy")
-        #expect(scene.session(plan, S.b)?.asCopy == false, "only open there, so itself")
     }
 
     @Test func sourceWithOnlyIdleProcessesIsClosedAndEverySessionMovesAsItself() async throws {
@@ -416,19 +418,91 @@ struct HandoverPlanTests {
         }
     }
 
-    @Test func busySourceKeepsArmedCutSessionsForItsReset() throws {
+    /// Nothing moves as itself while WORK is open: it finishes its current step, is closed, and then every session
+    /// moves as itself, the idle ones and the one that worked.
+    @Test func busySourceIsWaitedOutThenClosedAndEverySessionMovesAsItself() async throws {
         let scene = try S()
-        try scene.session(S.a, title: "Armed")
-        try scene.session(S.b, title: "Live")
+        try scene.session(S.a, title: "Fix CI")
+        try scene.session(S.b, title: "Docs")
+        try scene.limitHit(S.a)
         try scene.armed([S.a])
         scene.world.start("work")
-        scene.world.work(S.b, in: "work")
+        scene.world.work(S.a, in: "work")
+        scene.world.work(S.b, in: "work", idle: true)
+        scene.manager.handoverSourceWait = (limit: 5, poll: 0.1, quit: 0.4)
+        let world = scene.world
+        Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            world.finishStep(in: "work")
+        }
+        let steps = Steps()
 
-        let plan = try scene.plan()
+        let result = try await scene.manager.handOver(try scene.plan(), dwell: 0.3, lastWait: 0.3, progress: { steps.add($0) })
 
-        #expect(plan.resumeInSource.map(\.transcript) == [S.a])
-        #expect(plan.leftovers.contains(.resumeInSource(count: 1)))
-        #expect(HandoverSummary(plan: plan, labels: { $0 }).sessions.first { $0.session == S.a }?.resumes == false)
+        #expect(steps.all.first == "WORK finishes its current step, then your work moves to (main).", "\(steps.all)")
+        #expect(result.state == .done && result.sourceClosed, "\(result.line)")
+        let events = scene.world.events
+        #expect(try #require(events.firstIndex(of: "quit work")) < #require(events.firstIndex(of: "start main")), "\(events)")
+        #expect(result.plan.sessions.allSatisfy { !$0.asCopy }, "no copies")
+        #expect(result.resumed == [S.a] && scene.world.links == ["link main \(S.a)"], "the cut session resumes as itself")
+        #expect(scene.entry(S.a, in: "work")?.optedIn == false, "its auto-continue is off in WORK")
+        #expect(result.line.contains("and was closed. Your work continues in (main)"), "\(result.line)")
+    }
+
+    /// Still working after the wait: WORK stays open and every session open there continues as a copy, the idle one
+    /// too, since its process could wake there.
+    @Test func sourceStillWorkingAfterTheWaitMakesEveryOpenSessionACopy() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.session(S.b, title: "Docs")
+        try scene.session(S.c, title: "Closed")
+        try scene.limitHit(S.a)
+        try scene.armed([S.c])
+        scene.world.start("work")
+        scene.world.work(S.a, in: "work")
+        scene.world.work(S.b, in: "work", idle: true)
+        let started = Date()
+
+        let result = try await scene.manager.handOver(try scene.plan(), dwell: 0.3, lastWait: 0.3)
+
+        #expect(Date().timeIntervalSince(started) >= 0.6, "waited for WORK first")
+        #expect(result.state == .done && !result.sourceClosed && !scene.world.events.contains("asked work to quit"), "never interrupted")
+        #expect(scene.session(result.plan, S.a)?.asCopy == true && scene.session(result.plan, S.b)?.asCopy == true)
+        #expect(scene.session(result.plan, S.c)?.asCopy == false, "a session nothing holds open moves as itself")
+        #expect(result.plan.leftovers.contains(.resumeInSource(count: 1)), "and WORK, still open, continues it at its reset")
+        #expect(result.plan.leftovers.contains(.copies(count: 2)))
+        #expect(result.line.contains("2 still open in WORK continue as copies"), "\(result.line)")
+        #expect(!scene.world.links.contains("link main \(S.a)"), "the original still open in WORK isn't shown in (main)")
+    }
+
+    /// A source that nothing works in but that stays open when asked to quit (Claude asks something): every session
+    /// still open there continues as a copy.
+    @Test func sourceDecliningToQuitMakesEveryOpenSessionACopy() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.session(S.b, title: "Docs")
+        try scene.limitHit(S.a)
+        scene.world.start("work")
+        scene.world.work(S.a, in: "work", idle: true)
+        scene.world.work(S.b, in: "work", idle: true)
+        scene.world.declinesQuit = true
+
+        let result = try await scene.manager.handOver(try scene.plan(), dwell: 0.3, lastWait: 0.3)
+
+        #expect(scene.world.events.contains("asked work to quit") && !result.sourceClosed)
+        #expect(result.plan.sessions.allSatisfy(\.asCopy) && result.plan.leftovers.contains(.copies(count: 2)))
+        #expect(result.line.contains("2 still open in WORK continue as copies"), "\(result.line)")
+        #expect(!scene.world.links.contains("link main \(S.a)"))
+    }
+
+    @Test func estimatedResetIsNotWaitedFor() throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.limitHit(S.a)
+        var statuses = scene.statuses
+        statuses[1].limits.fiveHour.reset = LimitReset(at: scene.now.addingTimeInterval(10 * 60), source: .estimate)
+        let plan = try scene.manager.planHandover(from: "work", to: nil, statuses: statuses, now: scene.now)
+        #expect(!plan.picksUpItself && plan.destination == "main", "an estimate is handed over as usual")
     }
 
     @Test func folderRuleKeepsSessionsOutOfTheDestination() throws {

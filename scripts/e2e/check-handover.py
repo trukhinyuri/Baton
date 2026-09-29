@@ -2,7 +2,9 @@
 """Reads what `baton handover` did to the sandbox of scripts/e2e-handover.sh and checks it against the incident fixture.
 
 Usage:
-  check-handover.py windows <log> <window>...        write the stand-in windows' state: these windows run
+  check-handover.py windows <log> <window>... [--busy-for <seconds>]
+                                                     write the stand-in windows' state: these windows run; with
+                                                     --busy-for, one of ATLAS's processes works that long first
   check-handover.py dry-run <home> <dry-run.json>    the plan, and that nothing changed
   check-handover.py result <home> <log> <result.json> what the handover did
 
@@ -42,13 +44,28 @@ def entries(home, window):
     return config.get("preferences", {}).get("epitaxyPrefs", {}).get("autoResumeRateLimit." + X["accounts"][window], {})
 
 
+def iso(moment):
+    return moment.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def windows(log, running):
     """The windows run; ATLAS keeps an idle Claude Code process for each of its 8 cut sessions, as Claude Desktop keeps
-    one for every session it opened, for hours."""
-    now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    live = [{"session": s, "window": "atlas", "since": now, "idle": True} for s in X["cut"]] if "atlas" in running else []
+    one for every session it opened, for hours. With --busy-for N, the first of them works for N seconds first, so the
+    handover waits for ATLAS to finish that step; when it will is noted in <log>.busy-until."""
+    busy_for = None
+    if "--busy-for" in running:
+        at = running.index("--busy-for")
+        busy_for, running = float(running[at + 1]), running[:at] + running[at + 2:]
+    now = datetime.datetime.now(datetime.timezone.utc)
+    live = [{"session": s, "window": "atlas", "since": iso(now), "idle": True} for s in X["cut"]] if "atlas" in running else []
+    if busy_for and live:
+        until = now + datetime.timedelta(seconds=busy_for)
+        live[0].pop("idle")
+        live[0]["busyUntil"] = iso(until)
+        with open(log + ".busy-until", "w") as f:
+            f.write(str(until.timestamp()))
     with open(log + ".state.json", "w") as f:
-        json.dump({"running": {w: now for w in running}, "live": live}, f)
+        json.dump({"running": {w: iso(now) for w in running}, "live": live}, f)
 
 
 def dry_run(home, path):
@@ -70,6 +87,13 @@ def result(home, log, path):
     print("line: " + out.get("line", ""))
     check(out.get("state") == "done" and out.get("sourceClosed") is True,
           f"done, ATLAS closed though 8 idle processes were open there ({out.get('state')}, {out.get('sourceClosed')})")
+    check(not any(s["asCopy"] for s in out.get("sessions", [])), "no copies: every session moved as itself")
+    if os.path.exists(log + ".busy-until"):
+        busy_until = float(open(log + ".busy-until").read())
+        entries_ = json.load(open(os.path.join(home, "Library", "Application Support", "Baton", "handovers.json")))["entries"]
+        started = datetime.datetime.fromisoformat(entries_[-1]["startedAt"].replace("Z", "+00:00")).timestamp()
+        check(started < busy_until and "quit atlas" in open(log).read().split("\n"),
+              f"ATLAS worked when the handover started ({busy_until - started:.0f} s more) and was waited out, then quit")
     check(sorted(out.get("resumed", [])) == sorted(X["cut"]), f"{len(X['cut'])} sessions resumed ({len(out.get('resumed', []))})")
     check(out.get("line", "").startswith("ATLAS is at its limit until ") and "and was closed. Your work continues in BRAVO — 8 sessions resumed; "
           "19 stay in ATLAS: a folder rule keeps client for atlas@, cedar@; 8 stay in ATLAS: Remote Control reaches them there." in out.get("line", ""),

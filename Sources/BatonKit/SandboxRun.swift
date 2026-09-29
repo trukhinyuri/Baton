@@ -44,10 +44,15 @@
                 public var since: Date
                 /// Holds its session open without working, as Claude Desktop keeps a process for every session it opened.
                 public var idle: Bool?
+                /// Works until then, then holds its session open without working.
+                public var busyUntil: Date?
 
-                public init(session: String, window: String, since: Date = Date(), idle: Bool = false) {
+                public init(session: String, window: String, since: Date = Date(), idle: Bool = false, busyUntil: Date? = nil) {
                     self.session = session.lowercased(); self.window = window; self.since = since; self.idle = idle ? true : nil
+                    self.busyUntil = busyUntil
                 }
+
+                var works: Bool { busyUntil.map { Date() < $0 } ?? (idle != true) }
             }
             /// Window ids (`main` or a profile id) that run, with when each started.
             public var running: [String: Date] = [:]
@@ -178,7 +183,7 @@
             manager.liveSessionIDs = { Set(self.current.live.map(\.session)) }
             manager.processWorking = { pid, _ in
                 let live = self.current.live, index = Int(pid) - 2000
-                return !(live.indices.contains(index) && live[index].idle == true)
+                return live.indices.contains(index) ? live[index].works : true
             }
             manager.limitTracker.liveProcesses = { _ in self.processes }
             manager.quitRequester = { self.quit($0, profiles: self.profiles, forced: false) }

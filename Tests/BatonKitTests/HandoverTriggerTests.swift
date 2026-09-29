@@ -54,6 +54,17 @@ struct HandoverTriggerTests {
         #expect(HandoverTrigger.due([atLimit(resetsIn: 31 * 60), room()], now: now, handled: never) == ["robin"], "not for one 31 away")
     }
 
+    @Test func estimatedOrPastResetIsHandedOver() {
+        var soon = atLimit(resetsIn: 10 * 60)
+        soon.limits.fiveHour.reset?.source = .estimate
+        #expect(HandoverTrigger.due([soon, room()], now: now, handled: never) == ["robin"], "an estimate isn't Claude's reset time")
+        #expect(!HandoverTrigger.bannerLine(soon, noRoom: nil, now: now).contains("work continues there then"))
+        var past = atLimit(resetsIn: -2 * 86_400)
+        past.limits.fiveHour.reset?.source = .estimate
+        #expect(HandoverTrigger.due([past, room()], now: now, handled: never) == ["robin"], "a past estimate doesn't hold the work for days")
+        #expect(HandoverTrigger.waitedFor(atLimit(resetsIn: -60).limits, now: now) == nil, "a reset time already past isn't waited for")
+    }
+
     @Test func unknownResetIsHandedOver() {
         var status = atLimit()
         status.limits.fiveHour.reset = nil

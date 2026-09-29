@@ -496,6 +496,9 @@ public final class ProfileManager: @unchecked Sendable {
     /// Whether a live Claude Code process works (`ClaudeWork.isWorking`), given its pid and its session if known;
     /// tests replace it.
     var processWorking: (@Sendable (pid_t, String?) -> Bool)?
+    /// How long a handover waits for its busy source to finish its current step, how often it looks, and how long for
+    /// the source to quit once asked, in seconds; tests shorten them.
+    var handoverSourceWait: (limit: TimeInterval, poll: TimeInterval, quit: TimeInterval) = (10 * 60, 10, 20)
     /// Every session a running Claude Code process has open (`LiveSessions.ids`); tests replace it.
     var liveSessionIDs: (@Sendable () -> Set<String>)?
     /// Asks one running copy to quit, as `terminate()` does; tests replace it, since their copies have no process.

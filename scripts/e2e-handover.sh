@@ -4,7 +4,8 @@
 #
 # 1. The incident fixture (Tests/BatonKitTests/Fixtures/handover-incident) is written into a new temporary folder.
 # 2. `baton handover --from ATLAS --dry-run --json`, then the same without --dry-run, with BATON_SANDBOX_HOME and
-#    BATON_FAKE_LAUNCH, which only a debug build reads.
+#    BATON_FAKE_LAUNCH, which only a debug build reads. ATLAS keeps an idle Claude Code process for each cut session;
+#    for the real run one of them works for 8 more seconds, so the handover waits for ATLAS to finish that step.
 # 3. scripts/e2e/check-handover.py reads what changed and checks it.
 set -eu
 
@@ -28,7 +29,8 @@ echo "== baton handover --from ATLAS --dry-run --json"
 run handover --from ATLAS --dry-run --json >"$work/dry-run.json"
 python3 scripts/e2e/check-handover.py dry-run "$home" "$work/dry-run.json"
 
-echo "== baton handover --from ATLAS --json"
+echo "== baton handover --from ATLAS --json (ATLAS works for 8 more seconds)"
+python3 scripts/e2e/check-handover.py windows "$log" atlas --busy-for 8
 run handover --from ATLAS --json >"$work/result.json"
 python3 scripts/e2e/check-handover.py result "$home" "$log" "$work/result.json"
 

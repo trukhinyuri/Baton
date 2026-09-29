@@ -34,16 +34,10 @@ struct MoveWorkSheet: View {
     private var rows: [Row] {
         if model.isDemo { return DemoData.moveRows }
         guard let plan = form.plan else { return [] }
-        let later = Set(plan.resumeInSource.map(\.card))
         let moving = plan.sessions.sorted { ($0.cut ? 0 : 1, $1.lastActivity) < ($1.cut ? 0 : 1, $0.lastActivity) }.map { session in
             let folder = session.folders.first.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "No folder"
-            let how =
-                later.contains(session.card)
-                ? (session.asCopy
-                    ? " · keeps running in \(model.displayLabel(of: plan.source)) and continues there at its reset; its copy moves"
-                    : " · continues in \(model.displayLabel(of: plan.source)) at its reset")
-                : session.asCopy ? " · continues as a copy" : ""
-            return Row(id: session.card, title: session.title, detail: folder + how, resumes: session.cut && !later.contains(session.card))
+            let how = session.asCopy ? " · continues as a copy" : ""
+            return Row(id: session.card, title: session.title, detail: folder + how, resumes: session.cut)
         }
         let source = model.displayLabel(of: plan.source), destination = model.displayLabel(of: plan.destination)
         let staying = plan.leftovers.enumerated().compactMap { index, leftover -> Row? in

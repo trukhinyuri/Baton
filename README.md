@@ -125,11 +125,11 @@ Each row shows the account signed in to that window and its five-hour and weekly
 When an open subscription reaches its limit while you work in it, Baton moves its work by itself to the subscription with the most room. You don't choose anything: the banner under the header says where the work is going, and one line says what happened, also as a macOS notification if you allow it, such as *WORK is at its limit until 19:10 and was closed. Your work continues in HOME — 3 sessions resumed.*
 
 - **Every session of that window follows**, as the same session, with its group and pin in Claude's sidebar. Sessions the limit cut mid-turn pick up where they stopped: Baton turns their auto-continue on in the new window and shows them one at a time, the top pin last.
-- **Nothing runs in two windows.** The window at its limit is closed first. If Claude Code still works in it, it stays open, the sessions still running there continue as copies, and Baton closes it once that work finishes.
+- **Nothing runs in two windows.** The window at its limit is closed first. If Claude Code works in it, Baton waits up to 10 minutes for that step to finish, and the banner says so: *WORK finishes its current step, then your work moves to HOME.* If it still works then, or stays open when asked to quit, it stays open, every session open there continues as a copy, and Baton closes it once that work finishes.
 - **Nothing is interrupted.** A window where Claude Code works isn't chosen when a closed or idle one has nearly as much room; if it is, it restarts by itself once its current work finishes, and the line says so.
 - **What stays is named** in the same line: sessions a folder rule keeps for other accounts, sessions Remote Control still reaches there, and anything that didn't resume.
 
-When no other window has room, or the limit resets within 30 minutes, the banner says so and nothing moves: work continues in that window at the reset ([Limits and resets](#limits-and-resets)). `baton handover auto off` turns this off.
+When no other window has room, or Claude's own reset time for the limit is within 30 minutes, the banner says so and nothing moves: work continues in that window at the reset. An estimated reset time is never waited for ([Limits and resets](#limits-and-resets)). `baton handover auto off` turns this off.
 
 To move a window's work yourself, click **Continue work…** (or **Move work…** in a window's ⋯ menu): it lists the sessions that will move, those the limit cut marked *resumes*, and what stays with its reason; click **Continue in Claude WORK** to move them, or **Change** to pick another window with room. Room is judged mostly by weekly usage: a weekly limit, once reached, holds a window back for days, a five-hour one for hours at most. Five-hour usage counts a quarter as much, since a full five-hour window is about a quarter of a week, so a window about to reach its five-hour limit isn't chosen over one with nearly the same week. To continue a single session, as itself or as a copy, use `baton continue`.
 
@@ -244,13 +244,15 @@ baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--d
                                     Same as `continue`
 baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
                                     Move the work of a window at its limit to the window with
-                                    the most room: the sessions the limit cut resume there, a
-                                    session still open where it was continues as a copy. By
-                                    default the open window at its limit, and the best window.
-                                    A busy window restarts once its current work finishes, and
-                                    one left open at its limit is closed then. Run it again to
-                                    go on after an interrupt.
-                                    Exit 3: the limit resets within 30 minutes
+                                    the most room: the sessions the limit cut resume there.
+                                    The window at its limit finishes its current step first (up
+                                    to 10 minutes) and is closed, so every session moves as
+                                    itself; if it stays open, its open sessions continue as
+                                    copies. By default the open window at its limit, and the
+                                    best window. A busy window restarts once its current work
+                                    finishes, and one left open at its limit is closed then.
+                                    Run it again to go on after an interrupt.
+                                    Exit 3: Claude's own reset time is within 30 minutes
 baton handover auto on|off|status   Whether the app does this by itself when an open window
                                     reaches its limit while you work there (on by default)
 baton rules [--json]                Show which accounts may continue the work in which folders

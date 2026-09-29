@@ -663,8 +663,18 @@ extension AppModel {
         handoverLines[source] = moving
         Self.announce(moving)
         let operation = operations.start(nil, window: destination)
+        // While the handover waits for a busy source, the banner says so instead of "Moving…".
+        let finishing = HandoverText.sourceFinishing(source: manager.displayLabel(of: source), destination: manager.displayLabel(of: destination))
+        let step = { @Sendable (line: String) in
+            guard line == finishing else { return }
+            Task { @MainActor in
+                guard self.handoverLines[source] != nil else { return }
+                self.handoverLines[source] = line
+                Self.announce(line)
+            }
+        }
         do {
-            guard var result = try await work({ _ in }) else { throw CancellationError() }
+            guard var result = try await work(step) else { throw CancellationError() }
             if result.state == .waiting {
                 handoverLines[source] = result.line
                 Self.announce(result.line)

@@ -51,13 +51,15 @@ let usage = """
                                           Same as `continue`
       baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
                                           Move the work of a window at its limit to the window with
-                                          the most room: the sessions the limit cut resume there, a
-                                          session still open where it was continues as a copy. By
-                                          default the open window at its limit, and the best window.
-                                          A busy window restarts once its current work finishes, and
-                                          one left open at its limit is closed then. Run it again to
-                                          go on after an interrupt.
-                                          Exit 3: the limit resets within 30 minutes
+                                          the most room: the sessions the limit cut resume there.
+                                          The window at its limit finishes its current step first (up
+                                          to 10 minutes) and is closed, so every session moves as
+                                          itself; if it stays open, its open sessions continue as
+                                          copies. By default the open window at its limit, and the
+                                          best window. A busy window restarts once its current work
+                                          finishes, and one left open at its limit is closed then.
+                                          Run it again to go on after an interrupt.
+                                          Exit 3: Claude's own reset time is within 30 minutes
       baton handover auto on|off|status   Whether the app does this by itself when an open window
                                           reaches its limit while you work there (on by default)
       baton rules [--json]                Show which accounts may continue the work in which folders
@@ -592,18 +594,21 @@ do {
             } else if plan.picksUpItself {
                 print(HandoverText.line(HandoverResult(plan: plan, state: .picksUpItself), labels: labels))
             } else {
-                let later = Set(plan.resumeInSource.map(\.card))
-                let resume = plan.cut.count - later.count, copies = plan.sessions.filter(\.asCopy).count
+                let resume = plan.cut.count, copies = plan.sessions.filter(\.asCopy).count
                 print(
                     "Would hand \(plan.sessions.count) sessions over from Claude \(labels(source)) to Claude \(labels(plan.destination)): "
                         + "\(resume) to resume, \(copies) as copies.")
                 for session in plan.sessions {
                     let how = session.asCopy ? "copy" : "same"
-                    let what = later.contains(session.card) ? "later " : session.cut ? "resume" : "move  "
+                    let what = session.cut ? "resume" : "move  "
                     print("\(what)  \(how)  \(session.transcript.prefix(8))  \(session.title)")
                 }
                 for leftover in plan.leftovers {
                     if let clause = HandoverText.clause(leftover, source: labels(source), destination: labels(plan.destination)) { print("  \(clause)") }
+                }
+                if plan.sourceActivity.isBusy {
+                    print("  " + HandoverText.sourceFinishing(source: labels(source), destination: labels(plan.destination)))
+                    print("  If Claude Code still works there after 10 minutes, its open sessions continue as copies.")
                 }
                 if plan.seeding != .seed { print("  Claude \(labels(plan.destination)) won't resume them by itself; they'll be opened there.") }
                 if plan.destinationActivity.isBusy { print("  Claude \(labels(plan.destination)) is busy; it restarts when its current work finishes.") }

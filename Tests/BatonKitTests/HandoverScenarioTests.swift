@@ -124,6 +124,7 @@ struct IncidentScene {
         fake = StandInWindows(log: log, paths: paths)
         manager = ProfileManager(paths: paths)
         fake.wire(manager)
+        manager.handoverSourceWait = (limit: 0.6, poll: 0.1, quit: 0.4)
     }
 
     func dataDir(_ window: String) -> URL { window == "main" ? paths.mainDataDir : paths.dataDir(for: window) }
@@ -229,7 +230,7 @@ struct HandoverScenarioTests {
 
         let result = try await scene.manager.handOver(try scene.manager.planHandover(from: "atlas"), dwell: 5, lastWait: 1)
 
-        #expect(result.state == .done && !result.sourceClosed, "Claude Code works in ATLAS, so it stays open")
+        #expect(result.state == .done && !result.sourceClosed, "Claude Code still works in ATLAS after the wait, so it stays open")
         #expect(result.plan.leftovers.contains(.copies(count: 3)))
         #expect(result.plan.leftovers.contains(.resumeInSource(count: 3)), "its armed cut sessions continue there at its reset")
         let copies = scene.cards("bravo").subtracting(base.moved + base.bravoOwn.cards).compactMap { scene.card("bravo", $0) }

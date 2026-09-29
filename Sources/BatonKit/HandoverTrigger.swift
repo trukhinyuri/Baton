@@ -1,11 +1,21 @@
 import Foundation
 
 /// When the app hands a window's work over by itself: a window that is open, at its limit, whose limit was reached in
-/// its sessions within the last half hour (the user was working there), not handed over for this limit yet, and whose
-/// reset isn't within `waitsFor` (then Claude's own auto-continue picks its work up there at the reset).
+/// its sessions within the last half hour (the user was working there), not handed over for this limit yet, and not
+/// waited for (`waitedFor`: Claude's own auto-continue picks its work up there at the reset).
 public enum HandoverTrigger {
-    /// A limit that resets this soon isn't handed over: Baton waits, and the window continues its work then.
+    /// A limit that resets this soon, by Claude's own reset time, isn't handed over: Baton waits, and the window
+    /// continues its work then.
     public static let waitsFor: TimeInterval = 30 * 60
+
+    /// The reset Baton waits for instead of handing the work over: the binding limit's, when it is Claude's own reset
+    /// time (`LimitReset.Source.exact`) and still ahead, within `waitsFor`. An estimate, or a time already past, is
+    /// handed over as usual.
+    public static func waitedFor(_ limits: Limits, now: Date = Date()) -> Date? {
+        guard let reset = limits.binding(now: now)?.reset, reset.source == .exact else { return nil }
+        let left = reset.at.timeIntervalSince(now)
+        return left > 0 && left <= waitsFor ? reset.at : nil
+    }
 
     /// A limit reached longer ago than this was not reached while the user worked there.
     public static let recent: TimeInterval = 30 * 60
@@ -21,18 +31,16 @@ public enum HandoverTrigger {
             guard status.isRunning, DestinationRanking.isAtLimit(status, now: now), let binding = status.limits.binding(now: now) else { return nil }
             // A sample alone says nothing about the sessions; the limit must show in them, and lately.
             guard !binding.sampleOnly, let reached = binding.reachedAt, now.timeIntervalSince(reached) <= recent else { return nil }
-            let resetsAt = binding.reset?.at
-            if let resetsAt, resetsAt.timeIntervalSince(now) <= waitsFor { return nil }
-            guard !busy(status.id), !handled(status.id, resetsAt) else { return nil }
+            guard waitedFor(status.limits, now: now) == nil, !busy(status.id), !handled(status.id, binding.reset?.at) else { return nil }
             return status.id
         }
     }
 
     /// What the limit banner says for `status`, a window at its limit, while no handover of it is under way: that it
-    /// continues its work there when it resets within `waitsFor`, that no window has room (`noRoom`), or when it resets.
+    /// continues its work there when its reset is waited for (`waitedFor`), that no window has room (`noRoom`), or when
+    /// it resets.
     public static func bannerLine(_ status: ProfileStatus, noRoom: String?, now: Date = Date()) -> String {
-        let resetsAt = status.limits.binding(now: now)?.reset?.at
-        if let resetsAt, resetsAt.timeIntervalSince(now) <= waitsFor {
+        if let resetsAt = waitedFor(status.limits, now: now) {
             let until = HandoverText.untilText(resetsAt, now: now, timeZone: .current, locale: .current)
             return "\(status.displayLabel) is at its limit until \(until); work continues there then."
         }
@@ -71,9 +79,14 @@ extension HandoverText {
         atLimit ? "\(source) is at its limit. Moving your work to \(destination)…" : "Moving \(source)'s work to \(destination)…"
     }
 
+    /// While a handover waits for its busy source: "PAY finishes its current step, then your work moves to BRAVO."
+    public static func sourceFinishing(source: String, destination: String) -> String {
+        "\(source) finishes its current step, then your work moves to \(destination)."
+    }
+
     /// The Continue sheet's footer: "12 sessions, 3 to resume. 2 stay in ROBIN: Remote Control reaches them there."
     public static func summary(_ plan: HandoverPlan, labels: (String) -> String) -> String {
-        let count = plan.sessions.count, resume = plan.cut.count - plan.resumeInSource.count
+        let count = plan.sessions.count, resume = plan.cut.count
         var text = count == 0 ? "No sessions to move." : "\(count) session\(count == 1 ? "" : "s")" + (resume > 0 ? ", \(resume) to resume." : ".")
         let clauses = plan.leftovers.compactMap { clause($0, source: labels(plan.source), destination: labels(plan.destination)) }
         var parts = Array(clauses.prefix(maxClauses))
