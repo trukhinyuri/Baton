@@ -79,7 +79,7 @@ brew upgrade --cask baton
 
 ### From source
 
-You need Xcode 16 or later, or the Command Line Tools (`xcode-select --install`).
+You need Xcode 16 or later, or Command Line Tools with Swift 6 (`xcode-select --install`; `swift --version` shows which Swift you have).
 
 ```sh
 git clone https://github.com/trukhinyuri/Baton.git

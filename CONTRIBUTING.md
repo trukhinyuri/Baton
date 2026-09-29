@@ -9,7 +9,7 @@ Thanks for helping. A few ground rules keep the project useful and safe for ever
 
 ## Getting started
 
-You need macOS 14 or later and Xcode 16 or later, or the Command Line Tools (`xcode-select --install`). These are the checks CI runs, and a pull request passes them all:
+You need macOS 14 or later and Xcode 16 or later, or Command Line Tools with Swift 6 (`xcode-select --install`; `swift --version` shows which Swift you have). These are the checks CI runs, and a pull request passes them all:
 
 ```sh
 git clone https://github.com/trukhinyuri/Baton.git && cd Baton
