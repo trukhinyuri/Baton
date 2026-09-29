@@ -30,7 +30,7 @@ Baton runs several Claude Desktop accounts on one Mac, each in its own window of
 - **One window per subscription.** Each account has its own window, Dock icon and label, so you always know which subscription you're in.
 - **Your local work follows you.** Local Claude Code sessions show up in every window. **Continue work…** carries a conversation to another window with its transcript, sub-agents, Workflow history, tool outputs and Rewind checkpoints; a Cowork task continues as a new task with its history and files.
 - **Usage in one place.** Each window's five-hour and weekly usage, as Claude Desktop records it, and when a limit resets.
-- **Local and careful.** No network code, no credentials read, a dated backup before a session card or settings file is replaced, and a window's settings changed only while that window is closed. Remote Control is off in Baton's windows by default, with one switch to undo it.
+- **Local and careful.** No network code, no credentials read, a dated backup before a session card or settings file is replaced (except Claude's `config.json`, edited in place), and a window's settings changed only while that window is closed. Remote Control is off in Baton's windows by default, with one switch to undo it.
 
 Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Before you continue, Baton names what will not follow.
 
@@ -51,10 +51,10 @@ Baton 1.0.0-rc.1 is a release candidate: it is ad-hoc signed and not notarized y
 3. Open it from `/Applications`. macOS refuses the first time; open **System Settings → Privacy & Security** and click **Open Anyway** next to Baton.
 4. If you want the command line, link it from there: see [The `baton` command](#the-baton-command).
 
-To check the download first, use the [GitHub CLI](https://cli.github.com), which fetches the ZIP and its checksum file and verifies the build's provenance:
+To check the download first, use the [GitHub CLI](https://cli.github.com), which fetches the ZIP and its checksum file (keeping a ZIP already in the folder) and verifies the build's provenance. Run it in the folder with the ZIP, or in an empty one:
 
 ```sh
-gh release download v1.0.0-rc.1 -R trukhinyuri/Baton
+gh release download v1.0.0-rc.1 -R trukhinyuri/Baton --skip-existing
 shasum -a 256 -c SHA256SUMS.txt
 gh attestation verify Baton-v1.0.0-rc.1.zip -R trukhinyuri/Baton
 ```
@@ -65,7 +65,7 @@ Or build it [from source](#from-source) with `make install`: a build you make yo
 
 From 1.0: the cask arrives with the signed release, and until then this command fails.
 
-Installed the release candidate from the ZIP? Quit Baton and move that `Baton.app` to the Trash first, then run the command: Homebrew won't install over an app it didn't put in `/Applications`. Your profiles and launchers stay.
+Installed the release candidate from the ZIP? Quit Baton and move that `Baton.app` to the Trash first, then run the command: Homebrew won't install over an app it didn't put in `/Applications`. Your profiles and launchers stay. Kept Baton in the Dock? Remove that Dock item too and add the new Baton once it is installed: the old item could still start the copy in the Trash.
 
 ```sh
 brew install --cask trukhinyuri/tap/baton
