@@ -179,6 +179,47 @@ struct SessionSyncAccountTests {
         #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T3"}"#)
     }
 
+    /// Each allowed app, change to the session's rules and computer-use flag is matched on its own, so one that older
+    /// releases copied into another account is taken out even after either account added its own; those stay.
+    @Test func grantsOlderReleasesCopiedGoEvenAfterEitherAccountAddedItsOwn() throws {
+        let terminal = #"{"bundleId":"com.apple.Terminal","displayName":"Terminal","grantedAt":1790000000000,"tier":"full"}"#
+        let notes = #"{"bundleId":"com.apple.Notes","displayName":"Notes","grantedAt":1790000500000,"tier":"full"}"#
+        let push = #"{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"git push:*"}]}"#
+        let make = #"{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"make:*"}]}"#
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cuAllowedApps":[\#(terminal)],"cuGrantFlags":{"clipboardRead":true},"#
+                + #""sessionPermissionUpdates":[\#(push)],"title":"T"}"#,
+            to: a.appending(path: "local_1.json"), modified: Date().addingTimeInterval(-3_600))
+        // Continued in B, where Claude added an app, a flag and a rule.
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cuAllowedApps":[\#(terminal), \#(notes)],"#
+                + #""cuGrantFlags":{"clipboardRead":true,"systemKeyCombos":true},"sessionPermissionUpdates":[\#(push),\#(make)],"title":"T2"}"#,
+            to: b.appending(path: "local_1.json"))
+
+        let report = try box.sync()
+
+        #expect(report.grantsRemoved == 2)
+        #expect(
+            box.read(b.appending(path: "local_1.json"))
+                == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cuAllowedApps":[\#(notes)],"#
+                + #""cuGrantFlags":{"systemKeyCombos":true},"sessionPermissionUpdates":[\#(make)],"title":"T2"}"#)
+        #expect(box.read(a.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T2"}"#)
+        #expect(try box.sync().changes == 0)
+    }
+
+    @Test func listElementsKeepTheirBytes() {
+        func elements(_ json: String) -> [String]? { JSONMembers.elements(Array(json.utf8)[...])?.map { String(decoding: $0, as: UTF8.self) } }
+        #expect(elements(#" [ {"a":"x,]\"y"} , [1,[2]],"s" ,null ] "#) == [#"{"a":"x,]\"y"}"#, "[1,[2]]", #""s""#, "null"])
+        #expect(elements("[]") == [])
+        #expect(elements("[1,]") == nil)
+        #expect(elements(#"["open]"#) == nil)
+        #expect(elements("{}") == nil)
+        #expect(String(decoding: JSONMembers.array([Array("1".utf8)[...], Array(#""b""#.utf8)[...]]), as: UTF8.self) == #"[1,"b"]"#)
+    }
+
     /// The list is saved before any copy loses a grant, so a first run that stops partway doesn't lose track of a grant
     /// it already took out of one account.
     @Test func aFirstRunThatStopsPartwayKeepsTheList() throws {
