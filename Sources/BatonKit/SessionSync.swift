@@ -12,7 +12,8 @@ import Foundation
 /// A copy for another account leaves out what the first account granted or connected (Remote Control bridges,
 /// connectors, browser and computer-use grants, the session's permission rules, and the permission mode unless the
 /// profile keeps it); copies between windows of one account are exact. A grant or rule that copies by older releases
-/// left in two accounts is taken out of every copy, since which account gave it can't be told.
+/// left in two accounts is taken out of every copy once, since which account gave it can't be told; one given again
+/// later stays.
 /// A card that isn't one whole JSON object, such as one a crash cut short, is never copied.
 /// A session deleted in one window stays deleted everywhere, unless a window made a new card for it after that.
 ///
@@ -228,7 +229,7 @@ public struct SessionSync: Sendable {
         }
         // Grants and rules that copies by older releases carried into other accounts. Looked for once, in the first
         // run of a release that keeps them apart, entry by entry (`grantItems`), so what one account added since
-        // doesn't hide what the other gave; each is then taken out of every copy of its card. A list from a build that
+        // doesn't hide what the other gave; each is then taken out of every copy of its card, once. A list from a build that
         // matched whole values only is looked for again, entry by entry, keeping what it already names.
         let leakedFile = paths.stateDir.appending(path: "cross-account-grants.json")
         var savedLeaks = LeakedGrants.load(from: leakedFile)
@@ -253,6 +254,13 @@ public struct SessionSync: Sendable {
                 savedLeaks = leaks
             }
         }
+        // What the copy of card `name` in session folder `folder` has yet to lose: each copy loses them once, so a grant
+        // given again there after that stays.
+        func stillLeaked(_ name: String, in folder: String) -> Set<String> {
+            guard !accountBound.contains(name), let items = leaks.cards[name], leaks.cleaned?[name]?.contains(folder) != true else { return [] }
+            return Set(items)
+        }
+        var cleanedNow: [String: Set<String>] = [:]  // card name → session folders whose copy lost its listed grants now
         var live: Set<String>?
         func isLive(_ transcript: String) -> Bool {
             if live == nil { live = liveSessionIDs ?? LiveSessions.ids(claudeDir: paths.claudeDir) }
@@ -337,22 +345,23 @@ public struct SessionSync: Sendable {
                 // earlier run, and unchanged since, still matches.
                 let mine = present.contains(name) ? reads[target.path] : nil
                 let comparison = "\(card.digest)|\(card.modified.timeIntervalSince1970)|\(card.account)|\(native)|\(keepsPermissionMode)"
-                let leaked = native ? [] : Set(leaks.cards[name] ?? [])
-                if let mine, leaked.isEmpty, mine.matches(comparison) { continue }
+                // What this copy, and the card it gets, have yet to lose of the grants older releases left in two accounts.
+                let leaked = stillLeaked(name, in: pair.path), leakedInCard = stillLeaked(name, in: card.url.deletingLastPathComponent().path)
+                if let mine, leaked.isEmpty, leakedInCard.isEmpty, mine.matches(comparison) { continue }
                 // Changed since the scan: the next run takes the new card.
                 guard let winner = bytes(of: card) else { continue }
                 // A native worker's cwd is coupled to remoteControlSpawn.folder and its server bridge.
                 // Even within one account/organization, preserve the complete card byte-for-byte.
                 let existing = present.contains(name) ? try? Data(contentsOf: target) : nil
                 // What another account granted or connected stays with that account; this window keeps its own. A grant
-                // older releases left in two accounts goes from every copy.
-                func shared(_ base: Data) -> Data {
-                    let local = Self.without(leaked, in: localized(base, for: dataDir, linking: !dryRun))
+                // older releases left in two accounts goes from every copy, `base` losing what its own copy has yet to lose.
+                func shared(_ base: Data, losing grants: Set<String>) -> Data {
+                    let local = Self.without(grants, in: localized(base, for: dataDir, linking: !dryRun))
                     guard card.account != account else { return local }
                     return Self.withoutAccountFields(
                         local, winner: winner, existing: existing.map { Self.without(leaked, in: $0) }, keepPermissionMode: keepsPermissionMode)
                 }
-                var data = native ? winner : shared(winner), modified = card.time
+                var data = native ? winner : shared(winner, losing: leakedInCard), modified = card.time
                 if present.contains(name) {
                     guard let current = SyncFolders.modificationDate(target), let own = existing else { continue }
                     report.cardsCompared += 1
@@ -366,18 +375,20 @@ public struct SessionSync: Sendable {
                     let behind = here.transcript.map(card.facts.priors.contains) == true
                     let asNew = current >= card.modified.addingTimeInterval(-1) && !behind
                     // A copy that isn't whole and is newer than every whole one may be one Claude is still writing:
-                    // left alone while its window is open, replaced by the newest whole copy once it is closed.
-                    if !here.valid, asNew, windowOpen { continue }
+                    // left alone while its window is open, replaced by the newest whole copy once it is closed. One that
+                    // ends as an object does but that Baton can't read is left alone too: Claude may read it.
+                    if !here.valid, asNew, windowOpen || JSONMembers.parse([UInt8](own)) != nil { continue }
                     if asNew, here.valid {
                         // This copy is as new as any; it may still need this window's scratch folder path.
-                        data = native ? own : shared(own)
+                        data = native ? own : shared(own, losing: leaked)
                         guard let time = SyncFolders.modificationTime(target), SyncFolders.date(time) == current else { continue }
                         modified = time
                     }
                     guard own != data else {
+                        if !leaked.isEmpty { cleanedNow[name, default: []].insert(pair.path) }
                         // Remembered for the usual copy only: the same conversation, and no scratch folder to link.
-                        if !dryRun, let mine, leaked.isEmpty, here.transcript == card.facts.transcript, !here.scratch, !card.facts.scratch,
-                            Self.hex(SHA256.hash(data: own)) == mine.digest
+                        if !dryRun, let mine, leaked.isEmpty, leakedInCard.isEmpty, here.transcript == card.facts.transcript, !here.scratch,
+                            !card.facts.scratch, Self.hex(SHA256.hash(data: own)) == mine.digest
                         {
                             mine.match(comparison)
                             newMatches = true
@@ -395,6 +406,7 @@ public struct SessionSync: Sendable {
                     try data.write(to: target, options: .atomic)
                     SyncFolders.setModificationTime(target, modified)
                 }
+                if !leaked.isEmpty { cleanedNow[name, default: []].insert(pair.path) }
                 if let transcript = card.facts.transcript { heldTranscripts.insert(transcript) }
                 report.cardsWritten += 1
                 if !dryRun { report.wroteInto.insert(dataDir.standardizedFileURL.path) }
@@ -473,18 +485,20 @@ public struct SessionSync: Sendable {
                 let matches = Matches(copies: reads.compactMapValues(\.saved))
                 if matches != savedMatches { try matches.save(to: matchesFile) }
             }
-            // A grant stays on the list until a run with every window closed finds no copy that has it: an open window
-            // may still hold it and write it back.
-            if pairs.allSatisfy({ !(isWindowOpen?(dataDir(of: $0)) ?? !propagateDeletions) }) {
-                for (name, grants) in leaks.cards {
-                    let held = Set(
-                        (holders[name] ?? []).flatMap { pair in
-                            (reads[pair.appending(path: name).path]?.facts.grants ?? [:]).values.flatMap { $0 }
-                        })
-                    leaks.cards[name] = grants.filter(held.contains)
-                    if leaks.cards[name]?.isEmpty == true { leaks.cards[name] = nil }
+            // A copy is done once this run took the listed grants out of it or found it without them; a grant given again
+            // there later stays, even while a window stays open. A card is off the list once every copy is done.
+            var cleaned = leaks.cleaned ?? [:]
+            for (name, grants) in leaks.cards {
+                var done = Set(cleaned[name] ?? []).union(cleanedNow[name] ?? [])
+                for pair in holders[name] ?? [] where !done.contains(pair.path) {
+                    let held = (reads[pair.appending(path: name).path]?.facts.grants ?? [:]).values.flatMap { $0 }
+                    if Set(grants).isDisjoint(with: held) { done.insert(pair.path) }
                 }
+                let finished = (holders[name] ?? []).allSatisfy { done.contains($0.path) }
+                leaks.cards[name] = finished ? nil : grants
+                cleaned[name] = finished ? nil : done.sorted()
             }
+            leaks.cleaned = cleaned.isEmpty ? nil : cleaned
             if leaks != savedLeaks { try leaks.save(to: leakedFile) }
             removeDeadScratchLinks()
             backup.prune()
@@ -531,6 +545,9 @@ public struct SessionSync: Sendable {
         static let current = 2
         var version = current
         var cards: [String: [String]] = [:]
+        /// Card name → the session folders whose copy has lost its listed grants, which it doesn't lose again. Left out
+        /// when there is none, as in lists saved before it.
+        var cleaned: [String: [String]]?
 
         /// A list of this version or of version 1, which the next run looks for again; `nil` if there is none.
         static func load(from url: URL) -> LeakedGrants? {
@@ -564,7 +581,7 @@ public struct SessionSync: Sendable {
 
     /// The value of grant field `field` without the items `grants` names, or `nil` if nothing is left of it.
     private static func remaining(_ bytes: ArraySlice<UInt8>, of field: String, without grants: Set<String>) -> ArraySlice<UInt8>? {
-        func decoded(_ bytes: ArraySlice<UInt8>) -> Any? { try? JSONSerialization.jsonObject(with: Data(bytes), options: .fragmentsAllowed) }
+        func decoded(_ bytes: ArraySlice<UInt8>) -> Any? { json(Data(bytes), fragments: true) }
         guard let value = decoded(bytes) else { return bytes }
         if grants.contains(field + " " + grantDigest(value)) { return nil }
         if value is [Any], let elements = JSONMembers.elements(bytes) {
@@ -768,7 +785,7 @@ public struct SessionSync: Sendable {
     static func isAccountBound(_ data: Data) -> Bool { facts(of: data).accountBound }
 
     struct CardFacts {
-        /// One whole JSON object; a card cut short by a crash or a full disk is not.
+        /// One whole JSON object, read as Claude reads it (`json`); a card cut short by a crash or a full disk is not.
         var valid = false
         var accountBound = false
         /// The Claude Code conversation the card opens (`cliSessionId`).
@@ -789,8 +806,42 @@ public struct SessionSync: Sendable {
         var grants: [String: Set<String>] = [:]
     }
 
+    /// `data` read as JSON the way Claude reads it. For a string cut inside an emoji `JSON.stringify` writes a lone
+    /// UTF-16 surrogate escape, which `JSON.parse` accepts and Foundation doesn't; here it reads as U+FFFD.
+    static func json(_ data: Data, fragments: Bool = false) -> Any? {
+        let options: JSONSerialization.ReadingOptions = fragments ? .fragmentsAllowed : []
+        if let value = try? JSONSerialization.jsonObject(with: data, options: options) { return value }
+        guard let repaired = withoutLoneSurrogates(data) else { return nil }
+        return try? JSONSerialization.jsonObject(with: repaired, options: options)
+    }
+
+    /// `data` with each `\u` escape of a UTF-16 surrogate that isn't half of a pair written as `\ufffd`, or `nil` if it
+    /// has none. Nothing else moves.
+    static func withoutLoneSurrogates(_ data: Data) -> Data? {
+        var bytes = [UInt8](data), changed = false
+        func unit(at i: Int) -> UInt16? {
+            guard i + 6 <= bytes.count, bytes[i] == UInt8(ascii: "\\"), bytes[i + 1] == UInt8(ascii: "u"),
+                bytes[(i + 2)..<(i + 6)].allSatisfy({ Character(Unicode.Scalar($0)).isHexDigit })
+            else { return nil }
+            return UInt16(String(decoding: bytes[(i + 2)..<(i + 6)], as: UTF8.self), radix: 16)
+        }
+        var i = 0
+        while i < bytes.count {
+            guard bytes[i] == UInt8(ascii: "\\") else { i += 1; continue }
+            // Any other escape, an escaped backslash included, is two bytes.
+            guard let first = unit(at: i) else { i += 2; continue }
+            if (0xD800...0xDBFF).contains(first), let second = unit(at: i + 6), (0xDC00...0xDFFF).contains(second) { i += 12; continue }
+            if (0xD800...0xDFFF).contains(first) {
+                bytes.replaceSubrange((i + 2)..<(i + 6), with: Array("fffd".utf8))
+                changed = true
+            }
+            i += 6
+        }
+        return changed ? Data(bytes) : nil
+    }
+
     static func facts(of data: Data) -> CardFacts {
-        guard let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return CardFacts() }
+        guard let card = json(data) as? [String: Any] else { return CardFacts() }
         let paths = ["cwd", "originCwd"].compactMap { card[$0] as? String }
         let folders = paths.filter { !$0.isEmpty && !$0.contains(scratchFolder) }
         let made = ["createdAt", "indexedAt"].compactMap { card[$0] as? Double }.max()
@@ -1267,7 +1318,7 @@ enum JSONMembers {
                 let plain = key.dropFirst().dropLast()
                 let decoded =
                     plain.contains(UInt8(ascii: "\\"))
-                    ? (try? JSONSerialization.jsonObject(with: Data(key), options: .fragmentsAllowed)) as? String : String(bytes: plain, encoding: .utf8)
+                    ? SessionSync.json(Data(key), fragments: true) as? String : String(bytes: plain, encoding: .utf8)
                 guard let name = decoded else { return nil }
                 skipSpace()
                 guard i < json.count, json[i] == UInt8(ascii: ":") else { return nil }

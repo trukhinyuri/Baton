@@ -164,11 +164,8 @@ struct SessionSyncAccountTests {
         #expect(
             box.read(a.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T2","bridgeSessionIds":["x"]}"#)
         let list = box.paths.stateDir.appending(path: "cross-account-grants.json")
-        #expect(box.read(list)?.contains("local_1") == true)
+        #expect(box.read(list)?.contains("local_1") == false, "every copy has lost them")
         #expect(try box.sync().changes == 0)
-        // Once every window is closed and no copy has them, they are off the list.
-        _ = try box.sync(propagateDeletions: true)
-        #expect(box.read(list)?.contains("local_1") == false)
 
         // A grant made again in A stays in A and is not copied to B.
         try box.write(
@@ -177,6 +174,66 @@ struct SessionSyncAccountTests {
         _ = try box.sync()
         #expect(box.read(a.appending(path: "local_1.json"))?.contains("git push") == true)
         #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T3"}"#)
+    }
+
+    /// The clean-up takes a grant out of each copy once. One given again in an account afterwards stays there, while its
+    /// window and every other one stay open, and still isn't copied to the other account.
+    @Test func aGrantGivenAgainAfterTheCleanUpStaysWhileWindowsStayOpen() throws {
+        let grants =
+            #""permissionMode":"acceptEdits","sessionPermissionUpdates":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"git push:*"}]}]"#
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"T"}"#, to: a.appending(path: "local_1.json"),
+            modified: Date().addingTimeInterval(-3_600))
+        try box.write(#"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"T2"}"#, to: b.appending(path: "local_1.json"))
+        #expect(try box.sync().grantsRemoved == 2)
+
+        for round in 1...3 {
+            // Asked again, the user allows it again in WORK, and Claude saves the card.
+            let again = #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"T\#(round + 2)"}"#
+            try box.write(again, to: b.appending(path: "local_1.json"), modified: Date().addingTimeInterval(Double(round) * 60))
+
+            let report = try box.sync()
+
+            #expect(report.grantsRemoved == 0)
+            #expect(box.read(b.appending(path: "local_1.json")) == again, "round \(round)")
+            #expect(box.read(a.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T\#(round + 2)"}"#)
+        }
+        #expect(box.read(box.paths.stateDir.appending(path: "cross-account-grants.json")) == #"{"cards":{},"version":2}"#)
+    }
+
+    /// A copy the clean-up has to leave for now, here one whose conversation a running `claude` has open, doesn't make
+    /// the copies it is done with lose a grant given again there.
+    @Test func eachCopyLosesTheGrantsOnceEvenWhileAnotherWaits() throws {
+        let grants =
+            #""sessionPermissionUpdates":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"git push:*"}]}]"#
+        let other = "99999999-8888-4777-8666-555555555555"
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        try box.write(#"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"T"}"#, to: a.appending(path: "local_1.json"))
+        let waiting = #"{"sessionId":"local_1","cliSessionId":"\#(other)",\#(grants),"title":"live"}"#
+        try box.write(waiting, to: b.appending(path: "local_1.json"), modified: Date().addingTimeInterval(-3_600))
+
+        let first = try box.sync { $0.liveSessionIDs = [other] }
+
+        #expect(first.grantsRemoved == 1 && first.keptLive == 1)
+        #expect(box.read(a.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T"}"#)
+        #expect(box.read(b.appending(path: "local_1.json")) == waiting)
+
+        let again = #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"again"}"#
+        try box.write(again, to: a.appending(path: "local_1.json"), modified: Date().addingTimeInterval(60))
+        _ = try box.sync { $0.liveSessionIDs = [other] }
+        #expect(box.read(a.appending(path: "local_1.json")) == again, "MAIN's copy lost it once already")
+
+        // Once that process is gone, the waiting copy gets the card without MAIN's grant, and the list is done.
+        let last = try box.sync { $0.liveSessionIDs = [] }
+        #expect(last.grantsRemoved == 1)
+        #expect(box.read(a.appending(path: "local_1.json")) == again)
+        #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"again"}"#)
+        #expect(box.read(box.paths.stateDir.appending(path: "cross-account-grants.json")) == #"{"cards":{},"version":2}"#)
     }
 
     /// Each allowed app, change to the session's rules and computer-use flag is matched on its own, so one that older
@@ -211,7 +268,8 @@ struct SessionSyncAccountTests {
     }
 
     /// A list an earlier build saved after matching whole values only is looked for again, entry by entry: the grants it
-    /// missed because either account added its own go now, and what it already named stays on it.
+    /// missed because either account added its own go now, and what it already named stays on it, such as a grant that
+    /// build took out of both accounts and one window wrote back.
     @Test func aListFromWholeValueMatchingIsLookedForAgain() throws {
         let terminal = #"{"bundleId":"com.apple.Terminal","displayName":"Terminal","grantedAt":1790000000000,"tier":"full"}"#
         let notes = #"{"bundleId":"com.apple.Notes","displayName":"Notes","grantedAt":1790000500000,"tier":"full"}"#
@@ -224,19 +282,22 @@ struct SessionSyncAccountTests {
         try box.write(
             #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cuAllowedApps":[\#(terminal), \#(notes)],"title":"T2"}"#,
             to: b.appending(path: "local_1.json"))
+        try box.write(#"{"sessionId":"local_9","cuAllowedApps":[\#(terminal)],"title":"N"}"#, to: a.appending(path: "local_9.json"))
+        try box.write(#"{"sessionId":"local_9","title":"N"}"#, to: b.appending(path: "local_9.json"), modified: Date().addingTimeInterval(-3_600))
+        let item = try #require(SessionSync.facts(of: Data(#"{"cuAllowedApps":[\#(terminal)]}"#.utf8)).grants["cuAllowedApps"]?.first)
         // The two lists differ as whole values, so that build found nothing for local_1.
         let list = box.paths.stateDir.appending(path: "cross-account-grants.json")
-        try box.write(#"{"cards":{"local_9":["cuGrantFlags 00"]},"version":1}"#, to: list)
+        try box.write(#"{"cards":{"local_9.json":["\#(item)"]},"version":1}"#, to: list)
 
         let report = try box.sync()
 
-        #expect(report.grantsRemoved == 2)
+        #expect(report.grantsRemoved == 3)
+        #expect(box.read(a.appending(path: "local_9.json")) == #"{"sessionId":"local_9","title":"N"}"#)
         #expect(
             box.read(b.appending(path: "local_1.json"))
                 == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","cuAllowedApps":[\#(notes)],"title":"T2"}"#)
         #expect(box.read(a.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T2"}"#)
-        let saved = try #require(box.read(list))
-        #expect(saved.contains(#""version":2"#) && saved.contains("local_1") && saved.contains("local_9"))
+        #expect(box.read(list) == #"{"cards":{},"version":2}"#, "every copy has lost them")
         #expect(try box.sync().changes == 0, "looked for once")
     }
 
