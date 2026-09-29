@@ -209,7 +209,7 @@ baton local-only cloud-lock on|off|status
                                     ~/.claude/settings.json
 baton conversations [--all] [--json]
                                     Recent local Code sessions and Cowork tasks: the 20 most
-                                    recent, or with --all every one
+                                    recent, or with --all or --json every one
 baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                     Continue a conversation in another profile: a Code session
                                     as itself or as a copy, or a new Cowork task with its history

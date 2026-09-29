@@ -154,6 +154,12 @@ public enum CLIOutput {
         }
     }
 
+    /// How many conversations `baton conversations` shows: the 20 most recent, or every one with `--all` or
+    /// `--json`, so a script never takes the first 20 for all of them.
+    public static func conversationLimit(for args: [String]) -> Int? {
+        args.contains("--all") || args.contains("--json") ? nil : 20
+    }
+
     /// The line under `baton conversations` when it shows only the most recent: how many more there are.
     public static func moreConversations(shown: Int, of total: Int) -> String? {
         total > shown ? "Showing the \(shown) most recent of \(total); add --all for every one." : nil

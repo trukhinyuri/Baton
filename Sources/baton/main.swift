@@ -32,7 +32,7 @@ let usage = """
                                           ~/.claude/settings.json
       baton conversations [--all] [--json]
                                           Recent local Code sessions and Cowork tasks: the 20 most
-                                          recent, or with --all every one
+                                          recent, or with --all or --json every one
       baton continue <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                           Continue a conversation in another profile: a Code session
                                           as itself or as a copy, or a new Cowork task with its history
@@ -322,9 +322,7 @@ do {
             let window = args.count >= 3 && !args[2].hasPrefix("--") ? destinationID(args[2]) : nil
             let rows = manager.localOnlyStatus().filter { window == nil || $0.window == window }
             if args.contains("--json") {
-                let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                let payload = rows.map { ["window": $0.window, "label": $0.label, "status": $0.status.rawValue] }
-                print(String(decoding: try encoder.encode(payload), as: UTF8.self))
+                print(try CLIOutput.json(rows.map { ["window": $0.window, "label": $0.label, "status": $0.status.rawValue] }))
             } else {
                 for row in rows { print("\(row.label): \(describe(row.status))") }
             }
@@ -341,8 +339,7 @@ do {
     case "doctor":
         let entries = try Diagnostics.inspect(paths: manager.paths)
         if args.contains("--json") {
-            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            print(String(decoding: try encoder.encode(entries), as: UTF8.self))
+            print(try CLIOutput.json(entries))
         } else {
             print("Read-only local inventory. Cloud access and feature availability are not tested.")
             for note in LegacyMigration.notes(paths: manager.paths, cli: cli) { print(note) }
@@ -385,7 +382,7 @@ do {
         }
     case "conversations":
         let all = manager.conversations()
-        let shown = args.contains("--all") ? all : Array(all.prefix(20))
+        let shown = CLIOutput.conversationLimit(for: args).map { Array(all.prefix($0)) } ?? all
         if args.contains("--json") {
             print(try CLIOutput.json(CLIOutput.conversations(shown)))
             break

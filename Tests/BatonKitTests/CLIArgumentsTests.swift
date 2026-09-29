@@ -133,4 +133,11 @@ struct CLIArgumentsTests {
         #expect(CLIOutput.moreConversations(shown: 20, of: 20) == nil)
         #expect(CLIOutput.moreConversations(shown: 64, of: 64) == nil)
     }
+
+    /// A script reading `--json` gets every conversation, not a silent first 20.
+    @Test func conversationsAsJSONAreAllOfThem() {
+        #expect(CLIOutput.conversationLimit(for: ["conversations"]) == 20)
+        #expect(CLIOutput.conversationLimit(for: ["conversations", "--all"]) == nil)
+        #expect(CLIOutput.conversationLimit(for: ["conversations", "--json"]) == nil)
+    }
 }
