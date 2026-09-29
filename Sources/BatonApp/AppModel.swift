@@ -25,8 +25,10 @@ final class AppModel: ObservableObject {
     @Published var isContinuing = false
     @Published private(set) var conversations: [Conversation] = []
     @Published private(set) var isLoadingConversations = false
-    /// Selected when the continue sheet opens, if still available.
-    @Published var preselectedConversation: String?
+    /// What the limit banner asks the Continue sheet to select: the most recent session of the window at its limit
+    /// (`continueFrom`) and the window the banner named (`continueTo`). Both `nil` for a plain “Continue work…”.
+    private(set) var continueFrom: String?
+    private(set) var continueTo: String?
     /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed;
     /// any other goes after 20 seconds, and a warning it covered shows again.
     @Published private(set) var notices = Notices()
@@ -204,6 +206,15 @@ final class AppModel: ObservableObject {
     /// time the window opens.
     func bringWindowForward() { presentWindow?() }
 
+    /// Opens the Continue sheet. From the limit banner it selects the most recent session of the window at its limit
+    /// (`tired`) and the window the banner named (`destination`); from anywhere else, the most recent session of any
+    /// window and the one with the most room.
+    func continueWork(from tired: String? = nil, to destination: String? = nil) {
+        continueFrom = tired
+        continueTo = destination
+        isContinuing = true
+    }
+
     func show(_ error: Error) {
         errorTitle = WindowStatus.alertTitle(for: error)
         errorMessage = error.localizedDescription
@@ -307,9 +318,10 @@ final class AppModel: ObservableObject {
     var limitReached: ProfileStatus? { statuses.first { $0.isRunning && isAtLimit($0) } }
 
     /// Where to continue by default: the signed-in subscription not at its limit with the most headroom by its binding
-    /// limit (see `DestinationRanking.ranked`), among those signed in with `accounts` if given.
-    func bestDestination(excluding excluded: String?, accounts: Set<String>? = nil) -> String? {
-        DestinationRanking.best(statuses, excluding: excluded, accounts: accounts)
+    /// limit (see `DestinationRanking.ranked`), among those signed in with `accounts` if given, or `preferred` while it
+    /// is one of them.
+    func bestDestination(excluding excluded: String?, accounts: Set<String>? = nil, preferring preferred: String? = nil) -> String? {
+        DestinationRanking.best(statuses, excluding: excluded, accounts: accounts, preferring: preferred)
     }
 
     /// The accounts that may continue work touching `folders`, by the folder rules; `nil` when no rule applies.

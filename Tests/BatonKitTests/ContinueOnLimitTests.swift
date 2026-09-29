@@ -540,6 +540,16 @@ struct DestinationRankingTests {
             "an account whose email isn't known is never taken for an allowed one")
     }
 
+    /// The window the limit banner named stays chosen while it has room and may take the work; otherwise the best.
+    @Test func theBannersWindowIsPreferredWhileItHasRoom() {
+        let statuses = [status("main", week: 100), status("lab", week: 50), status("team", week: 10), status("home", week: 20)]
+        #expect(DestinationRanking.best(statuses, excluding: "main", now: now) == "team")
+        #expect(DestinationRanking.best(statuses, excluding: "main", preferring: "lab", now: now) == "lab")
+        #expect(DestinationRanking.best(statuses, excluding: "lab", preferring: "lab", now: now) == "team", "never the session's own window")
+        #expect(DestinationRanking.best(statuses, preferring: "main", now: now) == "team", "never one at its limit")
+        #expect(DestinationRanking.best(statuses, accounts: ["home@x.com"], preferring: "lab", now: now) == "home", "never one a rule leaves out")
+    }
+
     @Test func mostHeadroomNeedsTwoFreshSamplesAndNeverPicksAStaleOne() {
         #expect(DestinationRanking.mostHeadroom([status("a", week: 40), status("b", week: 3, age: 4 * 3600)], now: now) == nil)
         #expect(DestinationRanking.mostHeadroom([status("a", week: 40), status("b", week: 20), status("c", week: 1, age: 6 * 3600)], now: now) == "b")

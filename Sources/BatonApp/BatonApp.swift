@@ -41,7 +41,7 @@ struct BatonApp: App {
                 Button("Share Sessions Now") { model.syncNow(asked: true) }.keyboardShortcut("r")
                 Button("Continue work…") {
                     model.bringWindowForward()
-                    model.isContinuing = true
+                    model.continueWork()
                 }
                 Button("Check sessions…") {
                     model.bringWindowForward()
@@ -130,7 +130,7 @@ struct MenuBarContent: View {
         Button("Continue work…") {
             openWindow(id: "main")
             NSApp.activate()
-            model.isContinuing = true
+            model.continueWork()
         }
         Button("Report a problem…") {
             openWindow(id: "main")
