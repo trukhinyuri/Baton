@@ -17,6 +17,7 @@ final class AddProfileForm: ObservableObject {
     var trimmedEmail: String { email.trimmingCharacters(in: .whitespaces) }
     var suggestedLabel: String { trimmedEmail.isEmpty ? "" : Profile.suggestedLabel(for: trimmedEmail, taken: taken) }
     var labelIsTaken: Bool { taken.contains { $0.caseInsensitiveCompare(label) == .orderedSame } }
+    var labelIsReserved: Bool { Profile.isReservedLabel(label) }
     var isValid: Bool { Profile.isValidEmail(trimmedEmail) && Profile.isValidLabel(label) && !labelIsTaken }
 }
 
@@ -68,6 +69,8 @@ struct AddProfileSheet: View {
                         .accessibilityLabel("Dock label")
                         if form.labelIsTaken {
                             Text("Already used").font(.caption).foregroundStyle(.orange)
+                        } else if form.labelIsReserved {
+                            Text("Names the main Claude").font(.caption).foregroundStyle(.orange)
                         }
                     }
                 }

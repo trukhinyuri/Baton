@@ -76,6 +76,10 @@ struct ProfileTests {
         #expect(throws: ProfileError.reservedLabel("MAIN")) { try manager.create(label: "main", email: nil) }
         #expect(throws: ProfileError.reservedLabel("CLAUDE")) { try manager.create(label: "Claude", email: nil) }
         #expect(try manager.create(label: "MAIN_", email: nil).id == "main-2", "a label that would get the id main gets another")
+        #expect(ProfileManager.reservedIDWarnings(manager.profiles).isEmpty)
+        // An earlier version let a profile have the id main; start-up says so instead of renaming its folders.
+        let old = Profile(id: "main", label: "MAIN", email: nil, color: "#1971C2")
+        #expect(ProfileManager.reservedIDWarnings(manager.profiles + [old]).map { $0.hasPrefix("Claude MAIN was added by an earlier") } == [true])
     }
 
     /// An Add that fails halfway (a full disk, a copy that doesn't verify) leaves nothing, and trying again keeps the id.

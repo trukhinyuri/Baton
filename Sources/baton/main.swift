@@ -486,7 +486,7 @@ do {
         }
     case "report":
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? manager.paths.home
-        let localOnly = Dictionary(uniqueKeysWithValues: manager.localOnlyStatus().map { ($0.window, $0.status == .on) })
+        let localOnly = Dictionary(manager.localOnlyStatus().map { ($0.window, $0.status) }, uniquingKeysWith: { first, _ in first })
         print(
             try FeedbackReport.command(
                 args, paths: manager.paths, log: LogTail.read(), localOnly: localOnly, downloads: downloads,

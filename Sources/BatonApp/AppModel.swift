@@ -31,10 +31,15 @@ final class AppModel: ObservableObject {
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
     /// What the footer shows: the start-up warnings, which stay until Baton quits, then the last open's warning.
-    @Published private(set) var setupWarning: String? { didSet { remember(setupWarning) } }
-    private var startUpWarning: String? { didSet { showWarnings() } }
+    /// Worked out when read, not kept by a didSet: Swift runs no didSet for what a class sets in its own init.
+    var setupWarning: String? {
+        let shown = [startUpWarning, openWarning].compactMap { $0 }.joined(separator: " ")
+        return shown.isEmpty ? nil : shown
+    }
+    /// Set once, in init, through `warnAtStartUp`.
+    @Published private var startUpWarning: String?
     /// The warning of the window the last open action started (`ProfileManager.openWarning(of:)`).
-    private var openWarning: String? { didSet { showWarnings() } }
+    @Published private var openWarning: String? { didSet { remember(openWarning) } }
     @Published var pendingRemoval: ProfileStatus?
     /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
     @Published private(set) var installWarning: String?
@@ -83,7 +88,7 @@ final class AppModel: ObservableObject {
         manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil)
         reload()
         if let unreachable {
-            startUpWarning = unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;")
+            warnAtStartUp(unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;"))
             return
         }
         // Documentation screenshots: BATON_DEMO=1 shows sample data, …_DEMO_SHEET=1 opens "Add"
@@ -117,7 +122,7 @@ final class AppModel: ObservableObject {
         case .failed(let message)?: startUp.append(message)
         default: break  // kept or both exist: the status panel and `baton doctor` say why
         }
-        if !startUp.isEmpty { startUpWarning = startUp.joined(separator: " ") }
+        if !startUp.isEmpty { warnAtStartUp(startUp.joined(separator: " ")) }
         cloudMoveLockOn = manager.cloudMoveLock.status() == .on
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.reload() }
@@ -214,9 +219,10 @@ final class AppModel: ObservableObject {
         run("Restarting Claude \(displayLabel(of: id))…", opening: id) { try await manager.restart(id) }
     }
 
-    private func showWarnings() {
-        let shown = [startUpWarning, openWarning].compactMap { $0 }.joined(separator: " ")
-        setupWarning = shown.isEmpty ? nil : shown
+    /// Shows `warning` in the footer until Baton quits, and keeps it for a problem report.
+    private func warnAtStartUp(_ warning: String) {
+        startUpWarning = warning
+        remember(warning)
     }
 
     private func applyLocalOnlyToClosedWindows() {
@@ -233,7 +239,7 @@ final class AppModel: ObservableObject {
     func makeReport() async -> FeedbackReport {
         guard !isDemo else { return FeedbackReport(facts: DemoData.reportFacts) }
         let (paths, errors, sync, date) = (manager.paths, recentErrors, lastSyncReport, lastSync)
-        let localOnly = localOnlyMaps().isOn
+        let localOnly = Dictionary(manager.localOnlyStatus().map { ($0.window, $0.status) }, uniquingKeysWith: { first, _ in first })
         return await Task.detached {
             FeedbackReport(facts: .collect(paths: paths, errors: errors, log: LogTail.read(), lastSync: sync, lastSyncDate: date, localOnly: localOnly))
         }.value

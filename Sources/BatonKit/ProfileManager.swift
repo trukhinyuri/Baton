@@ -118,6 +118,8 @@ public struct SyncReport: Equatable, Sendable {
 ///    (continue-copies.lock, limit-sightings.lock, the log's) are taken last and wait for nothing while held.
 /// 2. In-process locks (`stateLock`, `cardsSharedLock`) last, held only while reading or writing memory: never while
 ///    waiting for a file lock, doing I/O or calling out. Across threads of one process the file locks serialize too.
+///    The one exception is `LimitTracker`'s lock: it is held while reading and writing limit-sightings.json under that
+///    file's lock and while listing transcripts, and nothing else is taken under it.
 public final class ProfileManager: @unchecked Sendable {
     public let paths: Paths
     public let registry: ProfileRegistry
@@ -139,7 +141,8 @@ public final class ProfileManager: @unchecked Sendable {
     /// The latest such warning of any window; `openWarning(of:)` gives one window's.
     public var lastOpenWarning: String? { stateLock.withLock { openWarning } }
 
-    /// The warning from the last time this manager started `window` (`"main"` or a profile id), if there was one.
+    /// The warning from the last time this manager opened `window` (`"main"` or a profile id), if there was one. An
+    /// open that only brought a running window forward prepared nothing, so it has none.
     public func openWarning(of window: String) -> String? { stateLock.withLock { openWarnings[window] } }
 
     private func noteOpened(_ window: String, warning: String?) {
@@ -244,7 +247,16 @@ public final class ProfileManager: @unchecked Sendable {
         do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) } catch { warnings.append(error.localizedDescription) }
         if let warning = claudeVersionWarning { warnings.append(warning) }
         warnings += ManagedPolicy.warnings(in: managedPreferences, user: NSUserName())
-        return warnings
+        return warnings + Self.reservedIDWarnings(profiles)
+    }
+
+    /// A line for each profile an earlier version added under an id that names the main Claude (`Profile.reservedIDs`).
+    /// Its folders are not renamed: Claude may be using them, and the user can remove it and add it again.
+    static func reservedIDWarnings(_ profiles: [Profile]) -> [String] {
+        profiles.filter { Profile.reservedIDs.contains($0.id) }.map {
+            "Claude \($0.label) was added by an earlier version under the id \($0.id), which names the main Claude, so Baton "
+                + "can mix the two up. Remove it and add that account again with another Dock label."
+        }
     }
 
     /// Where an organization's managed preferences for Claude Desktop are (see `ManagedPolicy`). A manager for another
@@ -427,6 +439,7 @@ public final class ProfileManager: @unchecked Sendable {
             guard strays.allSatisfy(\.isTerminated) else { throw ProfileError.windowStillRunning(profile.label) }
         }
         if let window = running.first(where: { window(of: profile.id, is: $0) }) {
+            noteOpened(profile.id, warning: nil)
             return try await bringForward(window, app: engine, links: links)
         }
         try FileLock.withLock(registryLock, blocking: true) {
@@ -554,7 +567,10 @@ public final class ProfileManager: @unchecked Sendable {
 
     private func openMainNow(links: [URL]) async throws {
         let isMain = { (copy: RunningClaude) in copy.uses(dataDir: self.paths.mainDataDir, mainDataDir: self.paths.mainDataDir, bundle: self.paths.claudeApp) }
-        if runningClaudes().contains(where: isMain) { return try await bringMainForward(links: links) }
+        if runningClaudes().contains(where: isMain) {
+            noteOpened("main", warning: nil)
+            return try await bringMainForward(links: links)
+        }
         var startedMeanwhile = false
         do {
             _ = try FileLock.withLock(paths.stateDir.appending(path: "open.lock"), blocking: true) {

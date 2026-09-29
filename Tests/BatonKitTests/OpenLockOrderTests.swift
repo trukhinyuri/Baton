@@ -142,6 +142,25 @@ struct OpenLockOrderTests {
         #expect(manager.openWarning(of: "work") == warning, "LAB's open left WORK's warning alone")
     }
 
+    /// Showing a window that is already running prepares nothing, so a warning from its earlier start is not shown again.
+    @Test func bringingARunningWindowForwardHasNoWarning() async throws {
+        let box = try Sandbox()
+        let windows = FakeWindows()
+        let manager = try box.closedWorkWindow(windows)
+        let main = try box.pair(box.main, account: Sandbox.accountA)
+        try box.pair(box.work, account: Sandbox.accountB)
+        try box.write(#"{"title":"New since the last start"}"#, to: main.appending(path: "local_new.json"))
+        try box.write("broken", to: box.paths.stateDir.appending(path: "code-native-session-scopes.json"))
+        try await manager.open("work")
+        #expect(manager.openWarning(of: "work") != nil)
+
+        try await manager.open("work")
+
+        #expect(windows.started == 1, "brought forward, not started again")
+        #expect(manager.openWarning(of: "work") == nil)
+        #expect(manager.lastOpenWarning == nil)
+    }
+
     /// A second click while the window is still starting brings it forward instead of starting a second copy on the
     /// same data.
     @Test func openingAWindowThatIsStartingStartsItOnce() async throws {
