@@ -164,21 +164,25 @@ public struct InterfaceSync: Sendable {
         }
         wanted += Self.prefsAccountPrefixes.map { ($0 + account, mainPrefs[$0 + mainAccount]) }
 
-        var prefs = own, changed = 0
+        var prefs = own, changed = 0, attempt = base
         for (key, mainValue) in wanted {
             let mainText = mainValue.map(Self.canonical) ?? Self.missing
             let ownText = own[key].map(Self.canonical) ?? Self.missing
-            guard Self.resolve(own: ownText, main: mainText, base: base["prefs:" + key]) == .main else { continue }
-            base["prefs:" + key] = mainText
+            guard Self.resolve(own: ownText, main: mainText, base: attempt["prefs:" + key]) == .main else { continue }
+            attempt["prefs:" + key] = mainText
             guard mainText != ownText else { continue }
             prefs[key] = mainValue
             changed += 1
         }
-        guard changed > 0 else { return 0 }
+        guard changed > 0 else { base = attempt; return 0 }
+        // As in the settings merge: a link to a file outside this profile's data is left as it is, since another window
+        // may use that file, and a link inside it stays a link, the file it leads to backed up as content and written.
+        guard SettingsSync.mayWrite(url, in: dataDir) else { return 0 }
         preferences["epitaxyPrefs"] = prefs
         config["preferences"] = preferences
-        _ = try backup.save(url)
-        try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]).write(to: url, options: .atomic)
+        _ = try backup.save(LocalOnly.writeTarget(url))
+        try LocalOnly.replace(url, with: JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]))
+        base = attempt
         return changed
     }
 

@@ -162,6 +162,41 @@ struct InterfaceSyncTests {
         try box.write(String(decoding: data, as: UTF8.self), to: dir.appending(path: InterfaceSync.desktopConfig))
     }
 
+    /// A linked `claude_desktop_config.json` stays a link after the interface merge too. One leading outside the profile's
+    /// data, such as to a dotfiles file another window may use, is left as it is; one leading inside it is written where
+    /// it leads, with that file's permissions, and backed up as content.
+    @Test func aLinkedConfigStaysALinkAndOneLeadingOutsideIsLeftAsItIs() throws {
+        let fm = FileManager.default
+        for inside in [false, true] {
+            let box = try sandbox()
+            try writePrefs(box, box.main, ["epitaxy-transcript-links-in-preview": true])
+            let target = (inside ? box.work.appending(path: "kept") : box.root.appending(path: "dotfiles")).appending(path: "work.json")
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let before = #"{"mcpServers":{"files":{"command":"/usr/bin/true","env":{"TOKEN":"x"}}},"preferences":{"epitaxyPrefs":{"#
+                + #""epitaxy-transcript-links-in-preview":false}}}"#
+            try box.write(before, to: target)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            let config = box.work.appending(path: InterfaceSync.desktopConfig)
+            try fm.createSymbolicLink(at: config, withDestinationURL: target)
+
+            let changed = try InterfaceSync(paths: box.paths).run(into: box.work, profileID: "work")
+
+            #expect(try fm.destinationOfSymbolicLink(atPath: config.path) == target.path, "still a link")
+            #expect(try fm.attributesOfItem(atPath: target.path)[.posixPermissions] as? Int == 0o600, "its own permissions")
+            let backups = fm.enumerator(at: box.paths.backupsDir, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? []
+            if inside {
+                #expect(changed == 1)
+                #expect(try prefs(box.work)["epitaxy-transcript-links-in-preview"] as? Bool == true, "written where it leads")
+                let saved = backups.filter { $0.lastPathComponent == target.lastPathComponent }
+                #expect(saved.count == 1 && saved.first.flatMap(box.read) == before, "backed up as content")
+            } else {
+                #expect(changed == 0)
+                #expect(box.read(target) == before, "left as it is")
+                #expect(backups.isEmpty)
+            }
+        }
+    }
+
     /// Claude reads these settings from `claude_desktop_config.json` before Local Storage.
     @Test func portablePrefsShareWithoutImportingUnknownOrAccountPreferences() throws {
         let box = try sandbox()
