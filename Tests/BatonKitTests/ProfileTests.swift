@@ -63,6 +63,43 @@ struct ProfileTests {
         #expect(box.read(box.paths.registryFile)?.contains(#""carryPermissionMode""#) == true)
     }
 
+    /// MAIN and CLAUDE name the main window in the app, the CLI and reports, so no subscription may take them.
+    @Test func mainAndClaudeNameOnlyTheMainWindow() throws {
+        #expect(!Profile.isValidLabel("MAIN"))
+        #expect(!Profile.isValidLabel("claude"))
+        #expect(Profile.suggestedLabel(for: "main@company.com", taken: []) == "MAIN2")
+        let box = try Sandbox()
+        try box.claudeBundle(at: box.paths.claudeApp, identifier: "test.baton.not-claude")
+        let manager = ProfileManager(paths: box.paths)
+        manager.appBuilder = { _ in }
+
+        #expect(throws: ProfileError.reservedLabel("MAIN")) { try manager.create(label: "main", email: nil) }
+        #expect(throws: ProfileError.reservedLabel("CLAUDE")) { try manager.create(label: "Claude", email: nil) }
+        #expect(try manager.create(label: "MAIN_", email: nil).id == "main-2", "a label that would get the id main gets another")
+    }
+
+    /// An Add that fails halfway (a full disk, a copy that doesn't verify) leaves nothing, and trying again keeps the id.
+    @Test func failedAddLeavesNothingBehind() throws {
+        let box = try Sandbox()
+        try box.claudeBundle(at: box.paths.claudeApp, identifier: "test.baton.not-claude")
+        let manager = ProfileManager(paths: box.paths)
+        let fails = Flag()
+        fails.set(true)
+        manager.appBuilder = { profile in
+            try FileManager.default.createDirectory(
+                at: box.paths.launcher(for: profile).appending(path: "Contents/MacOS"), withIntermediateDirectories: true)
+            if fails.value { throw CocoaError(.fileWriteOutOfSpace) }
+        }
+
+        #expect(throws: CocoaError.self) { try manager.create(label: "LAB", email: nil) }
+        #expect(!box.exists(box.paths.dataDir(for: "lab")))
+        #expect(!box.exists(box.paths.launcher(for: Profile(id: "lab", label: "LAB", email: nil, color: "#000000"))))
+        #expect(try manager.registry.load().isEmpty)
+
+        fails.set(false)
+        #expect(try manager.create(label: "LAB", email: nil).id == "lab", "not lab-2")
+    }
+
     @Test func unexpectedAccountIsCaseInsensitive() {
         let profile = Profile(id: "w", label: "W", email: "Jane@Acme.com", color: "#000000")
         var status = ProfileStatus(profile: profile, accountID: "id", email: "jane@acme.com", usage: nil, isRunning: false)

@@ -36,12 +36,20 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     public static let mainColor = "#D97757"
     public static let maxLabelLength = 8
 
+    /// Ids that name the main Claude window everywhere (`"main"`, and `"claude"` in the CLI), never a profile's.
+    public static let reservedIDs: Set<String> = ["main", "claude"]
+
+    /// Labels that name the main Claude window: in `baton open MAIN`, in reports and on its badge.
+    public static func isReservedLabel(_ label: String) -> Bool {
+        reservedIDs.contains(label.trimmingCharacters(in: .whitespaces).lowercased())
+    }
+
     /// Suggests a label from an email: `jane.doe@example.com` → `JANE`.
     public static func suggestedLabel(for email: String, taken: Set<String>) -> String {
         let local = email.split(separator: "@").first.map(String.init) ?? email
         let word = local.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).first.map(String.init) ?? "acct"
         let base = String(word.uppercased().prefix(maxLabelLength))
-        let upperTaken = Set(taken.map { $0.uppercased() })
+        let upperTaken = Set(taken.map { $0.uppercased() }).union(reservedIDs.map { $0.uppercased() })
         if !upperTaken.contains(base) { return base.isEmpty ? "ACCT" : base }
         for n in 2...99 {
             let candidate = String(base.prefix(maxLabelLength - String(n).count)) + String(n)
@@ -59,10 +67,11 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
         return collapsed.isEmpty ? "profile" : String(collapsed.prefix(24))
     }
 
+    /// A label of 1 to 8 letters, digits, "-" or "_" that doesn't name the main window (`isReservedLabel`).
     public static func isValidLabel(_ label: String) -> Bool {
         let trimmed = label.trimmingCharacters(in: .whitespaces)
         return !trimmed.isEmpty && trimmed.count <= maxLabelLength
-            && trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+            && trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } && !isReservedLabel(trimmed)
     }
 
     public static func isValidEmail(_ email: String) -> Bool {

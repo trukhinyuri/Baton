@@ -4,6 +4,8 @@ import Darwin
 public enum ProfileError: LocalizedError, Equatable {
     case claudeNotInstalled(String)
     case invalidLabel
+    /// MAIN and CLAUDE name the main Claude window.
+    case reservedLabel(String)
     case invalidEmail
     case duplicateLabel(String)
     case notFound(String)
@@ -28,6 +30,7 @@ public enum ProfileError: LocalizedError, Equatable {
         switch self {
         case .claudeNotInstalled(let path): "Claude Desktop is not installed at \(path). Install it from claude.ai/download."
         case .invalidLabel: "Use 1–\(Profile.maxLabelLength) letters, digits, “-” or “_” for the label."
+        case .reservedLabel(let label): "“\(label)” is the name of the main Claude window. Choose another label."
         case .invalidEmail: "That doesn't look like an email address."
         case .duplicateLabel(let label): "A profile labeled “\(label)” already exists."
         case .notFound(let id): "No profile “\(id)”."
@@ -316,6 +319,7 @@ public final class ProfileManager: @unchecked Sendable {
         try ensureWritable()
         guard fm.fileExists(atPath: paths.claudeApp.path) else { throw ProfileError.claudeNotInstalled(paths.claudeApp.path) }
         let label = rawLabel.trimmingCharacters(in: .whitespaces).uppercased()
+        if Profile.isReservedLabel(label) { throw ProfileError.reservedLabel(label) }
         guard Profile.isValidLabel(label) else { throw ProfileError.invalidLabel }
         let email = rawEmail?.trimmingCharacters(in: .whitespaces).nilIfEmpty
         if let email, !Profile.isValidEmail(email) { throw ProfileError.invalidEmail }
@@ -329,21 +333,29 @@ public final class ProfileManager: @unchecked Sendable {
             var id = Profile.slug(for: label)
             let base = id
             var n = 2
-            while all.contains(where: { $0.id == id }) || fm.fileExists(atPath: paths.dataDir(for: id).path) {
+            while Profile.reservedIDs.contains(id) || all.contains(where: { $0.id == id }) || fm.fileExists(atPath: paths.dataDir(for: id).path) {
                 id = "\(base)-\(n)"; n += 1
             }
             let profile = Profile(
                 id: id, label: label, email: email,
                 color: color ?? Profile.palette[all.count % Profile.palette.count])
-            try fm.createDirectory(at: paths.dataDir(for: id), withIntermediateDirectories: true)
-            if let appBuilder {
-                try appBuilder(profile)
-            } else {
-                try buildEngine(for: profile)
-                try buildLauncher(for: profile)
+            // What this call adds, so a failed Add leaves nothing behind and a retry gets the same id. None of it holds
+            // anything yet: Claude has never run on the new data folder, and the app copy and launcher are Baton's own.
+            let made = [paths.dataDir(for: id), paths.engine(for: id), paths.launcher(for: profile)].filter { !fm.fileExists(atPath: $0.path) }
+            do {
+                try fm.createDirectory(at: paths.dataDir(for: id), withIntermediateDirectories: true)
+                if let appBuilder {
+                    try appBuilder(profile)
+                } else {
+                    try buildEngine(for: profile)
+                    try buildLauncher(for: profile)
+                }
+                all.append(profile)
+                try registry.save(all)
+            } catch {
+                for url in made where fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
+                throw error
             }
-            all.append(profile)
-            try registry.save(all)
             return profile
         }!
     }
