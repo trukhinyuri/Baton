@@ -7,6 +7,33 @@ Thanks for helping. A few ground rules keep the project useful and safe for ever
 - **Stay local.** No network calls, and no reading of credentials, tokens, cookies or the Keychain. Claude's data is written only while that window is closed.
 - **Test what you change.** `make test` runs the suite; logic belongs in `BatonKit`, where it can be tested against a sandboxed home directory. Write the failing test first. [docs/TESTING.md](docs/TESTING.md) has the details.
 
+## Getting started
+
+You need macOS 14 or later and Xcode 16 or later, or the Command Line Tools (`xcode-select --install`). These are the checks CI runs, and a pull request passes them all:
+
+```sh
+git clone https://github.com/trukhinyuri/Baton.git && cd Baton
+make test                                        # the suite, in temporary folders only
+swift build -Xswiftc -warnings-as-errors
+swift format lint -r --strict Sources Tests Package.swift
+scripts/check-docs.sh && scripts/check-repo.sh   # docs, links and repository files
+make app verify                                  # the universal app and its signature checks
+```
+
+## Scope
+
+Fixes are always welcome. For a new feature or setting, open a **Suggest a change** issue first, so we can agree it fits before you write it. Some things are declined by design, and the [design decisions](docs/adr/README.md) say why: network code ([0002](docs/adr/0002-no-network-code.md)), handling sign-in ([0003](docs/adr/0003-sign-in-stays-with-claude.md)), working around Claude's history suppression ([0005](docs/adr/0005-never-bypass-history-suppression.md)), and anything on the right-hand side of [Staying within Anthropic's terms](README.md#staying-within-anthropics-terms).
+
+## Pull requests
+
+- One change per pull request, with the test that failed before it. The pull request template has the checklist.
+- Title the pull request, and write each commit message, as one plain sentence about what changed, such as "Continue All: the six most recent by default, --max to change it".
+- Update `README.md` and `CHANGELOG.md` when users will notice the change.
+
+## License
+
+Baton is under the [MIT License](LICENSE). By contributing, you agree that your contribution is licensed under it too; there is no separate agreement to sign.
+
 ## Layout
 
 | Path | What |
