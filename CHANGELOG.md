@@ -2,7 +2,7 @@
 
 ## 1.0.0-rc.1 — 2026-09-29
 
-A release candidate, not notarized yet: open it once with System Settings → Privacy & Security → Open Anyway, or build it with `make install`. The signed 1.0.0 and the Homebrew cask follow.
+A release candidate, ad-hoc signed and not notarized yet. Drag `Baton.app` to `/Applications` before you open it the first time, then open it once with System Settings → Privacy & Security → Open Anyway, or build it with `make install`. The signed 1.0.0 and the Homebrew cask follow.
 
 **Baton takes the track.** Claude Profiles is now Baton: same app, same windows, a name that keeps "Claude", Anthropic's trademark, out of the product's own name. Your profiles and sessions carry over; what changes for you is listed under "Upgrading from Claude Profiles" just below.
 
@@ -109,10 +109,10 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 
 ### Install and release
 
-- Universal build for Apple silicon and Intel, signed with the hardened runtime; releases are notarized, stapled, published with `SHA256SUMS.txt` and a build-provenance attestation
-- Homebrew: `brew install --cask trukhinyuri/tap/baton`
+- Universal build for Apple silicon and Intel, signed with the hardened runtime and published with `SHA256SUMS.txt` and a build-provenance attestation. 1.0.0-rc.1 is ad-hoc signed; from 1.0.0 releases are signed with a Developer ID, notarized and stapled
+- Homebrew from 1.0.0: `brew install --cask trukhinyuri/tap/baton`
 - The installer keeps the previous app as a ZIP in `AppBackups` inside Baton's data folder (the three latest) instead of runnable `.previous-*.app` copies beside the app, and moves those left by 0.2.0 to the Trash. Each ZIP is named after the app and its folder and never overwrites another; `make uninstall` moves Baton.app to the Trash
-- A release is published only when it can be notarized, and its last job points the Homebrew tap at it
+- From 1.0.0 a release is published only when it can be notarized, and its last job points the Homebrew tap at it; a release candidate is published as a prerelease without either
 
 ### Removed
 
