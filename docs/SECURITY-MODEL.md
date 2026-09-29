@@ -11,7 +11,7 @@ What Baton can reach, what it does with it, and what it never does. Report a wea
 | Account email | Claude's local IndexedDB cache | Reads the email that belongs to the account id, nothing else |
 | Usage | `plan-usage-history.json` | Reads its samples |
 | Limit messages and replies | Transcripts in `~/.claude/projects` | Reads when a session was refused at a limit, the reset time Claude gave, and when Claude last answered, to show when a window has room again |
-| Auto-continue entries | `claude_desktop_config.json` → `preferences.epitaxyPrefs` → `autoResumeRateLimit.<account>` | Reads reset times; turns `optedIn` off for one session's entry in the closed window that session was continued from, after a backup; `baton doctor` lists each change |
+| Auto-continue entries | `claude_desktop_config.json` → `preferences.epitaxyPrefs` → `autoResumeRateLimit.<account>`, and its Local Storage copy `LSS-persisted.autoResumeRateLimit.<account>` | Reads reset times; turns `optedIn` off for one session's entry in the closed window that session was continued from, in both places, after a backup; can add an entry, reset two minutes past, for a session that continues in a closed window, never where the account turned the option off; `baton doctor` lists each change |
 | Local Code transcripts | `~/.claude/projects` | Reads; writes only new copies when continuing, and side files after Claude's own fork |
 | Sidebar cards | `claude-code-sessions/` in each data directory | Reads and writes, with backups |
 | Desktop settings | `claude_desktop_config.json`, Local Storage, IndexedDB | Writes selected keys (Local only, the settings merge, Auto-continue above) only in closed windows, with backups |

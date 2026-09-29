@@ -374,6 +374,12 @@ do {
                 for line in manager.withheldLines(preview) { print("  \(line)") }
             }
             for change in manager.autoResume.changes() {
+                guard change.action == .turnedOff else {
+                    print(
+                        "Auto-continue added by Baton in Claude \(manager.displayLabel(of: change.window)) for \(change.entry) "
+                            + "(added \(LimitText.time(change.changedAt))), so the session continues there after another window's limit")
+                    continue
+                }
                 print(
                     "Auto-continue turned off by Baton in Claude \(manager.displayLabel(of: change.window)) for "
                         + "\(change.entry) (limit reset \(LimitText.time(change.resetsAt)), turned off \(LimitText.time(change.changedAt))): "

@@ -64,4 +64,11 @@ struct ServerFlagsTests {
         #expect(ServerFlags.flag(nil, dataDir: box.work, now: Self.now) == nil)
         #expect(ServerFlags.autoResumeKey == nil && ServerFlags.autoResume(dataDir: box.work, now: Self.now) == nil, "not measured yet")
     }
+
+    @Test func flagOffMeansNoSeed() {
+        #expect(Seeding.decide(flag: false, optedOut: false) == .flagOff)
+        #expect(Seeding.decide(flag: nil, optedOut: false) == .seed, "unknown: seed and watch whether each resumed")
+        #expect(Seeding.decide(flag: true, optedOut: false) == .seed)
+        #expect(Seeding.decide(flag: true, optedOut: true) == .optedOut, "the user's choice")
+    }
 }

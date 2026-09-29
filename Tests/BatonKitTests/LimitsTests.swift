@@ -538,6 +538,142 @@ struct AutoResumeTests {
         #expect(!box.exists(box.paths.backupsDir))
     }
 
+    // MARK: Local Storage copy and seeding
+
+    static func mirrorText(_ bucket: String, ms: Int64 = 1) -> String { #"{"value":\#(bucket),"tabId":"t1","timestamp":\#(ms)}"# }
+    func mirror(_ dir: URL) throws -> String? { try LocalStorage(dataDir: dir).items(origin: InterfaceSync.origin)[AutoResume.mirrorKey(Self.account)] }
+    func putMirror(_ dir: URL, _ text: String) throws {
+        try LocalStorage(dataDir: dir).update(origin: InterfaceSync.origin, set: [AutoResume.mirrorKey(Self.account): text], remove: [])
+    }
+
+    /// The settings said off and Local Storage said on for the same entry: a turn-off turns both off, and undo puts both back.
+    @Test func turnOffAlsoTurnsOffLocalStorageMirror() throws {
+        let box = try InterfaceSyncTests().sandbox()
+        let off = #"{"local_1": {"resetsAt": 1790640600, "attempt": 0, "optedIn": false}}"#
+        let original = Self.config(off)
+        try box.write(original, to: box.desktopConfig(box.work))
+        try putMirror(
+            box.work,
+            Self.mirrorText(#"{"local_1":{"resetsAt":1790640600,"attempt":0,"optedIn":true},"local_2":{"resetsAt":1790640600,"attempt":1,"optedIn":true}}"#))
+        let entry = AutoResumeEntry(key: "local_1", resetsAt: Date(timeIntervalSince1970: 1_790_640_600), optedIn: false)
+        let autoResume = AutoResume(paths: box.paths, isRunning: { _ in false })
+
+        #expect(try autoResume.turnOff(entry, window: "work", account: Self.account))
+
+        let copy = try #require(try mirror(box.work))
+        #expect(AutoResume.entries(inMirror: copy)?.map(\.optedIn) == [false, true], "that entry only")
+        #expect(InterfaceSync.object(copy)?["tabId"] as? String == "t1", "Claude's tab kept")
+        #expect(box.read(box.desktopConfig(box.work)) == original, "already off in the settings")
+        #expect(try autoResume.turnOff(entry, window: "work", account: Self.account) == false, "both off now")
+        let change = try #require(autoResume.changes().first)
+        #expect(change.action == .turnedOff && change.priorMirror == "true")
+
+        #expect(try autoResume.undo(change))
+        #expect(try AutoResume.entries(inMirror: #require(try mirror(box.work)))?.map(\.optedIn) == [true, true])
+        #expect(box.read(box.desktopConfig(box.work)) == original)
+    }
+
+    @Test func seedWritesPastResetEntryToPrefsAndLocalStorage() throws {
+        let box = try InterfaceSyncTests().sandbox()
+        try box.write(#"{"preferences": {"zoom": 1.0}}"#, to: box.desktopConfig(box.work))
+        let now = Date(timeIntervalSince1970: 1_790_700_000)
+        let autoResume = AutoResume(paths: box.paths, isRunning: { _ in false })
+
+        let seeded = try autoResume.seed(
+            [AutoResumeEntry(key: "local_1", resetsAt: .distantFuture), AutoResumeEntry(key: "local_2", resetsAt: .distantPast)],
+            window: "work", account: Self.account, now: now)
+
+        #expect(seeded == 2)
+        let expected = [
+            AutoResumeEntry(key: "local_1", resetsAt: now.addingTimeInterval(-120)), AutoResumeEntry(key: "local_2", resetsAt: now.addingTimeInterval(-120)),
+        ]
+        #expect(AutoResume.entries(in: box.work, account: Self.account) == expected, "added to the settings, reset two minutes ago")
+        #expect(try mirror(box.work).flatMap(AutoResume.entries(inMirror:)) == expected, "and to the Local Storage copy")
+        #expect(expected.allSatisfy { $0.isArmed(now: now) && $0.firesAt < now }, "Claude acts on them as soon as each is shown")
+        #expect(box.read(box.desktopConfig(box.work))?.contains(#""zoom": 1.0"#) == true, "the rest of the file kept")
+    }
+
+    @Test func seedKeepsOtherEntries() throws {
+        let box = try InterfaceSyncTests().sandbox()
+        try box.write(Self.config(Self.armed), to: box.desktopConfig(box.work))
+        try putMirror(box.work, Self.mirrorText(#"{"local_9":{"resetsAt":1790640600,"attempt":0,"optedIn":true}}"#))
+        let now = Date(timeIntervalSince1970: 1_790_700_000)
+
+        #expect(
+            try AutoResume(paths: box.paths, isRunning: { _ in false }).seed(
+                [AutoResumeEntry(key: "local_3", resetsAt: now)], window: "work", account: Self.account, now: now) == 1)
+
+        #expect(AutoResume.entries(in: box.work, account: Self.account)?.map(\.key) == ["local_1", "local_2", "local_3"])
+        #expect(try mirror(box.work).flatMap(AutoResume.entries(inMirror:))?.map(\.key) == ["local_3", "local_9"])
+        let text = try #require(box.read(box.desktopConfig(box.work)))
+        #expect(text.contains(#""other": [1, 2]"#) && text.contains(#""local_2": {"resetsAt": 1790640600, "attempt": 3, "optedIn": true}"#), "other bytes kept")
+    }
+
+    @Test func seedSkipsExplicitOptOutInSourceOrDestination() throws {
+        let box = try InterfaceSyncTests().sandbox()
+        let optedOut = Self.config("{}").replacingOccurrences(of: #"OptIn.\#(Self.account)": true"#, with: #"OptIn.\#(Self.account)": false"#)
+        let autoResume = AutoResume(paths: box.paths, isRunning: { _ in false })
+        let entry = [AutoResumeEntry(key: "local_1", resetsAt: Date())]
+
+        try box.write(optedOut, to: box.desktopConfig(box.work))
+        #expect(try autoResume.seed(entry, window: "work", account: Self.account) == 0)
+        #expect(box.read(box.desktopConfig(box.work)) == optedOut, "the user's choice: nothing written")
+        #expect(autoResume.seeding(window: "work", account: Self.account) == .optedOut)
+
+        try box.write(Self.config("{}"), to: box.desktopConfig(box.work))
+        try box.write(optedOut, to: box.desktopConfig(box.main))
+        #expect(try autoResume.seed(entry, window: "work", account: Self.account, source: ("main", Self.account)) == 0, "opted out where it came from")
+        #expect(autoResume.seeding(window: "work", account: Self.account, source: ("main", Self.account)) == .optedOut)
+
+        try box.write(Self.config("{}"), to: box.desktopConfig(box.main))
+        try LocalStorage(dataDir: box.main).update(
+            origin: InterfaceSync.origin, set: ["LSS-persisted.autoResumeRateLimitOptIn.\(Self.account)": Self.mirrorText("false")], remove: [])
+        #expect(AutoResume.optedOut(in: box.main, account: Self.account), "the Local Storage copy counts too")
+        #expect(!AutoResume.optedOut(in: box.work, account: Self.account), "true is not an opt-out")
+        #expect(try autoResume.seed(entry, window: "work", account: Self.account) == 1)
+        #expect(autoResume.seeding(window: "work", account: Self.account) == .seed, "the flag is unknown: seed and watch")
+    }
+
+    @Test func seedIsRecordedAndUndone() throws {
+        let box = try InterfaceSyncTests().sandbox()
+        let original = Self.config(#"{"local_1": {"resetsAt": 1790000000, "attempt": 2, "optedIn": true}}"#)
+        try box.write(original, to: box.desktopConfig(box.work))
+        let mirrorBefore = Self.mirrorText(#"{"local_1":{"resetsAt":1790000000,"attempt":2,"optedIn":true}}"#)
+        try putMirror(box.work, mirrorBefore)
+        let now = Date(timeIntervalSince1970: 1_790_700_000)
+        let autoResume = AutoResume(paths: box.paths, isRunning: { _ in false })
+
+        #expect(
+            try autoResume.seed(["local_1", "local_2"].map { AutoResumeEntry(key: $0, resetsAt: now) }, window: "work", account: Self.account, now: now) == 2)
+
+        let changes = autoResume.changes()
+        #expect(changes.map(\.action) == [.seeded, .seeded] && changes.map(\.entry) == ["local_1", "local_2"], "listed for doctor")
+        #expect(changes.map(\.prior) == [#"{"resetsAt": 1790000000, "attempt": 2, "optedIn": true}"#, "null"])
+        #expect(NativeForkCarry.files(under: box.paths.backupsDir).contains { $0.hasSuffix("Profiles/work/claude_desktop_config.json") })
+        #expect(NativeForkCarry.files(under: box.paths.backupsDir).contains { $0.contains("Profiles/work/Local Storage/leveldb") }, "Local Storage backed up")
+
+        for change in changes { #expect(try autoResume.undo(change)) }
+        #expect(box.read(box.desktopConfig(box.work)) == original, "the replaced entry back, the added one gone")
+        #expect(try AutoResume.entries(inMirror: #require(try mirror(box.work))) == AutoResume.entries(inMirror: mirrorBefore))
+        #expect(autoResume.changes().isEmpty)
+    }
+
+    @Test func seedRefusesOpenWindow() throws {
+        let box = try InterfaceSyncTests().sandbox()
+        try box.write(Self.config("{}"), to: box.desktopConfig(box.work))
+        let entry = [AutoResumeEntry(key: "local_1", resetsAt: Date())]
+        #expect(throws: AutoResume.Failure.windowOpen("WORK")) {
+            try AutoResume(paths: box.paths, isRunning: { _ in true }).seed(entry, window: "work", account: Self.account)
+        }
+        let release = try SidebarLayoutTests().hold(LocalStorage(dataDir: box.work).dbDir)
+        defer { release() }
+        #expect(throws: AutoResume.Failure.windowOpen("WORK"), "its Local Storage in use") {
+            try AutoResume(paths: box.paths, isRunning: { _ in false }).seed(entry, window: "work", account: Self.account)
+        }
+        #expect(box.read(box.desktopConfig(box.work)) == Self.config("{}"))
+        #expect(!box.exists(box.paths.backupsDir))
+    }
+
     @Test func handingOverTurnsOffTheSourceWindowsEntryForThatSessionOnly() throws {
         let box = try Sandbox()
         let manager = ProfileManager(paths: box.paths)
