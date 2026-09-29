@@ -335,7 +335,6 @@ Same app, new name. If you're upgrading from Claude Profiles, your windows, prof
   ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/claude-profiles /usr/local/bin/claude-profiles
   ```
 - **`make install`** installs into the folder you already have, renames it to `~/Applications/Baton` when no Claude window is open (or prints the exact command to finish later), and points your launchers at the new app.
-- **Installed with Homebrew?** From 1.0, run `brew update && brew upgrade`: the tap's `cask_renames.json` moves the `claude-profiles` cask to `baton`, and Homebrew says it was renamed. Don't install `baton` next to it.
 - **Installed from the ZIP?** Quit Claude Profiles and move `Claude Profiles.app` to the Trash. If it was inside `~/Applications/Claude Profiles`, put `Baton.app` in `/Applications` (or run `make install`); otherwise put it where the old app was.
 - **Claude Profiles in your Dock?** Once the old app is in the Trash, remove its Dock item and add Baton: the old item could still start it from the Trash.
 - **Claude Profiles opens at login?** Replace it with Baton in **System Settings → General → Login Items**. If an older copy still starts, Baton asks it to quit rather than handing over to it.
