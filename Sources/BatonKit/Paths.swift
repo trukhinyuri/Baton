@@ -39,11 +39,13 @@ public struct Paths: Sendable, Equatable {
     }
 
     /// Claude Desktop as Anthropic signs it: in /Applications, else in ~/Applications, else wherever else Launch
-    /// Services has it, except on a disk image or another read-only disk. Profile engines and launchers carry its
-    /// bundle id too and are never taken for it, nor is a copy in the Trash, one macOS runs from a temporary place,
-    /// or one Anthropic didn't sign, such as a lookalike in Downloads.
+    /// Services has it, except on a read-only disk, such as the disk image Claude comes on; a copy on a disk image
+    /// mounted for writing counts. Profile engines and launchers carry its bundle id too and are never taken for it,
+    /// nor is a copy in the Trash, one macOS runs from a temporary place, or one Anthropic didn't sign, such as a
+    /// lookalike in Downloads.
     /// - Parameter isSignedByAnthropic: `ClaudeSource.isSignedByAnthropic` unless a test substitutes it.
     /// - Returns: `/Applications/Claude.app` when there is no such Claude anywhere, so the error names the usual place.
+    ///   Whatever is there then is not opened: `ProfileManager.openMain` and `startUpChecks` check the signature.
     public static func findClaude(
         home: URL, systemApplications: URL = URL(fileURLWithPath: "/Applications", isDirectory: true),
         lookup: (String) -> [URL], isSignedByAnthropic: (URL) -> Bool = ClaudeSource.isSignedByAnthropic
