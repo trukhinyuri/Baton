@@ -317,12 +317,6 @@ public struct Limits: Equatable, Sendable {
         states.filter { $0.isBlocking(now: now) }.max { ($0.reset?.at ?? .distantFuture) < ($1.reset?.at ?? .distantFuture) }
     }
 
-    /// The binding limit's load, `max(five-hour while in its window, weekly)`; `nil` without any usage known.
-    public func load(now: Date = Date()) -> Int? {
-        let loads = states.compactMap { $0.load(now: now) }
-        return loads.isEmpty ? nil : loads.max()
-    }
-
     /// The first time after `now` a known reset frees this window: an exact reset plus the grace period.
     public func nextChange(after now: Date) -> Date? {
         states.compactMap { state -> Date? in

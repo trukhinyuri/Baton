@@ -237,7 +237,8 @@ struct LimitStateTests {
         let limits = Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(2), askedAt: at(1.5))
         #expect(!limits.isAtLimit(now: at(3)) && limits.week.phase(now: at(3)) == .below && limits.week.resetByAnswer)
         #expect(limits.week.reset == LimitReset(at: at(2), source: .inferred))
-        #expect(LimitText.describe(limits.week, now: at(3)) == "week: Claude answered since" && limits.load(now: at(3)) == 20)
+        #expect(LimitText.describe(limits.week, now: at(3)) == "week: Claude answered since" && limits.week.load(now: at(3)) == 0)
+        #expect(limits.fiveHour.load(now: at(3)) == 20)
         #expect(
             Limits(samples: [sample(0, fh: 20, sd: 100)], answeredAt: at(-1), askedAt: at(-1.5)).isAtLimit(now: at(3)),
             "a reply before the sample proves nothing")
@@ -616,19 +617,30 @@ struct LimitScheduleTests {
     }
 }
 
-@Suite("Choosing where to continue by the binding limit")
+@Suite("Choosing where to continue: weekly usage first, then five-hour")
 struct BindingLimitRankingTests {
     let now = base
 
-    func window(_ id: String, fh: Int, sd: Int, age: TimeInterval = 600, hits: [LimitHit] = []) -> ProfileStatus {
+    func window(_ id: String, fh: Int, sd: Int, xu: Int? = nil, age: TimeInterval = 600, hits: [LimitHit] = []) -> ProfileStatus {
         let usage = Usage(fiveHour: fh, week: sd, sampledAt: now.addingTimeInterval(-age))
-        return status(id, limits: Limits(samples: [UsageSample(at: usage.sampledAt, org: org, fiveHour: fh, week: sd)], hits: hits), usage: usage)
+        let sample = UsageSample(at: usage.sampledAt, org: org, fiveHour: fh, week: sd, extraUsage: xu)
+        return status(id, limits: Limits(samples: [sample], hits: hits), usage: usage)
     }
 
-    @Test func theHigherOfFiveHourAndWeeklyDecides() {
-        let statuses = [window("busy", fh: 95, sd: 10), window("calm", fh: 0, sd: 30), window("rested", fh: 95, sd: 20, age: 6 * 3600)]
+    /// A window nearly out of its week isn't chosen for its empty five-hour window: reached, the weekly limit holds it
+    /// back for days. By the higher of the two usages it would have come before "roomy".
+    @Test func weeklyUsageDecidesFirst() {
+        let statuses = [window("nearlyOut", fh: 0, sd: 88), window("roomy", fh: 90, sd: 10), window("calm", fh: 0, sd: 30)]
+        #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["roomy", "calm", "nearlyOut"])
+        #expect(DestinationRanking.best(statuses, now: now) == "roomy")
+        #expect(DestinationRanking.mostHeadroom(Array(statuses.prefix(2)), now: now) == "roomy")
+    }
+
+    @Test func fiveHourUsageDecidesBetweenEqualWeeks() {
+        let statuses = [window("busy", fh: 60, sd: 20), window("calm", fh: 10, sd: 20), window("rested", fh: 95, sd: 20, age: 6 * 3600)]
         #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["rested", "calm", "busy"], "a five-hour sample counts only for five hours")
-        #expect(DestinationRanking.mostHeadroom(Array(statuses.prefix(2)), now: now) == "calm")
+        let (old, new) = (window("old", fh: 10, sd: 20, age: 3600), window("new", fh: 10, sd: 20))
+        #expect(DestinationRanking.ranked([old, new], now: now).map(\.id) == ["new", "old"], "a newer sample when both are equal")
     }
 
     @Test func aWindowAtItsLimitIsLeftOutUntilItsResetPasses() {
@@ -636,6 +648,45 @@ struct BindingLimitRankingTests {
         let statuses = [out, window("calm", fh: 0, sd: 30)]
         #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["calm"])
         #expect(DestinationRanking.ranked(statuses, now: at(61.5)).map(\.id) == ["out", "calm"], "reset: its old sample no longer counts")
+    }
+
+    /// However empty its five-hour window, a window at its weekly limit isn't offered until that limit resets.
+    @Test func aWindowAtItsWeeklyLimitIsLeftOutUntilItsResetPasses() {
+        let out = window("out", fh: 0, sd: 100, hits: [hit(.week, -5, resets: 60)])
+        let busy = window("busy", fh: 70, sd: 40)
+        #expect(DestinationRanking.isAtLimit(out, now: now))
+        #expect(DestinationRanking.ranked([out, busy], now: now).map(\.id) == ["busy"])
+        #expect(DestinationRanking.best([out, busy], now: now) == "busy")
+        #expect(DestinationRanking.ranked([out, busy], now: at(61.5)).map(\.id) == ["out", "busy"], "reset: its week starts again")
+        let sampled = window("sampled", fh: 0, sd: 100, age: 3 * 86_400)
+        #expect(DestinationRanking.ranked([sampled, busy], now: now).map(\.id) == ["busy"], "a sample at 100% within its week, no reset known")
+    }
+
+    /// A window at its five-hour limit that extra usage pays for can still take the work, but comes after every window
+    /// with room however low its week: work there costs money. One whose usage isn't known still comes last.
+    @Test func aWindowOnExtraUsageComesAfterThoseWithRoom() {
+        let paying = window("paying", fh: 100, sd: 5, xu: 40)
+        #expect(!DestinationRanking.isAtLimit(paying, now: now) && paying.limits.fiveHour.extraUsage)
+        let unknown = status("unknown", limits: Limits(samples: []), usage: nil)
+        let statuses = [paying, unknown, window("nearlyOut", fh: 0, sd: 95)]
+        #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["nearlyOut", "paying", "unknown"])
+    }
+
+    /// A sample counts only within its own limit's window: a weekly one older than a week and a five-hour one older
+    /// than five hours count as 0. Within the week a weekly sample counts however old, since a reserve kept closed is
+    /// sampled only when used; "Most headroom" still never goes to a sample older than three hours.
+    @Test func oldSamplesCountOnlyWithinTheirOwnWindow() {
+        let lastWeek = window("lastWeek", fh: 90, sd: 95, age: 8 * 86_400)
+        let reserve = window("reserve", fh: 0, sd: 30, age: 3 * 86_400)
+        let spent = window("spent", fh: 0, sd: 70, age: 2 * 86_400)
+        let fresh = window("fresh", fh: 0, sd: 50)
+        #expect(DestinationRanking.ranked([fresh, spent, reserve, lastWeek], now: now).map(\.id) == ["lastWeek", "reserve", "fresh", "spent"])
+        let rested = window("rested", fh: 100, sd: 40, age: 6 * 3600)
+        #expect(
+            DestinationRanking.ranked([window("busy", fh: 30, sd: 40), rested], now: now).map(\.id) == ["rested", "busy"],
+            "a five-hour sample at 100% older than five hours: that window is over")
+        #expect(DestinationRanking.mostHeadroom([fresh, spent, reserve, lastWeek], now: now) == nil, "one sample from the last three hours")
+        #expect(DestinationRanking.mostHeadroom([window("other", fh: 0, sd: 60), fresh, reserve], now: now) == "fresh", "never a stale one, however low")
     }
 
     @Test func theSourceWindowIsNeverOfferedForItsOwnSession() throws {
@@ -815,9 +866,9 @@ struct CertainResetTests {
         let busy = status("busy", limits: Limits(usage: busyUsage), usage: busyUsage)
         #expect(DestinationRanking.ranked([busy, reserve], now: base).map(\.id) == ["reserve", "busy"])
         let weekOld = Usage(fiveHour: 10, week: 90, sampledAt: old)
-        #expect(Limits(usage: weekOld).load(now: base) == 0, "a weekly sample older than a week: that week is over")
+        #expect(Limits(usage: weekOld).week.load(now: base) == 0, "a weekly sample older than a week: that week is over")
         let fresh = Usage(fiveHour: 10, week: 90, sampledAt: base.addingTimeInterval(-3 * 86_400))
-        #expect(Limits(usage: fresh).load(now: base) == 90, "within its week a weekly sample counts however old")
+        #expect(Limits(usage: fresh).week.load(now: base) == 90, "within its week a weekly sample counts however old")
     }
 
     /// Reached by a sample, with an estimate from an older weekly hit; the window is closed and the estimate has

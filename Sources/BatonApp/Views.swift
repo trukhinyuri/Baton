@@ -156,7 +156,7 @@ struct ProfileRow: View {
                             .foregroundStyle(.primary)
                             .accessibilityLabel("Most headroom")
                             .help(
-                                "Most room left among your signed-in subscriptions with usage recorded in the last 3 hours, by the higher of five-hour and weekly usage"
+                                "Most room left among your signed-in subscriptions with usage recorded in the last 3 hours, by weekly usage, then five-hour usage"
                             )
                     }
                 }

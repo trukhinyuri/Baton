@@ -556,11 +556,20 @@ public enum DestinationRanking {
         return status.email.map { accounts.contains($0.lowercased()) } ?? false
     }
 
-    /// Signed-in subscriptions not at their limit, and signed in with one of `accounts` if given, by the limit that
-    /// binds them, lowest first: the higher of five-hour usage (while its five hours last) and weekly usage. A newer
-    /// sample comes first when two are equal, then those without usage data. An old weekly sample isn't pushed back:
-    /// a subscription kept in reserve is sampled only when its window is used, so its sample is old precisely because
-    /// nobody has used it since.
+    /// Weekly load, then five-hour load, 101 where it isn't known. A window at a limit that extra usage pays for counts
+    /// as full on both, so it comes after every window with room: work there costs money.
+    static func loads(_ limits: Limits, now: Date) -> (Int, Int) {
+        if limits.states.contains(where: { $0.phase(now: now) == .reached && $0.extraUsage }) { return (100, 100) }
+        return (limits.week.load(now: now) ?? 101, limits.fiveHour.load(now: now) ?? 101)
+    }
+
+    /// Signed-in subscriptions not at their five-hour or weekly limit, and signed in with one of `accounts` if given,
+    /// by weekly usage, lowest first, then by five-hour usage. The weekly limit is the one that binds: a week holds only
+    /// a few full five-hour windows, and once reached it holds a window back for days, the five-hour one for hours at
+    /// most. A sample counts only within its limit's own window (`LimitState.load`), so a five-hour sample older than
+    /// five hours counts as 0. A newer sample comes first when both are equal, then those whose weekly usage isn't
+    /// known. An old weekly sample isn't pushed back: a subscription kept in reserve is sampled only when its window is
+    /// used, so its sample is old precisely because nobody has used it since.
     public static func ranked(
         _ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
         now: Date = Date()
@@ -569,7 +578,7 @@ public enum DestinationRanking {
             $0.isSignedIn && $0.id != excluded && !isAtLimit($0, now: now) && isAllowed($0, accounts: accounts)
         }
         return candidates.enumerated().sorted { a, b in
-            let (la, lb) = (a.element.limits.load(now: now) ?? 101, b.element.limits.load(now: now) ?? 101)
+            let (la, lb) = (loads(a.element.limits, now: now), loads(b.element.limits, now: now))
             if la != lb { return la < lb }
             let (sa, sb) = (a.element.usage?.sampledAt ?? .distantPast, b.element.usage?.sampledAt ?? .distantPast)
             return sa != sb ? sa > sb : a.offset < b.offset
