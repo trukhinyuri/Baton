@@ -251,7 +251,8 @@ struct SignInRoutingTests {
     @Test func routesLinksToTheProfileAndBack() throws {
         let box = try Sandbox()
         let recorder = Recorder()
-        let routing = SignInRouting(paths: box.paths) { app, on in recorder.calls.append((app.lastPathComponent, on)) }
+        let routing = SignInRouting(
+            paths: box.paths, isSignedByAnthropic: { _ in true }, register: { app, on in recorder.calls.append((app.lastPathComponent, on)) })
         try routing.begin(profileID: "work", allProfileIDs: ["work", "lab"])
         #expect(recorder.calls.map(\.0) == ["Claude.app", "Claude lab.app", "Claude work.app"])
         #expect(recorder.calls.map(\.1) == [false, false, true])
@@ -261,6 +262,23 @@ struct SignInRoutingTests {
         routing.end(allProfileIDs: ["work", "lab"])
         #expect(recorder.calls.last! == ("Claude.app", true))
         #expect(recorder.calls.dropLast().allSatisfy { !$0.1 })
+        #expect(routing.state == nil)
+    }
+
+    /// A main app Anthropic didn't sign, put in Claude's place while a profile signed in, doesn't get `claude://` links
+    /// when the sign-in ends: nothing is registered or unregistered, as at start-up, and the sign-in is over.
+    @Test func anUnsignedMainAppGetsNoLinksWhenASignInEnds() throws {
+        let box = try Sandbox()
+        let recorder = Recorder()
+        // Not Claude's bundle id, so nothing on this Mac could take it for Claude.
+        try box.claudeBundle(at: box.paths.claudeApp, identifier: "com.example.lookalike")
+        let routing = SignInRouting(paths: box.paths) { app, on in recorder.calls.append((app.lastPathComponent, on)) }
+        try routing.begin(profileID: "work", allProfileIDs: ["work", "lab"])
+        recorder.calls = []
+
+        #expect(routing.end(allProfileIDs: ["work", "lab"]).isEmpty)
+
+        #expect(recorder.calls.isEmpty, "no lsregister at all")
         #expect(routing.state == nil)
     }
 

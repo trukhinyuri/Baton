@@ -21,6 +21,9 @@ public struct SignInRouting: Sendable {
     public let paths: Paths
     /// Registers (`true`) or unregisters (`false`) an app bundle with Launch Services; returns `lsregister`'s exit status.
     let register: @Sendable (URL, Bool) -> Int32
+    /// Whether the main app is Claude as Anthropic signs it (`ClaudeSource.isSignedByAnthropic` unless a test
+    /// substitutes it: a sandbox's Claude.app isn't signed).
+    let isSignedByAnthropic: @Sendable (URL) -> Bool
 
     public init(paths: Paths) {
         self.init(
@@ -29,20 +32,27 @@ public struct SignInRouting: Sendable {
                 ProfileManager.run(
                     "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
                     [on ? "-f" : "-u", app.path])
-            })
+            }, isSignedByAnthropic: ClaudeSource.isSignedByAnthropic)
     }
 
-    init(paths: Paths, register: @escaping @Sendable (URL, Bool) -> Void) {
+    init(
+        paths: Paths, isSignedByAnthropic: @escaping @Sendable (URL) -> Bool = ClaudeSource.isSignedByAnthropic,
+        register: @escaping @Sendable (URL, Bool) -> Void
+    ) {
         self.init(
             paths: paths,
             registerReporting: {
                 register($0, $1); return 0
-            })
+            }, isSignedByAnthropic: isSignedByAnthropic)
     }
 
-    init(paths: Paths, registerReporting: @escaping @Sendable (URL, Bool) -> Int32) {
+    init(
+        paths: Paths, registerReporting: @escaping @Sendable (URL, Bool) -> Int32,
+        isSignedByAnthropic: @escaping @Sendable (URL) -> Bool = ClaudeSource.isSignedByAnthropic
+    ) {
         self.paths = paths
         self.register = registerReporting
+        self.isSignedByAnthropic = isSignedByAnthropic
     }
 
     var stateFile: URL { paths.stateDir.appending(path: "sign-in.json") }
@@ -70,9 +80,16 @@ public struct SignInRouting: Sendable {
     }
 
     /// Gives `claude://` links back to the main app. App copies are unregistered so they never outrank it.
+    /// A main app Anthropic didn't sign is never registered, as at start-up: nothing is registered or unregistered then,
+    /// and the sign-in is over all the same, so this is said once in the log rather than at every look at the windows.
     /// - Returns: the registrations that failed; unregistering an app copy that isn't there doesn't count.
     @discardableResult
     public func end(allProfileIDs: [String]) -> [SignInRoutingError] {
+        guard isSignedByAnthropic(paths.claudeApp) else {
+            Log.notice("sign-in", "Left claude:// links where they are: \(paths.claudeApp.lastPathComponent) isn't signed by Anthropic")
+            try? FileManager.default.removeItem(at: stateFile)
+            return []
+        }
         var failures: [SignInRoutingError] = []
         for id in allProfileIDs {
             let engine = paths.engine(for: id)
