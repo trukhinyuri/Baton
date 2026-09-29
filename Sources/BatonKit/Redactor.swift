@@ -3,9 +3,9 @@ import Foundation
 
 /// Takes out of a problem report whatever identifies the user or their work, before anyone sees it:
 /// the home folder becomes `~`, the macOS username `<user>`, emails `<email-1>`, `<email-2>` in first-seen order,
-/// UUIDs a short `<id-…>` hash salted per report, profile labels and ids `<profile-1>`, the folders Baton knows (rule
-/// and working folders) and any other folder outside well-known system locations `<folder>`, anything shaped like a
-/// token or key `<token>`, and whatever the app put in curly quotes (session titles, task and file names) `“<quoted>”`.
+/// UUIDs a short `<id-…>` hash salted per report, profile labels and ids `<profile-1>`, the folders it is given by
+/// name and any other folder outside well-known system locations `<folder>`, anything shaped like a token or key
+/// `<token>`, and whatever the app put in curly quotes (session titles, task and file names) `“<quoted>”`.
 /// Works on Unicode text and is idempotent: redacting its own output changes nothing.
 public struct Redactor: Sendable {
     private let home: [String]
@@ -20,8 +20,10 @@ public struct Redactor: Sendable {
 
     /// - Parameters:
     ///   - profiles: each profile's names (label and id), in the order they are numbered.
-    ///   - folders: folders Baton knows by name, such as folder rules' and working folders. They are hidden whole even
-    ///     where nothing marks their end, as a last folder name with a space in it that the sentence goes on after.
+    ///   - folders: folders to hide whole even where nothing marks their end, as a last folder name with a space in it
+    ///     that the sentence goes on after. The problem report gives the folder rules' folders and the working folders
+    ///     that no longer exist. Any other folder is found by its shape, which ends at a space: an unquoted
+    ///     `~/Clients/Acme Merger` in a message comes out as `<folder> Merger`.
     public init(home: String, user: String, profiles: [[String]] = [], folders: [String] = [], salt: [UInt8]? = nil) {
         let home = home.precomposedStringWithCanonicalMapping.trimmingSuffix("/")
         // Temporary and some system folders show up both with and without /private.
