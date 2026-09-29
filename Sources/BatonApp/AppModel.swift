@@ -292,8 +292,8 @@ final class AppModel: ObservableObject {
     var profiles: [ProfileStatus] { statuses }
     var existingLabels: Set<String> { Set(statuses.compactMap { $0.profile?.label }) }
 
-    /// The signed-in profile with the most headroom, by weekly usage and then five-hour usage, and a sample from the last
-    /// three hours, if at least two have such a sample. An older sample can be far too low: Claude records usage only while its window is used.
+    /// The signed-in profile with the most headroom, by weekly usage plus a quarter of five-hour usage, and a sample from
+    /// the last three hours, if at least two have such a sample. An older sample can be far too low: Claude records usage only while its window is used.
     var suggestedID: String? { DestinationRanking.mostHeadroom(statuses) }
 
     /// At its five-hour or weekly limit, and the reset Claude recorded for it hasn't passed (as of the last reload).
@@ -303,7 +303,7 @@ final class AppModel: ObservableObject {
     var limitReached: ProfileStatus? { statuses.first { $0.isRunning && isAtLimit($0) } }
 
     /// Where to continue by default: the signed-in subscription not at its limit with the most headroom, by weekly usage
-    /// and then five-hour usage (see `DestinationRanking.ranked`), among those signed in with `accounts` if given.
+    /// plus a quarter of five-hour usage (see `DestinationRanking.ranked`), among those signed in with `accounts` if given.
     func bestDestination(excluding excluded: String?, accounts: Set<String>? = nil) -> String? {
         DestinationRanking.best(statuses, excluding: excluded, accounts: accounts)
     }

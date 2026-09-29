@@ -617,7 +617,7 @@ struct LimitScheduleTests {
     }
 }
 
-@Suite("Choosing where to continue: weekly usage first, then five-hour")
+@Suite("Choosing where to continue: weekly usage plus a quarter of five-hour")
 struct BindingLimitRankingTests {
     let now = base
 
@@ -629,11 +629,18 @@ struct BindingLimitRankingTests {
 
     /// A window nearly out of its week isn't chosen for its empty five-hour window: reached, the weekly limit holds it
     /// back for days. By the higher of the two usages it would have come before "roomy".
-    @Test func weeklyUsageDecidesFirst() {
-        let statuses = [window("nearlyOut", fh: 0, sd: 88), window("roomy", fh: 90, sd: 10), window("calm", fh: 0, sd: 30)]
-        #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["roomy", "calm", "nearlyOut"])
+    @Test func aWindowNearlyOutOfItsWeekComesAfterOneWithRoom() {
+        let statuses = [window("nearlyOut", fh: 0, sd: 88), window("roomy", fh: 90, sd: 10)]
+        #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["roomy", "nearlyOut"], "4 × 10 + 90 = 130 against 4 × 88 = 352")
         #expect(DestinationRanking.best(statuses, now: now) == "roomy")
-        #expect(DestinationRanking.mostHeadroom(Array(statuses.prefix(2)), now: now) == "roomy")
+        #expect(DestinationRanking.mostHeadroom(statuses, now: now) == "roomy")
+    }
+
+    /// Weeks two points apart don't send the work to a window about to reach its five-hour limit, where it would stop
+    /// within minutes. By weekly usage alone "stopsSoon" would have come first.
+    @Test func aNearlyFullFiveHourWindowComesAfterANearlyEqualWeek() {
+        let statuses = [window("stopsSoon", fh: 95, sd: 20), window("fresh", fh: 0, sd: 22)]
+        #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["fresh", "stopsSoon"], "4 × 22 = 88 against 4 × 20 + 95 = 175")
     }
 
     @Test func fiveHourUsageDecidesBetweenEqualWeeks() {
@@ -641,6 +648,8 @@ struct BindingLimitRankingTests {
         #expect(DestinationRanking.ranked(statuses, now: now).map(\.id) == ["rested", "calm", "busy"], "a five-hour sample counts only for five hours")
         let (old, new) = (window("old", fh: 10, sd: 20, age: 3600), window("new", fh: 10, sd: 20))
         #expect(DestinationRanking.ranked([old, new], now: now).map(\.id) == ["new", "old"], "a newer sample when both are equal")
+        let (week20, week10) = (window("week20", fh: 0, sd: 20), window("week10", fh: 40, sd: 10, age: 3600))
+        #expect(DestinationRanking.ranked([week20, week10], now: now).map(\.id) == ["week10", "week20"], "equal sums: the lower week first")
     }
 
     @Test func aWindowAtItsLimitIsLeftOutUntilItsResetPasses() {

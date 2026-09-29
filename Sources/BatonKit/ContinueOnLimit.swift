@@ -556,20 +556,28 @@ public enum DestinationRanking {
         return status.email.map { accounts.contains($0.lowercased()) } ?? false
     }
 
-    /// Weekly load, then five-hour load, 101 where it isn't known. A window at a limit that extra usage pays for counts
-    /// as full on both, so it comes after every window with room: work there costs money.
-    static func loads(_ limits: Limits, now: Date) -> (Int, Int) {
-        if limits.states.contains(where: { $0.phase(now: now) == .reached && $0.extraUsage }) { return (100, 100) }
-        return (limits.week.load(now: now) ?? 101, limits.fiveHour.load(now: now) ?? 101)
+    /// How many full five-hour windows a week holds, about: a five-hour load counts this much less than a weekly one.
+    static let fiveHourWindowsPerWeek = 4
+
+    /// What `ranked` sorts by, lowest first. Windows whose weekly usage is known come first, and of those, one at a limit
+    /// that extra usage pays for comes after every one with room: work there costs money. Then the weekly load plus a
+    /// quarter of the five-hour load, counted in quarter points, and the weekly load when those are equal. A five-hour
+    /// load that isn't known counts as full.
+    static func key(_ limits: Limits, now: Date) -> (Int, Int, Int, Int) {
+        let fiveHour = limits.fiveHour.load(now: now)
+        guard let week = limits.week.load(now: now) else { return (1, 0, fiveHour ?? 101, 0) }
+        if limits.states.contains(where: { $0.phase(now: now) == .reached && $0.extraUsage }) { return (0, 1, 0, 0) }
+        return (0, 0, fiveHourWindowsPerWeek * week + (fiveHour ?? 100), week)
     }
 
-    /// Signed-in subscriptions not at their five-hour or weekly limit, and signed in with one of `accounts` if given,
-    /// by weekly usage, lowest first, then by five-hour usage. The weekly limit is the one that binds: a week holds only
-    /// a few full five-hour windows, and once reached it holds a window back for days, the five-hour one for hours at
-    /// most. A sample counts only within its limit's own window (`LimitState.load`), so a five-hour sample older than
-    /// five hours counts as 0. A newer sample comes first when both are equal, then those whose weekly usage isn't
-    /// known. An old weekly sample isn't pushed back: a subscription kept in reserve is sampled only when its window is
-    /// used, so its sample is old precisely because nobody has used it since.
+    /// Signed-in subscriptions not at their five-hour or weekly limit, and signed in with one of `accounts` if given, by
+    /// weekly usage plus a quarter of five-hour usage, lowest first. The weekly limit is the one that binds: once
+    /// reached it holds a window back for days, the five-hour one for hours at most. But a window about to reach its
+    /// five-hour limit would stop the work within minutes, so that load counts for what it holds back: a full five-hour
+    /// window is about a quarter of a week. A sample counts only within its limit's own window (`LimitState.load`), so
+    /// a five-hour sample older than five hours counts as 0. A newer sample comes first when both are equal, then those
+    /// whose weekly usage isn't known. An old weekly sample isn't pushed back: a subscription kept in reserve is sampled
+    /// only when its window is used, so its sample is old precisely because nobody has used it since.
     public static func ranked(
         _ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
         now: Date = Date()
@@ -578,8 +586,8 @@ public enum DestinationRanking {
             $0.isSignedIn && $0.id != excluded && !isAtLimit($0, now: now) && isAllowed($0, accounts: accounts)
         }
         return candidates.enumerated().sorted { a, b in
-            let (la, lb) = (loads(a.element.limits, now: now), loads(b.element.limits, now: now))
-            if la != lb { return la < lb }
+            let (ka, kb) = (key(a.element.limits, now: now), key(b.element.limits, now: now))
+            if ka != kb { return ka < kb }
             let (sa, sb) = (a.element.usage?.sampledAt ?? .distantPast, b.element.usage?.sampledAt ?? .distantPast)
             return sa != sb ? sa > sb : a.offset < b.offset
         }.map(\.element)
