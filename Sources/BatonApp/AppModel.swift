@@ -66,6 +66,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var handoverLines: [String: String] = [:]
     /// Windows whose work this app is handing over now.
     private var handingOver: Set<String> = []
+    /// The last reason a window's work couldn't be planned to move, shown once rather than on every reload.
+    private var handoverFailures: [String: String] = [:]
     private let limitWatch = LimitWatch()
 
     let manager: ProfileManager
@@ -601,17 +603,32 @@ extension AppModel {
                 // No room, handed over already or elsewhere: the banner says what holds, and the log why.
                 Log.notice("handover", "Didn't hand over window \(source): \(error.localizedDescription)")
                 handingOver.remove(source)
+                // Anything else means the work stays put without the banner saying so: say it, once per reason.
+                if !(error is HandoverError) {
+                    let line = "\(displayLabel(of: source))'s work didn't move: \(error.localizedDescription)"
+                    if handoverFailures.updateValue(line, forKey: source) != line { show(notice: line, isWarning: true) }
+                }
             }
         }
     }
 
-    /// Moves the work the Continue sheet planned, the way a handover at a limit does.
-    func move(_ plan: HandoverPlan) {
-        guard !isDemo, handingOver.insert(plan.source).inserted else { return }
+    /// Moves `source`'s work to `destination`, as the Continue sheet asked, the way a handover at a limit does. Planned
+    /// again now, not when the sheet opened: a handover may have moved some of the work meanwhile.
+    func move(from source: String, to destination: String) {
+        guard !isDemo else { return }
+        guard handingOver.insert(source).inserted else {
+            return show(notice: "\(displayLabel(of: source))'s work is moving already.", isWarning: true)
+        }
         let manager = manager
         Task {
-            await runHandover(source: plan.source, destination: plan.destination, atLimit: plan.sourceAtLimit) { progress in
-                try await manager.handOver(plan, progress: progress)
+            do {
+                let plan = try await Task.detached { try manager.planMove(from: source, to: destination) }.value
+                await runHandover(source: source, destination: plan.destination, atLimit: plan.sourceAtLimit) { progress in
+                    try await manager.handOver(plan, progress: progress)
+                }
+            } catch {
+                handingOver.remove(source)
+                show(notice: "\(displayLabel(of: source))'s work didn't move: \(error.localizedDescription)", isWarning: true)
             }
         }
     }
@@ -654,6 +671,9 @@ extension AppModel {
                 if let finished = try await manager.finishWaitingHandover(source: source) { result = finished }
             }
             handoverLines[source] = nil
+            handoverFailures[source] = nil
+            // The destination opened as part of the handover: a line saying it waits for a Dock-started Claude is past.
+            if let line = strayLines.removeValue(forKey: destination) { notices.withdraw(line) }
             show(notice: result.line, isWarning: result.isWarning)
             let title = atLimit ? "\(displayLabel(of: source)) is at its limit" : "\(displayLabel(of: source))'s work moved"
             LimitWatch.notify(title: title, body: result.line, id: "handover-\(source)")

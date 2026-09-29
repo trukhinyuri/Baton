@@ -57,6 +57,20 @@ struct MoveWorkTests {
         #expect(log.entries().count == 2, "still counts as this limit's handover")
     }
 
+    @Test func moveDoesNotResumeWhatThisLimitsHandoverResumedAlready() throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Armed")
+        try scene.armed([S.a])
+        let log = HandoverLog(paths: scene.box.paths)
+        try log.save(
+            HandoverLog.Entry(
+                source: "work", resetsAt: scene.reset, destination: "main", startedAt: scene.now.addingTimeInterval(-60), state: "done", sessions: 1,
+                cards: [S.card(S.a)]))
+        let plan = try scene.manager.planHandover(from: "work", to: nil, statuses: scene.statuses, now: scene.now, byHand: true)
+        #expect(plan.sessions.map(\.transcript) == [S.a])
+        #expect(plan.cut.isEmpty, "resumed by the handover already, so not in a second window")
+    }
+
     @Test func moveIgnoresAResetWithinMinutes() throws {
         let scene = try S(resetIn: 600)
         try scene.session(S.a, title: "Armed")

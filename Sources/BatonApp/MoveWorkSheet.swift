@@ -119,7 +119,7 @@ struct MoveWorkSheet: View {
             Divider()
             HStack(spacing: 8) {
                 Spacer()
-                if form.plan != nil, others.count > 1 {
+                if form.plan != nil || model.isDemo, others.count > 1 {
                     Menu("Change") {
                         ForEach(others) { status in
                             Button("Claude \(status.displayLabel)" + (status.id == form.best ? " (most room)" : "")) { choose(status.id) }
@@ -133,7 +133,7 @@ struct MoveWorkSheet: View {
                 Button(destinationLabel.isEmpty ? "Continue" : "Continue in \(destinationLabel)") { go() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(form.plan == nil || form.isPlanning || (form.plan?.sessions.isEmpty ?? true))
+                    .disabled(!model.isDemo && (form.plan == nil || form.isPlanning || (form.plan?.sessions.isEmpty ?? true)))
             }
         }
         .padding(22)
@@ -173,8 +173,8 @@ struct MoveWorkSheet: View {
     }
 
     private func go() {
-        guard let plan = form.plan, !model.isDemo else { return dismiss() }
-        model.move(plan)
+        guard let destination = form.destination, form.plan != nil, !model.isDemo else { return dismiss() }
+        model.move(from: form.source, to: destination)
         dismiss()
     }
 }

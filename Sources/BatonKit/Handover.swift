@@ -481,6 +481,14 @@ extension ProfileManager {
 
         var leftovers: [HandoverLeftover] = []
         var candidates = handoverCandidates(source: source, account: sourceAccount, resetsAt: resetsAt, now: now)
+        if byHand {
+            // Sessions a handover of this limit already resumed elsewhere move, but don't resume a second time:
+            // that window's auto-continue has them, and one session must not run in two windows.
+            let earlier = Set(
+                HandoverLog(paths: paths).entries().filter { HandoverLog.same($0, source: source, resetsAt: resetsAt, now: now) }
+                    .flatMap { $0.cards ?? [] })
+            for i in candidates.indices where earlier.contains(candidates[i].session.card) { candidates[i].session.cut = false }
+        }
         let remoteControl = candidates.filter(\.remoteControl).count
         candidates.removeAll(where: \.remoteControl)
         let rules = try FolderRules(paths: paths).load()
