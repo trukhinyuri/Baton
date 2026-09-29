@@ -7,8 +7,11 @@ import Foundation
 /// `<data dir>/claude-code-sessions/<account>/<organization>/local_<id>.json`; the conversation itself lives in
 /// `~/.claude/projects` and is already shared by all profiles. Copying the cards into every account/organization
 /// directory of every profile lets you continue a session from any window.
-/// Native Project / Remote Control workers retain their account-and-organization scope; copying a card
-/// does not grant access to its server project or bridge. Ambiguous copies made by old releases are preserved.
+/// A native Project / Remote Control worker (a card with `remoteControlSpawn`, `projectThreadChild` or `rcChild`) stays
+/// with the one window whose Remote Control can reach it: Claude's own state there serves the card's folder
+/// (`RemoteControlReach`) or a Claude Code process of it runs there. Reached in no window, it is an ordinary local
+/// session; reached in several, every copy is left as it is. Copies Baton writes never carry the Remote Control keys,
+/// and a copy that has a marker is never edited or replaced.
 /// A copy for another account leaves out what the first account granted or connected (Remote Control bridges,
 /// connectors, browser and computer-use grants, the session's permission rules, and the permission mode unless the
 /// profile keeps it); copies between windows of one account are exact. A grant or rule that copies by older releases
@@ -33,10 +36,14 @@ public struct SessionSync: Sendable {
         public var duplicatesRetired = 0
         public var archiveIndexesWritten = 0
         public var backedUp = 0
-        /// Native Project / Remote Control workers shared only within one account and organization.
+        /// Native Project / Remote Control workers that stay with the window Remote Control reaches them in, or
+        /// that it reaches in several windows.
         public var accountBoundCards = 0
-        /// Existing copies in several scopes are preserved without choosing an owner.
+        /// Workers Remote Control reaches in several windows: every copy is preserved without choosing an owner.
         public var ambiguousAccountBoundCards = 0
+        /// Cards with a Remote Control marker that Remote Control reaches in no window, shared as ordinary sessions
+        /// without the Remote Control keys.
+        public var releasedRemoteControlCards = 0
         /// Cards a folder rule keeps out of an account, not copied there.
         public var withheldByRule = 0
         /// Copies removed from a closed window whose account a folder rule does not allow.
@@ -84,6 +91,11 @@ public struct SessionSync: Sendable {
     public var carriesPermissionMode: (@Sendable (URL) -> Bool)?
     /// What each card says, kept while its file stays the same, so an idle run reads none of them again.
     public var cache: ScanCache = .shared
+    /// Claude's Remote Control state in a data directory; `nil` reads it (`RemoteControlReach.read`).
+    public var remoteControlReach: (@Sendable (URL) -> RemoteControlReach)?
+    /// Transcript → the data directories (standardized paths) whose Claude Code processes have it open now; `nil` reads
+    /// them as `LimitTracker.liveWindows` does.
+    public var liveWindows: (@Sendable () -> [String: Set<String>])?
 
     /// - Parameter dataDirs: every Claude Desktop data directory to keep in sync, main one included.
     public init(paths: Paths, dataDirs: [URL]) {
@@ -112,10 +124,9 @@ public struct SessionSync: Sendable {
         var tombstones = Set<String>()
         var tombstonesByScope: [String: Set<String>] = [:]
         var tombstoneCopies: [String: (count: Int, newest: Date)] = [:]  // marker → folders that have it
-        let scopeFile = paths.stateDir.appending(path: "code-native-session-scopes.json")
+        let scopeFile = paths.stateDir.appending(path: NativeScopeState.codeFile)
         let remembered = try NativeScopeState.load(from: scopeFile)
-        var cardScopes = remembered.scopes.mapValues(Set.init)
-        var accountBound = Set(remembered.scopes.keys)
+        var marked: [MarkedCopy] = []
         var observed = Set<String>()
         var archiveLists: [String: Set<String>] = [:]  // folder path → archived IDs, for folders that have an index
         var archiveVersion: Any = 1
@@ -138,8 +149,10 @@ public struct SessionSync: Sendable {
                     let facts = read.facts
                     reads[url.path] = read
                     observed.insert(name)
-                    cardScopes[name, default: []].insert(scope)
-                    if facts.accountBound { accountBound.insert(name) }
+                    if facts.accountBound {
+                        marked.append(
+                            MarkedCopy(name: name, pair: pair, dataDir: dataDir(of: pair), folder: facts.remoteControlFolder, transcript: facts.transcript))
+                    }
                     // Not a whole card: it stays where it is, and no copy of it is made or relied on.
                     guard facts.valid else { continue }
                     holders[name, default: []].append(pair)
@@ -170,19 +183,45 @@ public struct SessionSync: Sendable {
             }
         }
 
+        // Who keeps each marked card, from this run's facts only: the one window Remote Control reaches it in.
+        let decided = Self.owners(of: marked, reach: remoteControlReach ?? { RemoteControlReach.read(dataDir: $0) }, live: liveReader())
+        var accountBound = Set(decided.owners.keys)
+        var ambiguous = Set<String>()
+        var cardScopes: [String: Set<String>] = [:]
+        var nextScopes: [String: [String]] = [:]
+        for (name, owner) in decided.owners {
+            switch owner {
+            case .owned(_, let scope):
+                cardScopes[name] = [scope]
+                nextScopes[name] = [scope]
+            case .ambiguous: ambiguous.insert(name)
+            }
+        }
+        // A worker owned in an earlier run whose cards are all gone keeps its scope, so its tombstone never goes global.
+        // A version 1 file named every card ever seen with a marker, owner or not; it is replaced by this run's owners.
+        if remembered.version == NativeScopeState.current {
+            for (name, scopes) in remembered.scopes where !observed.contains(name) {
+                accountBound.insert(name)
+                cardScopes[name] = Set(scopes)
+                nextScopes[name] = scopes
+            }
+        }
         report.accountBoundCards = accountBound.intersection(observed).count
-        report.ambiguousAccountBoundCards = accountBound.intersection(observed).filter { (cardScopes[$0]?.count ?? 0) != 1 }.count
-        // Remember native IDs before any deletion. Their later tombstones must never become global just
-        // because the last card disappeared, and an ambiguous owner cannot be guessed on the next run.
-        let nextScopes = cardScopes.filter { accountBound.contains($0.key) }.mapValues { $0.sorted() }
-        if nextScopes != remembered.scopes, !dryRun { try NativeScopeState(scopes: nextScopes).save(to: scopeFile) }
+        report.ambiguousAccountBoundCards = ambiguous.count
+        report.releasedRemoteControlCards = decided.released.count
+        if nextScopes != remembered.scopes || remembered.version != NativeScopeState.current, !dryRun {
+            if remembered.version != NativeScopeState.current, fm.fileExists(atPath: scopeFile.path) {
+                if try Backup(paths: paths, now: now).save(scopeFile, everyTime: true) { report.backedUp += 1 }
+            }
+            try NativeScopeState(scopes: nextScopes).save(to: scopeFile)
+        }
 
-        // A native worker is tied to its server-side account/organization and CCR bridge. Old versions may
-        // already have copied it elsewhere; timestamps cannot establish which copy owns that bridge.
-        // Preserve ambiguous copies, without relinking, replacing or deleting any of them.
+        // A native worker is tied to its server-side account/organization and CCR bridge. Where Remote Control reaches
+        // it in several windows, timestamps cannot establish which copy owns that bridge: every copy is preserved,
+        // without relinking, replacing or deleting any of them.
         func permitted(_ name: String, in scope: String) -> Bool {
             guard accountBound.contains(name) else { return true }
-            return cardScopes[name]?.count == 1 && cardScopes[name]?.contains(scope) == true
+            return !ambiguous.contains(name) && cardScopes[name] == [scope]
         }
         // A card a window made after its session was deleted, such as by importing the conversation again, is a new
         // start: the marker that names it no longer applies, and goes once no window is open.
@@ -324,10 +363,14 @@ public struct SessionSync: Sendable {
                 }
             }
             var heldTranscripts = Set(held.values)
-            for (name, card) in newestFirst where permitted(name, in: scope) && !deletedNames.contains(name) {
+            // A worker Remote Control reaches stays with its window: no copy of it is written anywhere.
+            for (name, card) in newestFirst where !accountBound.contains(name) && !deletedNames.contains(name) {
                 let target = pair.appending(path: name)
-                let native = accountBound.contains(name)
-                if !native, !allows(card, in: pair) {
+                // A copy with a Remote Control marker is never edited, replaced or retired, owner or not.
+                if present.contains(name), reads[target.path]?.facts.accountBound == true { continue }
+                // Marked somewhere but reached nowhere: shared as an ordinary session, without the Remote Control keys.
+                let released = decided.released.contains(name)
+                if !allows(card, in: pair) {
                     guard present.contains(name) else { report.withheldByRule += 1; continue }
                     // Retire a copy only where Claude can't be holding it, and only once it is safe elsewhere.
                     guard !windowOpen, holders[name, default: []].contains(where: { $0 != pair && allows(card, in: $0) }) else { continue }
@@ -344,24 +387,25 @@ public struct SessionSync: Sendable {
                 // This copy as the scan found it, and what it is compared with. A copy found to match that card in an
                 // earlier run, and unchanged since, still matches.
                 let mine = present.contains(name) ? reads[target.path] : nil
-                let comparison = "\(card.digest)|\(card.modified.timeIntervalSince1970)|\(card.account)|\(native)|\(keepsPermissionMode)"
+                let comparison = "\(card.digest)|\(card.modified.timeIntervalSince1970)|\(card.account)|\(released)|\(keepsPermissionMode)"
                 // What this copy, and the card it gets, have yet to lose of the grants older releases left in two accounts.
                 let leaked = stillLeaked(name, in: pair.path), leakedInCard = stillLeaked(name, in: card.url.deletingLastPathComponent().path)
                 if let mine, leaked.isEmpty, leakedInCard.isEmpty, mine.matches(comparison) { continue }
                 // Changed since the scan: the next run takes the new card.
                 guard let winner = bytes(of: card) else { continue }
-                // A native worker's cwd is coupled to remoteControlSpawn.folder and its server bridge.
-                // Even within one account/organization, preserve the complete card byte-for-byte.
                 let existing = present.contains(name) ? try? Data(contentsOf: target) : nil
                 // What another account granted or connected stays with that account; this window keeps its own. A grant
                 // older releases left in two accounts goes from every copy, `base` losing what its own copy has yet to lose.
                 func shared(_ base: Data, losing grants: Set<String>) -> Data {
                     let local = Self.without(grants, in: localized(base, for: dataDir, linking: !dryRun))
-                    guard card.account != account else { return local }
-                    return Self.withoutAccountFields(
-                        local, winner: winner, existing: existing.map { Self.without(leaked, in: $0) }, keepPermissionMode: keepsPermissionMode)
+                    let copy =
+                        card.account == account
+                        ? local
+                        : Self.withoutAccountFields(
+                            local, winner: winner, existing: existing.map { Self.without(leaked, in: $0) }, keepPermissionMode: keepsPermissionMode)
+                    return released ? Self.withoutRemoteControl(copy) : copy
                 }
-                var data = native ? winner : shared(winner, losing: leakedInCard), modified = card.time
+                var data = shared(winner, losing: leakedInCard), modified = card.time
                 if present.contains(name) {
                     guard let current = SyncFolders.modificationDate(target), let own = existing else { continue }
                     report.cardsCompared += 1
@@ -380,7 +424,7 @@ public struct SessionSync: Sendable {
                     if !here.valid, asNew, windowOpen || JSONMembers.parse([UInt8](own)) != nil { continue }
                     if asNew, here.valid {
                         // This copy is as new as any; it may still need this window's scratch folder path.
-                        data = native ? own : shared(own, losing: leaked)
+                        data = shared(own, losing: leaked)
                         guard let time = SyncFolders.modificationTime(target), SyncFolders.date(time) == current else { continue }
                         modified = time
                     }
@@ -659,8 +703,21 @@ public struct SessionSync: Sendable {
             })
     }
 
-    /// Remote Control bridges and messages, connectors and their tools, and browser grants.
-    static let accountFields: Set<String> = ["bridgeSessionIds", "peerReceipts", "remoteMcpServersConfig", "enabledMcpTools", "chromePermissionMode"]
+    /// Remote Control bridges and messages, Project and Remote Control worker markers, connectors and their tools, and
+    /// browser grants.
+    static let accountFields: Set<String> = [
+        "bridgeSessionIds", "projectThreadChild", "rcChild", "peerReceipts", "remoteMcpServersConfig", "enabledMcpTools", "chromePermissionMode",
+    ]
+    /// What makes a card a Remote Control or Project worker, and its bridge: never in a copy Baton writes of a card that
+    /// had them.
+    static let remoteControlKeys: Set<String> = ["remoteControlSpawn", "projectThreadChild", "rcChild", "bridgeSessionIds"]
+
+    /// `card` without the Remote Control keys; every other member keeps its bytes.
+    static func withoutRemoteControl(_ card: Data) -> Data {
+        guard let members = JSONMembers.parse([UInt8](card)) else { return card }
+        let kept = members.filter { !remoteControlKeys.contains($0.name) }
+        return kept.count == members.count ? card : Data(JSONMembers.object(kept))
+    }
     /// The permission mode and the choice of it in the app: what a profile that keeps the permission mode keeps.
     static let permissionModeFields: Set<String> = ["permissionMode", "bypassChosenInApp", "autoChosenInApp"]
     /// What the session was allowed without asking: its allow rules and added folders, and the prompts answered
@@ -788,6 +845,8 @@ public struct SessionSync: Sendable {
         /// One whole JSON object, read as Claude reads it (`json`); a card cut short by a crash or a full disk is not.
         var valid = false
         var accountBound = false
+        /// Where Remote Control would reach a worker: `remoteControlSpawn.folder`, else `cwd`, else `originCwd`.
+        var remoteControlFolder: String?
         /// The Claude Code conversation the card opens (`cliSessionId`).
         var transcript: String?
         /// Created by a window that opened an existing conversation it had no loaded card for.
@@ -848,6 +907,7 @@ public struct SessionSync: Sendable {
         return CardFacts(
             valid: true,
             accountBound: isAccountBoundCard(card),
+            remoteControlFolder: remoteControlFolder(of: card),
             transcript: (card["cliSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() },
             imported: card["adoptedFromOtherSurface"] as? Bool == true,
             folders: Array(Set(folders)).sorted(),
@@ -937,16 +997,135 @@ public struct SessionSync: Sendable {
         return card["projectThreadChild"] as? Bool == true || card["rcChild"] as? Bool == true
     }
 
+    static func remoteControlFolder(of card: [String: Any]) -> String? {
+        let spawn = (card["remoteControlSpawn"] as? [String: Any])?["folder"] as? String
+        return [spawn, card["cwd"] as? String, card["originCwd"] as? String].compactMap { $0 }.first { !$0.isEmpty }
+    }
+
+    // MARK: - Remote Control owners
+
+    /// Who keeps a card that has a Remote Control marker.
+    public enum RemoteControlOwner: Equatable, Sendable {
+        /// Remote Control reaches it in exactly one window: it stays there, in that account and organization.
+        case owned(dataDir: String, scope: String)
+        /// Remote Control reaches it in several windows (standardized data directory paths): every copy is left alone.
+        case ambiguous(dataDirs: [String])
+    }
+
+    /// One copy of a card that has a Remote Control marker.
+    struct MarkedCopy {
+        var name: String
+        var pair: URL
+        var dataDir: URL
+        var folder: String?
+        var transcript: String?
+    }
+
+    /// The owner of each marked card, over the copies that carry the marker: the copies Remote Control reaches (its
+    /// window serves the card's folder for that account, or a Claude Code process of it runs in that window). A card
+    /// reached nowhere has no owner and is `released`.
+    static func owners(
+        of marked: [MarkedCopy], reach: (URL) -> RemoteControlReach, live: () -> [String: Set<String>]
+    ) -> (owners: [String: RemoteControlOwner], released: Set<String>) {
+        var reaches: [String: RemoteControlReach] = [:]
+        var liveMap: [String: Set<String>]?
+        var reached: [String: [MarkedCopy]] = [:]
+        var names = Set<String>()
+        for copy in marked {
+            names.insert(copy.name)
+            let key = copy.dataDir.standardizedFileURL.path
+            if reaches[key] == nil { reaches[key] = reach(copy.dataDir) }
+            let state = reaches[key] ?? RemoteControlReach()
+            var reachable = copy.folder.map { state.reaches(folder: $0, scope: scope(of: copy.pair)) } ?? state.unreadable
+            if !reachable, let transcript = copy.transcript {
+                if liveMap == nil { liveMap = live() }
+                reachable = liveMap?[transcript]?.contains(key) == true
+            }
+            if reachable { reached[copy.name, default: []].append(copy) }
+        }
+        var owners: [String: RemoteControlOwner] = [:]
+        for (name, copies) in reached {
+            if copies.count == 1, let copy = copies.first {
+                owners[name] = .owned(dataDir: copy.dataDir.standardizedFileURL.path, scope: scope(of: copy.pair))
+            } else {
+                owners[name] = .ambiguous(dataDirs: Array(Set(copies.map { $0.dataDir.standardizedFileURL.path })).sorted())
+            }
+        }
+        return (owners, names.subtracting(owners.keys))
+    }
+
+    /// The owner of every marked card in `dataDirs`, read from their cards, Claude's Remote Control state and the running
+    /// Claude Code processes. Cards not in the result are ordinary. Reads only.
+    public static func owners(
+        dataDirs: [URL], paths: Paths, reach: ((URL) -> RemoteControlReach)? = nil, live: (() -> [String: Set<String>])? = nil,
+        cache: ScanCache = .shared
+    ) -> [String: RemoteControlOwner] {
+        var marked: [MarkedCopy] = []
+        for pair in (try? sessionPairs(dataDirs: dataDirs, folder: sessionsFolder)) ?? [] {
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: pair.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
+                guard let facts = try? read(pair.appending(path: name), cache: cache).facts, facts.accountBound else { continue }
+                let dataDir =
+                    dataDirs.first { pair.path.hasPrefix($0.path + "/") }
+                    ?? pair.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                marked.append(MarkedCopy(name: name, pair: pair, dataDir: dataDir, folder: facts.remoteControlFolder, transcript: facts.transcript))
+            }
+        }
+        return owners(
+            of: marked, reach: reach ?? { RemoteControlReach.read(dataDir: $0) },
+            live: live ?? { liveDataDirs(claudeDir: paths.claudeDir, dataDirs: dataDirs) }
+        ).owners
+    }
+
+    /// The owner of one card (`local_<id>.json` or `local_<id>`) in `owners`, or `nil` if it is an ordinary session.
+    public static func owner(of card: String, in owners: [String: RemoteControlOwner]) -> RemoteControlOwner? {
+        owners[cardName(for: card)]
+    }
+
+    /// One line per card Remote Control reaches in several windows, for `baton doctor`, sorted:
+    /// "“Fix CI” is reachable by Remote Control in ROBIN and VIR, so Baton leaves its copies alone."
+    public static func ambiguityLines(owners: [String: RemoteControlOwner], dataDirs: [URL], label: (URL) -> String) -> [String] {
+        let pairs = (try? sessionPairs(dataDirs: dataDirs, folder: sessionsFolder)) ?? []
+        return owners.compactMap { name, owner -> String? in
+            guard case .ambiguous(let paths) = owner else { return nil }
+            let card = pairs.lazy.compactMap { ConversationIndex.readCard($0.appending(path: name)) }.first
+            let title = card.map(ConversationIndex.title(of:)) ?? name
+            // In the order of `dataDirs`, main first.
+            let windows = dataDirs.filter { paths.contains($0.standardizedFileURL.path) }.map(label)
+            let list = windows.count > 1 ? windows.dropLast().joined(separator: ", ") + " and " + windows[windows.count - 1] : windows.joined()
+            return "“\(title)” is reachable by Remote Control in \(list), so Baton leaves its copies alone."
+        }.sorted()
+    }
+
+    /// Transcript → the data directories (standardized paths) whose running Claude Code processes have it open.
+    static func liveDataDirs(claudeDir: URL, dataDirs: [URL]) -> [String: Set<String>] {
+        let windows = dataDirs.map { (id: $0.standardizedFileURL.path, dataDir: $0) }
+        return LimitTracker.liveProcesses(claudeDir: claudeDir).reduce(into: [:]) { result, process in
+            if let window = LimitTracker.window(of: process.executable, in: windows) { result[process.session, default: []].insert(window) }
+        }
+    }
+
+    private func liveReader() -> () -> [String: Set<String>] {
+        if let liveWindows { return liveWindows }
+        let claudeDir = paths.claudeDir, dataDirs = dataDirs
+        return { Self.liveDataDirs(claudeDir: claudeDir, dataDirs: dataDirs) }
+    }
+
     /// Only native card identifiers and account/organization scopes, never conversation text or credentials.
     /// Shared by the two session kinds, each in its own file. Malformed/unknown state fails closed.
+    ///
+    /// Version 2 (Code sessions) holds only the workers that had one owner in the last run, by their owner's scope,
+    /// kept after their cards are gone so their tombstones never go global. Version 1 held every card ever seen with a
+    /// marker; it is read, backed up and replaced by version 2 on the next run.
     struct NativeScopeState: Codable {
-        var version = 1
+        static let current = 2
+        static let codeFile = "code-native-session-scopes.json"
+        var version = current
         var scopes: [String: [String]] = [:]
 
         static func load(from url: URL) throws -> NativeScopeState {
             guard FileManager.default.fileExists(atPath: url.path) else { return NativeScopeState() }
             let state = try JSONDecoder().decode(NativeScopeState.self, from: Data(contentsOf: url))
-            guard state.version == 1 else { throw CocoaError(.fileReadCorruptFile) }
+            guard (1...current).contains(state.version) else { throw CocoaError(.fileReadCorruptFile) }
             return state
         }
 

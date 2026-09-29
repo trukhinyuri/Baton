@@ -59,7 +59,8 @@ public struct InterfaceSync: Sendable {
         let backup = Backup(paths: paths, now: now)
         let portableIDs = try Self.portableSessionIDs(
             in: [paths.mainDataDir, dataDir],
-            nativeScopeFile: paths.stateDir.appending(path: "code-native-session-scopes.json"))
+            nativeScopeFile: paths.stateDir.appending(path: SessionSync.NativeScopeState.codeFile),
+            owners: SessionSync.owners(dataDirs: [paths.mainDataDir, dataDir], paths: paths))
         // Discard obsolete baselines for account/grant/project keys formerly copied by older releases.
         let validStateKeys = Self.keys.union(Self.prefsKeys.map { "prefs:" + $0 })
             .union(Self.pinKeys.map { "idb:" + $0 })
@@ -280,8 +281,11 @@ public struct InterfaceSync: Sendable {
     }
 
     /// A local_ prefix alone is not enough: native Project workers use it too. Require a valid
-    /// ordinary Code card, and exclude an ID if any copy has native ownership or an unknown shape.
-    static func portableSessionIDs(in dataDirs: [URL], nativeScopeFile: URL) throws -> Set<String> {
+    /// ordinary Code card, and exclude an ID Remote Control keeps with a window (`owners`, and the owners the last
+    /// session sync remembered over every window) or whose copy has an unknown shape.
+    static func portableSessionIDs(
+        in dataDirs: [URL], nativeScopeFile: URL, owners: [String: SessionSync.RemoteControlOwner]
+    ) throws -> Set<String> {
         // Native ownership outlives the card's current fields. A malformed ownership file must stop
         // the merge before any interface value changes, rather than make remembered workers portable.
         let remembered = try SessionSync.NativeScopeState.load(from: nativeScopeFile)
@@ -295,8 +299,8 @@ public struct InterfaceSync: Sendable {
             where url.lastPathComponent.hasPrefix("local_") && url.pathExtension == "json" {
                 let id = url.deletingPathExtension().lastPathComponent
                 guard let data = try? Data(contentsOf: url),
-                    let card = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                    !SessionSync.isAccountBoundCard(card)
+                    (try? JSONSerialization.jsonObject(with: data)) is [String: Any],
+                    SessionSync.owner(of: id, in: owners) == nil
                 else {
                     ownedOrUnknown.insert(id)
                     continue

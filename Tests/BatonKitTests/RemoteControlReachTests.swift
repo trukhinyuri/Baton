@@ -14,6 +14,11 @@ extension Sandbox {
         let data = try JSONSerialization.data(withJSONObject: ["version": version, "identities": object], options: [.sortedKeys])
         try write(String(decoding: data, as: UTF8.self), to: dataDir.appending(path: RemoteControlReach.stateName))
     }
+
+    /// The window serves Remote Control for `folders` with this account and organization.
+    func serveRemoteControl(_ dataDir: URL, account: String, org: String = "org-1", folders: [String]) throws {
+        try remoteControlState(dataDir, ["\(account):\(org)": ("on", folders)])
+    }
 }
 
 @Suite("Remote Control reach")

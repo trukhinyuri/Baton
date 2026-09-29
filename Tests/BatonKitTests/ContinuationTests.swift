@@ -79,8 +79,9 @@ struct ImportedCardTests {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
         let b = try box.pair(box.work, account: Sandbox.accountB)
-        let native = #"{"sessionId":"local_branch","cliSessionId":"\#(Sandbox.cli)","title":"Branch","projectThreadChild":true}"#
+        let native = #"{"sessionId":"local_branch","cliSessionId":"\#(Sandbox.cli)","title":"Branch","cwd":"/shared/repo","projectThreadChild":true}"#
         try box.write(native, to: a.appending(path: "local_branch.json"))
+        try box.serveRemoteControl(box.main, account: Sandbox.accountA, folders: ["/shared/repo"])
         try box.write("", to: b.appending(path: "deleted_local_\(Sandbox.cli)"))
 
         _ = try box.sync(propagateDeletions: true)

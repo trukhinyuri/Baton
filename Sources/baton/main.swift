@@ -364,6 +364,7 @@ do {
             for policy in policies { print("  \(policy)") }
             for row in manager.localOnlyStatus() { print("Claude \(manager.displayLabel(of: row.window)): \(describe(row.status))") }
             print(describe(manager.cloudMoveLock.status()))
+            for line in manager.remoteControlAmbiguities() { print(line) }
             for change in manager.autoResume.changes() {
                 print(
                     "Auto-continue turned off by Baton in Claude \(manager.displayLabel(of: change.window)) for "

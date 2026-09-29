@@ -275,6 +275,8 @@ struct InterfaceSyncTests {
         let box = try sandbox()
         let pair = try box.pair(box.main, account: Sandbox.accountA)
         try box.write(NativeSessionScopeTests.worker, to: pair.appending(path: "local_worker.json"))
+        // Remote Control reaches the worker in the main window, so it stays there.
+        try box.serveRemoteControl(box.main, account: Sandbox.accountA, folders: ["/shared/repo"])
         let key = "LSS-persisted.starred-local-code-sessions"
         try put(
             box.main,
@@ -320,7 +322,7 @@ struct InterfaceSyncTests {
         #expect(try targetPins.read()?.records[stars]?.string == ownPins)
     }
 
-    @Test(arguments: ["{corrupt", #"{"version":2,"scopes":{}}"#])
+    @Test(arguments: ["{corrupt", #"{"version":3,"scopes":{}}"#])
     func invalidNativeOwnershipStateRefusesInterfaceWrites(state: String) throws {
         let box = try sandbox()
         let key = "LSS-persisted.starred-local-code-sessions"

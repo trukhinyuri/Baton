@@ -212,6 +212,15 @@ public final class ProfileManager: @unchecked Sendable {
         windowID == "main" ? "MAIN" : profiles.first { $0.id == windowID }?.label ?? windowID
     }
 
+    /// Workers Remote Control reaches in several windows, which Baton leaves alone, one line each. Reads only.
+    public func remoteControlAmbiguities() -> [String] {
+        let windows = windows
+        let owners = SessionSync.owners(dataDirs: windows.map(\.dataDir), paths: paths)
+        return SessionSync.ambiguityLines(owners: owners, dataDirs: windows.map(\.dataDir)) { dataDir in
+            windows.first { $0.dataDir == dataDir }.map { label(of: $0.id) } ?? dataDir.lastPathComponent
+        }
+    }
+
     /// What follows "Claude " in what Baton says: `"(main)"` or the profile's label.
     public func displayLabel(of windowID: String) -> String { windowID == "main" ? "(main)" : label(of: windowID) }
 
