@@ -27,6 +27,8 @@ public enum ProfileError: LocalizedError, Equatable {
     case mayStillBeWritten([String])
     /// Demo mode (`BATON_DEMO=1`) shows sample data and changes nothing on this Mac.
     case readOnly
+    /// Baton runs from Downloads or a temporary copy (`AppLocation.problem`, the text it gives), so it adds no profile.
+    case misplaced(String)
 
     public var errorDescription: String? {
         switch self {
@@ -60,6 +62,7 @@ public enum ProfileError: LocalizedError, Equatable {
                 + (titles.count == 1 ? " may still be written to in its window. " : " may still be written to in their windows. ")
                 + "Continue as a copy, or close it there first and continue anyway."
         case .readOnly: "Demo mode shows sample data and changes nothing on this Mac."
+        case .misplaced(let problem): "\(problem) No subscription was added."
         }
     }
 }
@@ -134,6 +137,8 @@ public final class ProfileManager: @unchecked Sendable {
     public internal(set) var signInRouting: SignInRouting
     /// The `baton` executable that launchers call. `nil` makes launchers open the engine directly.
     public var cliPath: URL?
+    /// Why Baton adds no profile and writes no launcher from where it runs (`AppLocation.problem`), or `nil`.
+    public let misplaced: String?
     private var fm: FileManager { .default }
     /// Guards the in-memory state below; see the lock order above.
     private let stateLock = NSLock()
@@ -164,11 +169,12 @@ public final class ProfileManager: @unchecked Sendable {
     /// Demo mode: every call that would change something on this Mac throws `ProfileError.readOnly` instead.
     public let isReadOnly: Bool
 
-    public init(paths: Paths = .standard, cliPath: URL? = nil, readOnly: Bool = false) {
+    public init(paths: Paths = .standard, cliPath: URL? = nil, readOnly: Bool = false, misplaced: String? = nil) {
         self.paths = paths
         self.registry = ProfileRegistry(paths: paths)
         self.signInRouting = SignInRouting(paths: paths)
         self.cliPath = cliPath
+        self.misplaced = misplaced
         self.isReadOnly = readOnly
         let isThisUser = paths.home.standardizedFileURL.path == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
         managedPreferences =
@@ -354,6 +360,8 @@ public final class ProfileManager: @unchecked Sendable {
     @discardableResult
     public func create(label rawLabel: String, email rawEmail: String?, color: String? = nil) throws -> Profile {
         try ensureWritable()
+        // Its launcher could reach no `baton` that stays, and would open Claude without what `baton open` does first.
+        if let misplaced { throw ProfileError.misplaced(misplaced) }
         guard fm.fileExists(atPath: paths.claudeApp.path) else { throw ProfileError.claudeNotInstalled(paths.claudeApp.path) }
         let label = rawLabel.trimmingCharacters(in: .whitespaces).uppercased()
         if Profile.isReservedLabel(label) { throw ProfileError.reservedLabel(label) }
@@ -1058,7 +1066,8 @@ public final class ProfileManager: @unchecked Sendable {
     // MARK: Maintenance
 
     /// Rebuilds app copies left behind by a Claude Desktop update and updates launchers that point to a moved CLI,
-    /// in place. Copies that are running are left alone until next launch.
+    /// in place. Copies that are running are left alone until next launch, and launchers while Baton runs from a place
+    /// it is about to leave (`misplaced`).
     public func refresh() throws {
         try ensureWritable()
         let running = runningBundlePaths()
@@ -1070,7 +1079,7 @@ public final class ProfileManager: @unchecked Sendable {
                 if !running.contains(engine.standardizedFileURL.path), !fm.fileExists(atPath: engine.path) || engineIsOutdated(profile.id) {
                     try buildEngine(for: profile)
                 }
-                if launcherScript(for: profile) != (try? String(contentsOf: launcherExecutable(for: profile), encoding: .utf8)) {
+                if misplaced == nil, launcherScript(for: profile) != (try? String(contentsOf: launcherExecutable(for: profile), encoding: .utf8)) {
                     try buildLauncher(for: profile)
                 }
             }
@@ -1245,8 +1254,24 @@ public final class ProfileManager: @unchecked Sendable {
 
                 """
         }
-        script += "exec /usr/bin/open -n -a \(shellQuote(engine)) --args \(shellQuote("--user-data-dir=" + dataDir))\n"
+        // Without `baton`, only this keeps a click from starting a second copy of the window on the same data, which
+        // Claude itself doesn't stop: a copy running with this data folder, or being started, is brought forward instead.
+        script += """
+            if /usr/bin/pgrep -f -- \(shellQuote(Self.userDataDirPattern(dataDir))) >/dev/null; then
+                exec /usr/bin/open -a \(shellQuote(engine))
+            fi
+            exec /usr/bin/open -n -a \(shellQuote(engine)) --args \(shellQuote("--user-data-dir=" + dataDir))
+
+            """
         return script
+    }
+
+    /// An extended regular expression that `pgrep -f`, which joins a process's arguments with spaces, finds only in
+    /// processes started with `dataDir` as their `--user-data-dir`: Claude's own and its helpers, or an `open` starting it.
+    static func userDataDirPattern(_ dataDir: String) -> String {
+        let special: Set<Character> = ["\\", ".", "[", "(", ")", "*", "+", "?", "{", "|", "^", "$"]
+        let literal = dataDir.map { special.contains($0) ? "\\\($0)" : String($0) }.joined()
+        return "(^| )--?user-data-dir=\(literal)/?( |$)"
     }
 
     /// A tiny app bundle that opens the profile. It can live in the Dock and is found by Spotlight.
@@ -1374,7 +1399,8 @@ public enum AppLocation {
         } else {
             return nil
         }
-        return "Baton is running from \(place), so it doesn't update the Dock icons of your subscriptions. "
+        return "Baton is running from \(place), so it doesn't add subscriptions or update their Dock icons: made from here, "
+            + "those icons would open Claude without sharing sessions and settings first. "
             + "Quit Baton, move Baton.app to Applications in Finder, then open it from there."
     }
 }

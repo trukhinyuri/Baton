@@ -82,7 +82,7 @@ final class AppModel: ObservableObject {
         let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/baton")
         let home = FileManager.default.homeDirectoryForCurrentUser
         // Run from Downloads or from the temporary copy macOS makes of a downloaded app: launchers must not point here,
-        // or they stop reaching `baton` once it moves or after a restart. A new one opens its app copy directly instead.
+        // or they stop reaching `baton` once it moves or after a restart, so no subscription is added meanwhile.
         let misplaced = isDemo ? nil : AppLocation.problem(app: Bundle.main.bundleURL, home: home)
         let cliPath = misplaced == nil && FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil
         // A folder of the earlier name that links nowhere right now (a disk not connected): nothing may write, or a
@@ -98,7 +98,7 @@ final class AppModel: ObservableObject {
             unreachable != nil || misplaced != nil
             ? nil
             : LegacyMigration.atAppStart(home: home, app: Bundle.main.bundleURL, cli: cliPath, variables: ProcessInfo.processInfo.environment)
-        manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil)
+        manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil, misplaced: misplaced)
         reload()
         if let unreachable {
             warnAtStartUp(unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;"))

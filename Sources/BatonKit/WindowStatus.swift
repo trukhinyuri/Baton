@@ -173,6 +173,7 @@ public struct WindowStatus: Sendable, Equatable, Identifiable {
             case .profileOpen: "The window is still open"
             case .mayStillBeWritten: "It may still be written to"
             case .readOnly: "Demo mode"
+            case .misplaced: "Move Baton to Applications first"
             }
         case let error as RestartError:
             switch error {

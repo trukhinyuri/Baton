@@ -132,7 +132,8 @@ case .manager(let sharedLock):
     if sharedLock, let busy = LegacyMigration.holdShared(home: home) { fail(busy) }
 }
 
-let manager = ProfileManager(cliPath: cli)
+// Run from inside a Baton.app in Downloads or a temporary copy: no profile is added and no launcher points there.
+let manager = ProfileManager(cliPath: cli, misplaced: AppLocation.problem(app: cli, home: home))
 
 // Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a Claude Desktop version
 // outside the tested range. Informational only: it never blocks the command that follows. A command that only reads
