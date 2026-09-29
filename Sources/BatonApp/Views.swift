@@ -113,7 +113,7 @@ struct ProfileRow: View {
     }
 
     private var subtitle: String {
-        (status.isMain ? "Main Claude app" : "Claude \(status.label)") + (status.isRunning ? " · Open" : " · Closed")
+        "Claude \(status.displayLabel)" + (status.isRunning ? " · Open" : " · Closed")
     }
 
     var body: some View {
@@ -174,7 +174,7 @@ struct ProfileRow: View {
             HStack(spacing: 4) {
                 Button(status.isRunning ? "Show" : "Open") { model.open(status) }
                     .frame(minWidth: 64)
-                    .accessibilityLabel("\(status.isRunning ? "Show" : "Open") \(status.isMain ? "Claude" : "Claude \(status.label)")")
+                    .accessibilityLabel("\(status.isRunning ? "Show" : "Open") Claude \(status.displayLabel)")
                 Menu {
                     Button("Status…") { model.showStatus(of: status.id) }
                     Divider()
@@ -201,7 +201,7 @@ struct ProfileRow: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .accessibilityLabel("More actions for \(status.isMain ? "Claude" : "Claude \(status.label)")")
+                .accessibilityLabel("More actions for Claude \(status.displayLabel)")
             }
         }
         .padding(.horizontal, 16)
@@ -264,7 +264,7 @@ struct LimitBanner: View {
     }
 }
 
-/// Whether the footer may add "everyone's in step" to the last sync: checked again after every sync.
+/// Whether the footer may add "all windows are up to date" to the last sync: checked again after every sync.
 /// An object rather than `@State`, which the Command Line Tools can't expand (no SwiftUI macro plugin).
 @MainActor
 final class SyncFooterState: ObservableObject {
@@ -375,7 +375,7 @@ struct ContentView: View {
                     Text("Add a subscription and your local Code sessions start relaying between windows.")
                 } else if let last = model.lastSync {
                     Text("Local Code synced · \(last, format: .relative(presentation: .named))")
-                        + Text(syncFooter.everyoneInStep ? " — everyone's in step." : "")
+                        + Text(syncFooter.everyoneInStep ? " · all windows are up to date" : "")
                 } else {
                     Text("Sharing local Code sessions…")
                 }
@@ -397,7 +397,7 @@ struct ContentView: View {
             Button("Report a problem…") { model.isReporting = true }
                 .help("Shows a redacted report to review, then opens a prefilled GitHub issue. Nothing is sent automatically.")
             Link(destination: URL(string: "https://github.com/\(FeedbackReport.repository)#staying-within-anthropics-terms")!) {
-                Label("Fair use", systemImage: "checkmark.shield")
+                Label("Anthropic terms", systemImage: "checkmark.shield")
             }
             .help("How Baton stays within Anthropic's terms")
         }
@@ -438,7 +438,7 @@ struct WindowStatusSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             if let status {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(status.isMain ? "Claude" : "Claude \(status.label)") status").font(.title2.bold())
+                    Text("Claude \(status.displayLabel) status").font(.title2.bold())
                     Text("What this window shares, what it doesn't, and why.").font(.callout).foregroundStyle(.secondary)
                 }
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {

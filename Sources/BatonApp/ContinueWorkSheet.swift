@@ -65,7 +65,7 @@ struct ContinueWorkSheet: View {
     /// What follows "Claude " for the chosen window: "(main)" or its label; empty while none is chosen.
     private var destinationLabel: String { model.statuses.first { $0.id == form.destination }?.displayLabel ?? "" }
 
-    /// The chosen window on a button: "Claude (main)" or its label.
+    /// The chosen window on a button: "Claude (main)" or "Claude WORK".
     private var destinationButton: String { form.destination.isEmpty ? "" : model.buttonLabel(of: form.destination) }
 
     private var forks: Bool { selected.map { form.mode.forks($0) } ?? false }
@@ -110,6 +110,7 @@ struct ContinueWorkSheet: View {
                 }
             }
             .listStyle(.bordered(alternatesRowBackgrounds: true))
+            .accessibilityLabel("Conversations")
             .frame(minHeight: 170)
             .overlay {
                 if model.isLoadingConversations && model.conversations.isEmpty {
@@ -281,7 +282,7 @@ struct ContinueWorkSheet: View {
         let to = destinationButton.isEmpty ? "" : " in \(destinationButton)"
         guard let selected, selected.kind != .cowork else { return "Continue" + to }
         if forks { return "Continue as a Copy" + to }
-        if selected.mayStillWrite() { return "Continue Anyway" }
+        if selected.mayStillWrite() { return "Continue Same Session" + to }
         return "Continue" + to
     }
 
@@ -365,8 +366,6 @@ struct ContinueWorkSheet: View {
                         text += " " + note.message(destination: label)
                     } else if let note = plan.autoResume.first {
                         text += " " + note.message()
-                    } else {
-                        text += plan.forks ? " Same history, next runner." : " Same conversation, next runner."
                     }
                     model.show(notice: text)
                 case .startedCoworkTask:

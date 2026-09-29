@@ -21,5 +21,20 @@ has .github/ISSUE_TEMPLATE/bug_report.yml 'I reviewed the text above' "the repor
 has CODE_OF_CONDUCT.md 'Contributor Covenant' "Contributor Covenant"
 has CODE_OF_CONDUCT.md 'version 2.1' "version 2.1"
 if [ -e .github/FUNDING.yml ]; then echo "FAIL  .github/FUNDING.yml exists; funding is the owner's decision" >&2; failed=1; fi
+# Real people's addresses and account labels never go into a public repo: examples use reserved domains
+# (example.org, *.example). The maintainer's own mail domains and window labels are listed here, base64-encoded so this file doesn't spell them out.
+personal=$(printf "%s" "dHJ1a2hpblwuY29tfGNsb3VkbGludXhcLmNvbXx0dXhjYXJlXC5jb218WVRSVUtISU4=" | base64 -d)
+if [ -d .git ] || [ -f .git ]; then
+    found=$(git grep --untracked -n -I -i -E "$personal" -- . ':!scripts/check-repo.sh' 2>/dev/null || true)
+else
+    found=$(grep -rn -I -i -E "$personal" --exclude-dir=.build --exclude-dir=build --exclude=check-repo.sh . 2>/dev/null || true)
+fi
+if [ -n "$found" ]; then
+    echo "FAIL  personal data (use a reserved example domain or a made-up label):" >&2
+    echo "$found" >&2
+    failed=1
+else
+    echo "ok    no personal addresses or account labels"
+fi
 [ "$failed" = 0 ] && echo "Repository files in place."
 exit "$failed"

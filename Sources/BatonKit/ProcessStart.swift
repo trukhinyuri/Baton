@@ -58,9 +58,11 @@ public enum CLIDispatch {
     /// The commands that open windows or build launchers or engines, after aliases are resolved.
     public static let lockedCommands: Set<String> = ["open", "add", "refresh", "continue", "remove"]
 
-    /// - Parameter args: the arguments after the command name, aliases resolved.
+    /// - Parameter args: the arguments after the command name, aliases resolved. `--help` or `-h` anywhere answers
+    /// with the help text before anything is read or changed.
     public static func stage(for args: [String]) -> Stage {
-        switch args.first {
+        if args.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }) { return .early }
+        return switch args.first {
         case "--version", "version", "help", "-h", "--help", "__render-app-icon": .early
         case "migrate": .migrate
         case let command?: .manager(sharedLock: lockedCommands.contains(command))

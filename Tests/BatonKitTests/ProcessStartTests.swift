@@ -28,6 +28,10 @@ struct ProcessStartTests {
             #expect(CLIDispatch.stage(for: args) == .early, "\(args)")
         }
         #expect(CLIDispatch.stage(for: ["migrate"]) == .migrate)
+        for args in [["migrate", "--help"], ["migrate", "-h"], ["remove", "work", "--help"], ["continue", "last", "-h"]] {
+            #expect(CLIDispatch.stage(for: args) == .early, "\(args): help, before anything is read or changed")
+            #expect(CLIDispatch.runEarly(args, usage: "USAGE").output == "USAGE")
+        }
         for command in ["open", "add", "refresh", "continue", "remove"] {
             #expect(CLIDispatch.stage(for: [command, "x"]) == .manager(sharedLock: true), "\(command)")
         }

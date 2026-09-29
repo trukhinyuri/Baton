@@ -4,11 +4,11 @@ import UserNotifications
 
 /// Looks at limits again when something may have changed them: at each known reset (plus the 90 seconds Claude waits),
 /// right after the Mac wakes, and when Baton becomes active. When a window that was at its limit has room again by a
-/// known reset, it says so once, in the window and as a macOS notification if allowed.
+/// known reset and still has a minute later, it says so once, in the window and as a macOS notification if allowed.
 @MainActor
 final class LimitWatch {
-    /// The windows blocked at the previous check, each with its signed-in account.
-    private var blocked: [String: String]?
+    /// Which windows have room again, once they have stayed free for a minute.
+    private var room = RoomAgainWatch()
     private var applyingPending = false
     private var timer: Timer?
     private var scheduledFor: Date?
@@ -28,18 +28,15 @@ final class LimitWatch {
             })
     }
 
-    /// After each reload: announces windows a known reset has freed, turns off the auto-continue entries a Continue
-    /// left on in windows that have closed since, and schedules the next look.
+    /// After each reload: announces windows a known reset has freed and that stayed free for a minute, turns off
+    /// the auto-continue entries a Continue left on in windows that have closed since, and schedules the next look.
     /// - Returns: the windows blocked at a limit now.
     func update(_ statuses: [ProfileStatus], model: AppModel, now: Date = Date()) -> Set<String> {
-        let blockedNow = LimitSchedule.blocked(statuses, now: now)
-        if let before = blocked {
-            for status in LimitSchedule.freed(blockedBefore: before, statuses, now: now) { announce(status, model: model) }
-        }
-        blocked = blockedNow
-        schedule(LimitSchedule.nextRefresh(statuses, now: now), model: model)
+        let checked = room.update(statuses, now: now)
+        for status in checked.announce { announce(status, model: model) }
+        schedule([LimitSchedule.nextRefresh(statuses, now: now), room.nextCheck].compactMap { $0 }.min(), model: model)
         applyPending(model: model)
-        return Set(blockedNow.keys)
+        return checked.blocked
     }
 
     /// Off the main thread: it reads and may write other windows' settings files.

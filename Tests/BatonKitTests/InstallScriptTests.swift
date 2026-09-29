@@ -123,9 +123,54 @@ struct InstallScriptTests {
         #expect(lines.contains { $0.hasPrefix("Would then run the installed baton migrate to rename \(legacy.path) to \(new.path).") })
         #expect(lines.contains("Once that folder is renamed, point these command links at Baton:"))
         #expect(lines.contains("  ln -sf \"\(new.path)/Baton.app/Contents/Helpers/baton\" \"\(bin.path)/baton\""))
+        #expect(lines.contains("If it keeps its old name for now, point them here until it is renamed:"))
+        #expect(lines.contains("  ln -sf \"\(legacy.path)/Baton.app/Contents/Helpers/baton\" \"\(bin.path)/baton\""), "a link that works now")
         #expect(!result.output.contains("can stay open"))
         #expect(tree() == before, "a dry run changes nothing")
         #expect(!fm.fileExists(atPath: root.appending(path: "not-home").path))
+    }
+
+    /// `make install PREFIX=~/Applications/` passes `~/Applications//Baton`; an upgrade from Claude Profiles must still
+    /// go through the old folder and rename it, not start a second, empty Baton folder beside it.
+    @Test func aDestOfBatonsFolderGoesThroughTheOldOneUntilItIsRenamed() throws {
+        defer { cleanUp() }
+        try fm.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let typed = home.path + "/Applications//Baton"
+        for dest in [new.path, new.path + "/", typed, typed + "//"] {
+            #expect(try install(["--where", dest]).output == legacy.path + "\n", "\(dest)")
+        }
+        try makeApp(root.appending(path: "build/Baton.app"), bundleID: "io.github.trukhinyuri.claudeprofiles")
+        let before = tree()
+        let result = try install([
+            typed, "--dry-run", "--system-apps", systemApps.path, "--bin-dirs", bin.path, "--app", root.appending(path: "build/Baton.app").path,
+        ])
+        #expect(result.output.contains("Would install to \(legacy.path)/Baton.app."))
+        #expect(result.output.contains("Would then run the installed baton migrate to rename \(legacy.path) to \(new.path)."))
+        #expect(tree() == before)
+        try fm.createDirectory(at: new, withIntermediateDirectories: true)
+        #expect(try install(["--where", typed]).output == new.path + "\n", "both exist: Baton's, as typed")
+    }
+
+    /// A real run that keeps the old folder name has already moved the old app to the Trash: a link into it is broken
+    /// now, so the script names where Baton is now as well as where it will be.
+    @Test func aKeptFolderNameGetsLinksThatWorkNow() throws {
+        defer { cleanUp() }
+        try fm.createDirectory(at: bin, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(
+            atPath: bin.appending(path: "claude-profiles").path,
+            withDestinationPath: legacy.appending(path: "Claude Profiles.app/Contents/Helpers/claude-profiles").path)
+        // What the real run does after `baton migrate` exits with 3: the app stays in the old folder.
+        let fixes = try lib(
+            #"FINAL="$(final_app 3 "$1" "$1" "$2")"; echo "$FINAL"; print_link_fixes "$3" "$1" "$FINAL" "now:""#,
+            [legacy.path, new.path, bin.path])
+        #expect(fixes.hasPrefix("\(legacy.path)/Baton.app\nnow:\n"))
+        #expect(fixes.contains("  ln -sf \"\(legacy.path)/Baton.app/Contents/Helpers/baton\" \"\(bin.path)/claude-profiles\"\n"), "a target that exists now")
+        let script = try String(contentsOf: Self.repo.appending(path: "scripts/install-app.sh"), encoding: .utf8)
+        #expect(
+            script.contains(
+                #"print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$FINAL" "These command links point at the old app or folder. Point them at Baton where it is now:""#
+            ))
+        #expect(script.contains(#"print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$RENAMED_APP" "Once that folder is renamed, point them at Baton's new place:""#))
     }
 
     @Test func aDryRunIntoBatonNeedsNoRename() throws {

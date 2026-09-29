@@ -20,14 +20,15 @@
   <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels and accounts, five-hour and weekly usage for three of them, and one waiting to sign in">
 </p>
 
-Baton runs several Claude Desktop accounts on one Mac, each in its own unmodified Claude Desktop window with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window. When you want to carry on somewhere else (the work account or the personal one), you hand the conversation over with its transcript, sub-agents, Workflow history, tool outputs and notes. **Continue work…** also keeps Rewind checkpoints, except those from before a copy Claude Desktop made itself, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
+Baton runs several Claude Desktop accounts on one Mac, each in its own window of the official Claude Desktop app with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window. When you want to carry on somewhere else (the work account or the personal one), you hand the conversation over with its transcript, sub-agents, Workflow history, tool outputs and notes. **Continue work…** also keeps Rewind checkpoints, except those from before a copy Claude Desktop made itself, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
 
 Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Baton turns Remote Control off in its windows by default (one switch to undo it) and, before you continue, names what will not follow.
 
 It never reads credentials, has no network code, copies each session card and settings file to a dated backup before it replaces or removes it (Claude's sign-in file `config.json` is the exception: only its theme, zoom and language are edited, in place), and changes a window's settings only while that window is closed.
 
 - [Install](#install) · [Quick start](#quick-start) · [Continue work in another window](#continue-work-in-another-window) · [What follows and what stays](#what-follows-and-what-stays)
-- [Local only](#local-only) · [Command line](#command-line) · [Privacy and safety](#privacy-and-safety) · [Report a problem](#report-a-problem) · [Troubleshooting](#troubleshooting) · [Why Baton?](#why-baton)
+- [Limits and resets](#limits-and-resets) · [Local only](#local-only) · [Command line](#command-line) · [Privacy and safety](#privacy-and-safety) · [Staying within Anthropic's terms](#staying-within-anthropics-terms)
+- [Report a problem](#report-a-problem) · [Troubleshooting](#troubleshooting) · [Known limitations](#known-limitations) · [FAQ](#faq) · [Why Baton?](#why-baton)
 
 ## Install
 
@@ -121,7 +122,7 @@ Each row shows the account signed in to that window and its five-hour and weekly
 
 ## Continue work in another window
 
-Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue in …**. When an open subscription reaches its limit, a banner under the header opens the same sheet. The signed-in subscription with the most room left (by the higher of its five-hour and weekly usage) is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may have changed since*.
+Click **Continue work…**. It lists the local Code sessions and Cowork tasks of every window, most recent first. Choose one and a subscription to continue in, then click **Continue**; the button names the window, as in **Continue in Claude WORK**. When an open subscription reaches its limit, a banner under the header opens the same sheet ([Limits and resets](#limits-and-resets)). The signed-in subscription with the most room left (by the higher of its five-hour and weekly usage) is preselected, and those at their limit are marked. Usage is only updated while a window is open, so each figure shows its age; one older than 3 hours is marked *may have changed since*.
 
 <p align="center">
   <img src="docs/images/continue-work.png" width="820" alt="Continue work sheet listing local Code sessions and Cowork tasks, with the window to continue in, the choice between Automatic, Same session and As a copy, and Continue All for the session's folder">
@@ -148,6 +149,14 @@ Continuing needs no macOS permissions: the destination window receives a `claude
 
 When you open a session that another account started, Claude Desktop may fork it into a new session instead of reopening it. Baton notices the fork at its next sync and brings the sub-agents, Workflow history and tool outputs over to the new session, adding files only; the original session is never changed. **Rewind to a point before such a fork cannot be restored**, because Desktop does not copy the checkpoints into the fork; they remain in the original session. Use **Continue work…**, which keeps them, to move a session yourself.
 
+## Limits and resets
+
+Each row shows the five-hour and weekly usage that Claude Desktop records for that window. A window at its limit says when the limit resets, in your Mac's time format: "resets at 2:10 AM", "resets tomorrow at 2:10 AM", or "resets Wed at about 5:00 AM" when Baton can only estimate it. The times come from Claude itself, from the limit messages in that window's sessions and from Claude's **Auto-continue when limits reset**. They appear for limits reached while Baton is running; one reached before that shows no time. Claude records usage only while a window is open: a closed window gets a new sample about 9 seconds after you open it.
+
+A window counts as free again when its reset time passes, when a newer sample is below the limit, or when Claude answers a request sent in one of its sessions at least a minute after the limit (shown as *Claude answered since*, because extra usage may be what paid for it). An estimate never frees a window. Once a window that was at its limit has stayed free for a minute, Baton says it has room again, in its own window and, if you allow it, as a macOS notification. macOS asks about notifications once; if you decline, the notice stays in Baton's window.
+
+**Auto-continue.** Claude Desktop can continue a session by itself once its limit resets. When you continue such a session in another window, Baton turns off Auto-continue for that one session in the window it left, so the session is not worked on in two windows. It changes only that session's `optedIn` value in the window's `claude_desktop_config.json`, only while that window is closed (at once if it is; otherwise as soon as it closes while the Baton app runs, or when it is next opened from Baton), and after a dated backup. `baton doctor` lists what Baton turned off; to turn it back on, tick **Auto-continue when limits reset** on that session's limit message in Claude. When the window a session came from resets within 15 minutes and would continue it by itself, **Continue work…** and `baton continue` offer to wait instead.
+
 ## What follows and what stays
 
 | | Follows between windows | Stays with the account |
@@ -159,7 +168,7 @@ When you open a session that another account started, Claude Desktop may fork it
 | Connections | MCP servers, extensions and SSH connections defined on this Mac, merged one by one before a window starts. | Connectors, tool approvals, connected folders and Remote Control. |
 | Desktop settings | Theme, zoom, language and selected display preferences from the main app, unless you changed them in that window. | Sign-in, account and permission settings, scheduler switches and anything Baton does not recognize. |
 
-Claude rolls out features account by account, so different windows can show different features. Baton does not copy rollout flags to make them match. For the details see Anthropic's [Code Projects](https://code.claude.com/docs/en/claude-projects), [Remote Control](https://code.claude.com/docs/en/remote-control) and [Cowork architecture](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) pages.
+Windows signed in to different accounts can show different Claude features. Baton does not copy Claude's feature flags between windows to make them match. For the details see Anthropic's [Code Projects](https://code.claude.com/docs/en/claude-projects), [Remote Control](https://code.claude.com/docs/en/remote-control) and [Cowork architecture](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) pages.
 
 ## Local only
 
@@ -208,7 +217,7 @@ baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [-
                                     If the session's window resets within 15 minutes and
                                     continues it by itself, nothing happens (exit 3) unless --now
 baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
-                                    Same as `continue`, easier to shout across the track
+                                    Same as `continue`
 baton rules                         Show which accounts may continue the work in which folders
 baton rule <folder> --only <email>[,<email>…] | --remove
                                     Let only these accounts continue work in the folder and
@@ -235,8 +244,9 @@ baton continue --folder ~/Projects/api --to LAB --new --dry-run
 - **No credentials.** It never reads, copies or stores passwords, sign-in tokens, cookies or the Keychain. You sign in to each window yourself with Claude's own sign-in. To show the account it reads the account id from `config.json`, the matching email from Claude's local cache, and the usage Claude records locally.
 - **No inherited keys.** Before it starts anything, Baton (the app and `baton`) drops every `CLAUDE…` and `ANTHROPIC_…` variable it inherited, so a window opened from a terminal or a Claude Code session starts the way a Dock launch starts it, without an API key, proxy or model override from that shell.
 - **Backups first.** Every card it replaces or removes is copied to `Backups/<date>/` in [Baton's data folder](#how-it-works) first, and so is a settings file before Local only or the settings merge replaces it. The one exception is Claude's `config.json`, which holds sign-in data: only its theme, zoom and language keys are edited, in place, and it is never copied. Backup days older than a week move to the Trash; nothing is deleted outright.
-- **Closed windows only.** A window's settings and interface stores are changed only while that window is closed. Sessions are shared with running windows too, but deletions wait until every window is closed.
-- **Claude's own records stay.** It never writes, edits or removes Claude's history-suppression records, which Claude uses to keep one account's history out of another.
+- **Closed windows only.** A window's settings and interface stores are changed only while that window is closed, and so is the one Auto-continue value Baton turns off ([Limits and resets](#limits-and-resets)). Sessions are shared with running windows too, but deletions wait until every window is closed.
+- **One optional prompt.** The only macOS permission Baton may ask for is to show notifications, the first time a window has room again after a limit. Declining it keeps the notice in Baton's window.
+- **Claude's own records stay.** It never writes, edits or removes Claude's history-suppression records, which Claude adds when a session is opened under another account.
 
 Backups can contain MCP definitions and other private setup; keep the application data folder private. Details: [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 
@@ -246,7 +256,7 @@ Baton is for people who pay for more than one Claude subscription and use each o
 
 | Baton does | Baton does not |
 |---|---|
-| Run the official, Anthropic-signed Claude Desktop app for every subscription (a local copy whose only change is its Finder icon) | Patch Claude, inject code or call private APIs |
+| Run the official, Anthropic-signed Claude Desktop app for every subscription (a local copy whose only change is its Finder icon; [details](docs/ARCHITECTURE.md#profiles)) | Patch Claude, inject code or call private APIs |
 | Let **you** sign in to each window with the official sign-in | See, store, copy or forward passwords, email codes or OAuth tokens |
 | Show usage that Claude Desktop already records locally | Proxy, pool, share or combine limits between accounts |
 | Let **you** choose which window to work in | Switch accounts automatically when a limit is reached |
@@ -311,16 +321,16 @@ More: [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY-MODEL
 ## FAQ
 
 **Does this combine the limits of my subscriptions?**
-No. Anthropic meters each subscription on its own. Baton only makes it quick to move to another window you are already signed in to.
+No. Each subscription keeps its own usage limits, and Baton does not pool, share or combine them. It only makes it quick to move to another window you are already signed in to.
 
-**Why not switch accounts automatically when a limit is hit?**
-That would be automated limit evasion. You decide where to work; the app shows where there is headroom and offers to continue there, and nothing moves until you click.
+**Does Baton switch accounts for me when a limit is hit?**
+No. Baton never switches accounts for you: you pick the window and click **Continue**. The app shows where there is room and offers to continue there, and nothing moves until you click.
 
 **Does it work with Team or Enterprise seats?**
 Technically yes: a profile can sign in to any account. Whether you may use a work seat this way is up to your organization.
 
 **Why is Remote Control off?**
-Remote Control ties a window's sessions to its Anthropic account. With several accounts on one Mac, that is the likely reason Claude forks or hides a session another account opened. Local only keeps work on your Mac; turn it off for a profile that needs Remote Control.
+Remote Control ties a window's sessions to its Anthropic account, and Baton 1.0 covers local work only. We have not confirmed whether Remote Control plays a part when Claude forks or hides a session another account opened; Local only keeps it out of the picture and keeps work on your Mac. Turn it off for a profile that needs Remote Control.
 
 ## Why Baton?
 

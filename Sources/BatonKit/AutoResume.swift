@@ -430,8 +430,9 @@ extension ProfileManager {
             let samples = UsageHistory.samples(in: window.dataDir)
             let resets = status.accountID.flatMap { AutoResume.entries(in: window.dataDir, account: $0) }?.map(\.resetsAt) ?? []
             status.usage = samples.last?.usage
+            let found = activity[status.id]
             status.limits = Limits(
-                samples: samples, hits: activity[status.id]?.hits ?? [], autoResume: resets, answeredAt: activity[status.id]?.answeredAt)
+                samples: samples, hits: found?.hits ?? [], autoResume: resets, answeredAt: found?.answeredAt, askedAt: found?.askedAt)
             return status
         }
     }

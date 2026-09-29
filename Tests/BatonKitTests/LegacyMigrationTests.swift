@@ -586,6 +586,11 @@ struct LegacyMigrationTests {
             pid: 50, parent: 1, executable: legacyLaunchers.appending(path: ".engines/Claude work.app/Contents/MacOS/Claude").path)
         let kept = try #require(LegacyMigration.command(["migrate"], home: home, cli: nil, environment: environment(processes: [running])))
         #expect(kept.exitCode == 3)
+        for extra in [["--dry-run"], ["--now"], ["x"]] {
+            let refused = try #require(LegacyMigration.command(["migrate"] + extra, home: home, cli: nil, environment: environment()))
+            #expect(refused.exitCode == 1 && refused.message.contains("nothing was renamed"), "\(extra)")
+            #expect(LegacyMigration.isRealDirectory(legacyLaunchers), "\(extra): an option it doesn't take renames nothing")
+        }
         let result = try #require(LegacyMigration.command(["migrate"], home: home, cli: nil, environment: environment()))
         #expect(result.exitCode == 0)
         #expect(result.message.hasPrefix("Renamed ~/Applications/Claude Profiles to ~/Applications/Baton"))

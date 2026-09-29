@@ -49,8 +49,12 @@ if [ -n "$TEST_OPTION" ] && [ "$DRY_RUN" = 0 ] && [ "${BATON_INSTALL_TEST:-}" !=
     exit 2
 fi
 
-APPLICATIONS="$HOME_DIR/Applications"
-SUPPORT="$HOME_DIR/Library/Application Support"
+# One slash between parts and none at the end, so a DEST compares with the folders below however it was typed
+# (make install PREFIX=~/Applications/ passes ~/Applications//Baton).
+tidy() { printf '%s\n' "$1" | sed -e 's#//*#/#g' -e 's#\(.\)/$#\1#'; }
+[ -z "$EXPLICIT" ] || EXPLICIT="$(tidy "$EXPLICIT")"
+APPLICATIONS="$(tidy "$HOME_DIR/Applications")"
+SUPPORT="$(tidy "$HOME_DIR/Library/Application Support")"
 NEW_FOLDER="$APPLICATIONS/Baton"
 OLD_FOLDER="$APPLICATIONS/Claude Profiles"
 
@@ -88,6 +92,13 @@ backup() { # backup <app> <name>
 if [ -n "$EXPLICIT" ] && [ "${EXPLICIT%/}" = "$OLD_FOLDER" ] && [ -d "$NEW_FOLDER" ] \
     && ! [ -e "$OLD_FOLDER" ] && ! [ -L "$OLD_FOLDER" ]; then
     EXPLICIT="$NEW_FOLDER"
+fi
+# DEST given as Baton's folder while only the folder of the earlier name exists: installing there would start a second
+# set of launchers and engines beside the old ones. The app goes into the old folder, which is then renamed to Baton,
+# as without DEST.
+if [ -n "$EXPLICIT" ] && [ "$EXPLICIT" = "$NEW_FOLDER" ] && ! [ -d "$NEW_FOLDER" ] \
+    && { [ -e "$OLD_FOLDER" ] || [ -L "$OLD_FOLDER" ]; }; then
+    EXPLICIT="$OLD_FOLDER"
 fi
 if [ "$WHERE" = 1 ]; then choose_dest; exit 0; fi
 
@@ -136,6 +147,7 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "Would run the installed baton refresh."
     if [ "$DEST" = "$OLD_FOLDER" ]; then
         print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$RENAMED_APP" "Once that folder is renamed, point these command links at Baton:"
+        print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$DEST/Baton.app" "If it keeps its old name for now, point them here until it is renamed:"
     else
         print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$RENAMED_APP"
     fi
@@ -201,7 +213,9 @@ FINAL="$(final_app "$STATUS" "$DEST" "$OLD_FOLDER" "$NEW_FOLDER")"
 if [ "$FINAL" = "$RENAMED_APP" ]; then
     print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$FINAL"
 else
-    print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$RENAMED_APP" "Once that folder is renamed, point these command links at Baton:"
+    # The old app is in the Trash already, so a link into it is broken now, not only after the rename.
+    print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$FINAL" "These command links point at the old app or folder. Point them at Baton where it is now:"
+    print_link_fixes "$BIN_DIRS" "$OLD_FOLDER" "$RENAMED_APP" "Once that folder is renamed, point them at Baton's new place:"
 fi
 
 # Keep the three latest ZIPs. Older installers kept runnable .previous-*.app copies beside the app; the ZIPs replace them.

@@ -94,15 +94,15 @@ struct RedactorTests {
     @Test func emailsGetStableOrdinalsInFirstSeenOrder() {
         var r = redactor()
         #expect(
-            r.redact("Signed in as robin@family.example, expected yuri@example.org; again robin@family.example.")
+            r.redact("Signed in as robin@acme-corp.example, expected sam@example.org; again robin@acme-corp.example.")
                 == "Signed in as <email-1>, expected <email-2>; again <email-1>.")
-        #expect(r.redact("ROBIN@FAMILY.EXAMPLE") == "<email-1>")
+        #expect(r.redact("ROBIN@ACME-CORP.EXAMPLE") == "<email-1>")
     }
 
     @Test func emailInsideAPathIsCaught() {
         var r = redactor()
-        let out = r.redact("/Users/robin.k/Library/Mail/robin@family.example/INBOX.mbox")
-        #expect(!out.contains("family.example"))
+        let out = r.redact("/Users/robin.k/Library/Mail/robin@acme-corp.example/INBOX.mbox")
+        #expect(!out.contains("acme-corp.example"))
         #expect(out.hasPrefix("~/Library/Mail/<email-1>/"))
     }
 

@@ -74,6 +74,30 @@ struct LogFileTests {
         #expect(!fm.fileExists(atPath: data.path))
     }
 
+    /// The unified-log fallback of a report prints times in ISO 8601 UTC: in a 12-hour locale, 00:08 and 12:08
+    /// would otherwise read the same.
+    @Test func unifiedLogLinesKeepMorningAndAfternoonApart() {
+        let midnight = Date(timeIntervalSince1970: 1_790_640_480)  // 2026-09-29 00:08 UTC
+        let a = LogTail.line(at: midnight, category: "sync", message: "one")
+        let b = LogTail.line(at: midnight.addingTimeInterval(12 * 3600), category: "sync", message: "two")
+        #expect(a == "2026-09-29T00:08:00Z [sync] one" && b == "2026-09-29T12:08:00Z [sync] two")
+    }
+
+    /// The folder rename at an upgrade is logged once the file log is on, in the app and in `baton migrate`.
+    @Test func theFileLogIsOnBeforeTheFolderRename() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let app = try String(contentsOf: repo.appending(path: "Sources/BatonApp/AppModel.swift"), encoding: .utf8)
+        let enable = try #require(app.range(of: "Log.enableFile("))
+        let rename = try #require(app.range(of: "LegacyMigration.atAppStart("))
+        #expect(enable.lowerBound < rename.lowerBound)
+        let cli = try String(contentsOf: repo.appending(path: "Sources/baton/main.swift"), encoding: .utf8)
+        let stage = try #require(cli.range(of: "case .migrate:"))
+        let tail = cli[stage.upperBound...]
+        let cliEnable = try #require(tail.range(of: "Log.enableFile("))
+        let cliRename = try #require(tail.range(of: "LegacyMigration.command("))
+        #expect(cliEnable.lowerBound < cliRename.lowerBound)
+    }
+
     /// The log never creates Baton's data folder: a missing one could be a folder of the earlier name that isn't
     /// reachable right now.
     @Test func neverCreatesTheDataFolder() {
