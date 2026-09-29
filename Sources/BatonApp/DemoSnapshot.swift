@@ -9,7 +9,7 @@ import BatonKit
 @MainActor
 enum DemoSnapshot {
     /// The main window's content size in the pictures; demo mode opens at it.
-    static let contentSize = NSSize(width: 900, height: 530)
+    static let contentSize = NSSize(width: 900, height: 560)
     static let scale: CGFloat = 2
     /// Transparent room around the window for its shadow, in points.
     static let margin: CGFloat = 40
@@ -30,7 +30,11 @@ enum DemoSnapshot {
             let deadline = Date().addingTimeInterval(15)
             while Date() < deadline {
                 try? await Task.sleep(for: .milliseconds(250))
-                guard let window = mainWindow(), window.contentRect(forFrameRect: window.frame).size == contentSize else { continue }
+                guard let window = mainWindow() else { continue }
+                // SwiftUI keeps the window closed at launch when Baton last quit with it closed (the real app shares
+                // that state), and a sheet waits until its window is on screen.
+                if !window.isVisible { window.orderFrontRegardless() }
+                guard window.contentRect(forFrameRect: window.frame).size == contentSize else { continue }
                 guard !withSheet || window.attachedSheet != nil else { continue }
                 do {
                     try await settle(window)

@@ -16,9 +16,7 @@ final class AddProfileForm: ObservableObject {
 
     var trimmedEmail: String { email.trimmingCharacters(in: .whitespaces) }
     var suggestedLabel: String { trimmedEmail.isEmpty ? "" : Profile.suggestedLabel(for: trimmedEmail, taken: taken) }
-    var labelIsTaken: Bool { taken.contains { $0.caseInsensitiveCompare(label) == .orderedSame } }
-    var labelIsReserved: Bool { Profile.isReservedLabel(label) }
-    var isValid: Bool { Profile.isValidEmail(trimmedEmail) && Profile.isValidLabel(label) && !labelIsTaken }
+    var isValid: Bool { Profile.isValidEmail(trimmedEmail) && Profile.isValidLabel(label) && Profile.labelHint(label, taken: taken) == nil }
 }
 
 struct AddProfileSheet: View {
@@ -37,40 +35,53 @@ struct AddProfileSheet: View {
                 DockIconPreview(label: form.label.isEmpty ? "NEW" : form.label.uppercased(), color: form.color)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Add Subscription").font(.title3.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
                     Text("A new Claude window opens with its own Dock icon. Sign in there with this account, with Google or with email.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                // Each field says why it holds Create and Open back, so the button is never grey without a reason.
                 GridRow {
                     Text("Email").gridColumnAlignment(.trailing)
-                    TextField("you@example.com", text: $form.email)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Email")
-                        .textContentType(.emailAddress)
-                        .onSubmit(create)
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("you@example.com", text: $form.email)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Email")
+                            .accessibilityHint(Profile.emailHint(form.email) ?? "")
+                            .textContentType(.emailAddress)
+                            .onSubmit(create)
+                        if let hint = Profile.emailHint(form.email) {
+                            Text(hint).font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                    }
                 }
                 GridRow {
                     Text("Dock label")
-                    HStack {
-                        TextField(
-                            "WORK",
-                            text: Binding(
-                                get: { form.label },
-                                set: {
-                                    form.label = String($0.uppercased().prefix(Profile.maxLabelLength)); form.labelEdited = true
-                                })
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 100, maxWidth: 140)
-                        .accessibilityLabel("Dock label")
-                        if form.labelIsTaken {
-                            Text("Already used").font(.caption).foregroundStyle(.orange)
-                        } else if form.labelIsReserved {
-                            Text("Names the main Claude").font(.caption).foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            TextField(
+                                "WORK",
+                                text: Binding(
+                                    get: { form.label },
+                                    set: {
+                                        form.label = String($0.uppercased().prefix(Profile.maxLabelLength)); form.labelEdited = true
+                                    })
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(minWidth: 100, maxWidth: 140)
+                            .accessibilityLabel("Dock label")
+                            .accessibilityHint(Profile.labelHint(form.label, taken: form.taken) ?? "")
+                            // The field stops taking letters at the limit, so the count says why.
+                            Text("\(form.label.count) of \(Profile.maxLabelLength)")
+                                .font(.caption).monospacedDigit().foregroundStyle(Color.secondaryText)
+                                .accessibilityHidden(true)
+                        }
+                        if let hint = Profile.labelHint(form.label, taken: form.taken) {
+                            Text(hint).font(.caption).foregroundStyle(Color.warningText)
                         }
                     }
                 }
@@ -98,7 +109,7 @@ struct AddProfileSheet: View {
 
             Label("Baton never sees your password, codes or tokens: you sign in inside the official Claude app.", systemImage: "lock.shield")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {

@@ -32,8 +32,11 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     /// `carryPermissionMode`, with a missing value read as off.
     public var carriesPermissionMode: Bool { carryPermissionMode ?? false }
 
-    public static let palette = ["#1971C2", "#2F9E44", "#7048E8", "#0C8599", "#C2255C", "#E8590C", "#5C940D", "#862E9C"]
-    public static let mainColor = "#D97757"
+    /// Badge and Dock label colours, each dark enough for white text at 4.5:1 or more (`Contrast`). Profiles made with
+    /// the earlier, lighter green, teal, orange and lime keep them in `profiles.json`; their badge and Dock label are
+    /// darkened as they're drawn, the Dock label the next time the app copy or launcher is written.
+    public static let palette = ["#1971C2", "#28863A", "#7048E8", "#0C8094", "#C2255C", "#C94D0A", "#51820B", "#862E9C"]
+    public static let mainColor = "#AE5F46"
     public static let maxLabelLength = 8
 
     /// Ids that name the main Claude window everywhere (`"main"`, and `"claude"` in the CLI), never a profile's.

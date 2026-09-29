@@ -1114,7 +1114,7 @@ public final class ProfileManager: @unchecked Sendable {
     func icon(for profile: Profile) -> NSImage {
         IconRenderer.profileIcon(
             base: NSWorkspace.shared.icon(forFile: paths.claudeApp.path),
-            label: profile.label, color: NSColor(hex: profile.color))
+            label: profile.label, color: NSColor(hex: Contrast.behindWhiteText(profile.color)))
     }
 
     func launcherExecutable(for profile: Profile) -> URL {

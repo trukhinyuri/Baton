@@ -33,7 +33,7 @@ struct BatonApp: App {
                 Button("Add Subscription…") { model.isAdding = true }.keyboardShortcut("n")
             }
             CommandGroup(after: .newItem) {
-                Button("Share Sessions Now") { model.syncNow() }.keyboardShortcut("r")
+                Button("Share Sessions Now") { model.syncNow(asked: true) }.keyboardShortcut("r")
                 Button("Continue work…") { model.isContinuing = true }
                 Button("Check sessions…") { model.checkSessions() }
             }
@@ -45,8 +45,7 @@ struct BatonApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            Image(systemName: About.menuBarSymbol)
-                .accessibilityLabel("Baton")
+            MenuBarLabel(model: model)
         }
     }
 }
@@ -76,13 +75,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
+/// The menu bar icon. It is there from launch, with the window open or not, so errors can open the window from the start:
+/// Baton may start with its window closed and meet an error before any item or the window sets that up.
+struct MenuBarLabel: View {
+    let model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(systemName: About.menuBarSymbol)
+            .accessibilityLabel("Baton")
+            .onAppear { model.letErrorsOpenTheWindow(with: openWindow) }
+    }
+}
+
 struct MenuBarContent: View {
     @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ForEach(model.statuses) { status in
-            Button(menuTitle(for: status)) { model.open(status) }
+            Button(menuTitle(for: status)) {
+                model.letErrorsOpenTheWindow(with: openWindow)
+                model.open(status)
+            }
         }
         Divider()
         Button("Open Baton") {
@@ -94,7 +109,10 @@ struct MenuBarContent: View {
             NSApp.activate()
             model.isAdding = true
         }
-        Button("Share Sessions Now") { model.syncNow() }
+        Button("Share Sessions Now") {
+            model.letErrorsOpenTheWindow(with: openWindow)
+            model.syncNow(asked: true)
+        }
         Button("Continue work…") {
             openWindow(id: "main")
             NSApp.activate()
@@ -116,7 +134,7 @@ struct MenuBarContent: View {
         if status.isSignedIn, status.limits.isAtLimit() {
             usage = " · " + LimitText.atLimit(status.limits)
         } else if status.isSignedIn, status.usage != nil {
-            usage = " · " + LimitText.describe(status.limits.week)
+            usage = " · " + LimitText.describe(status.limits.week, fullNames: true)
         }
         // Open or closed in words, as in the window list: VoiceOver reads a dot glyph as "black circle".
         return "\(name) · \(status.isRunning ? "Open" : "Closed") — \(who)\(usage)"

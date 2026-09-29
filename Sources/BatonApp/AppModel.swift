@@ -9,7 +9,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastSyncChanges = 0
     @Published private(set) var syncError: String? { didSet { remember(syncError) } }
     @Published private(set) var registryError: String? { didSet { remember(registryError) } }
-    @Published var busyMessage: String?
+    /// The actions still running; the footer shows the newest one's message (see `OperationsInFlight`).
+    @Published private(set) var operations = OperationsInFlight()
     @Published var errorMessage: String? { didSet { remember(errorMessage) } }
     @Published var isReporting = false
     /// Says what kind of problem `errorMessage` is about.
@@ -26,8 +27,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var isLoadingConversations = false
     /// Selected when the continue sheet opens, if still available.
     @Published var preselectedConversation: String?
+    /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed or
+    /// replaced; any other goes after 20 seconds.
     @Published private(set) var notice: String?
+    @Published private(set) var noticeIsWarning = false
     private var noticeTask: Task<Void, Never>?
+    /// Brings the Baton window forward; set by the menu bar icon at launch, by the window and by the menu bar's items.
+    /// An error while the window is closed (from the menu bar, or from a copy reopened from its own Dock icon) would
+    /// otherwise wait unseen until the window next opens.
+    var presentWindow: (@MainActor () -> Void)?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
     /// What the footer shows: the start-up warnings, which stay until Baton quits, then the last open's warning.
@@ -47,6 +55,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var folderRules: [FolderRule]? = []
     /// Local only's optional extra, Mac-wide: off by default. See `CloudMoveLock`.
     @Published private(set) var cloudMoveLockOn = false
+    /// Asking before the lock goes on: it changes a setting of every Claude Code session on this Mac.
+    @Published var isConfirmingCloudMoveLock = false
     /// Windows blocked at a limit as of the last reload (see `LimitWatch`).
     @Published private(set) var atLimit: Set<String> = []
     private let limitWatch = LimitWatch()
@@ -174,9 +184,35 @@ final class AppModel: ObservableObject {
         exit(0)
     }
 
+    /// Lets an error open the window (`show`), with the `openWindow` of any of the app's views.
+    func letErrorsOpenTheWindow(with openWindow: OpenWindowAction) {
+        presentWindow = {
+            openWindow(id: "main")
+            NSApp.activate()
+        }
+    }
+
     func show(_ error: Error) {
         errorTitle = WindowStatus.alertTitle(for: error)
         errorMessage = error.localizedDescription
+        // The alert belongs to the window: with the window closed, open it so the alert shows now.
+        if !Self.windowIsOnScreen { presentWindow?() }
+    }
+
+    /// The Baton window is open and not in the Dock.
+    private static var windowIsOnScreen: Bool {
+        NSApp.windows.contains { $0.identifier?.rawValue.hasPrefix("main") == true && $0.isVisible && !$0.isMiniaturized }
+    }
+
+    /// The newest of the actions still running, for the footer.
+    var busyMessage: String? { operations.message }
+
+    /// An action on `id` is still running, so its Open button waits.
+    func isBusy(_ id: String) -> Bool { operations.isBusy(window: id) }
+
+    /// Read out by VoiceOver, which doesn't follow text that changes in place (a result, what Baton is doing).
+    static func announce(_ text: String) {
+        AccessibilityNotification.Announcement(text).post()
     }
 
     func showStatus(of id: String) {
@@ -216,7 +252,7 @@ final class AppModel: ObservableObject {
     func restart(_ id: String) {
         guard !isDemo else { return }
         let manager = manager
-        run("Restarting Claude \(displayLabel(of: id))…", opening: id) { try await manager.restart(id) }
+        run("Restarting Claude \(displayLabel(of: id))…", window: id, opens: true) { try await manager.restart(id) }
     }
 
     /// Shows `warning` in the footer until Baton quits, and keeps it for a problem report.
@@ -298,18 +334,37 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func show(notice text: String) {
+    /// - Parameter isWarning: the text asks for something (choose a model, stop another window continuing a
+    ///   session), so it stays until dismissed.
+    func show(notice text: String, isWarning: Bool = false) {
         notice = text
+        noticeIsWarning = isWarning
         noticeTask?.cancel()
-        noticeTask = Task {
-            try? await Task.sleep(for: .seconds(20))
-            if !Task.isCancelled { notice = nil }
+        noticeTask = nil
+        if !isWarning {
+            noticeTask = Task {
+                try? await Task.sleep(for: .seconds(20))
+                if !Task.isCancelled { dismissNotice() }
+            }
         }
+        Self.announce(text)
         reload()
     }
 
+    func dismissNotice() {
+        noticeTask?.cancel()
+        noticeTask = nil
+        notice = nil
+        noticeIsWarning = false
+    }
+
     func reload() {
-        if isDemo { statuses = DemoData.statuses; lastSync = Date().addingTimeInterval(-14); return }
+        if isDemo {
+            statuses = DemoData.statuses
+            atLimit = Set(statuses.filter { $0.isSignedIn && $0.limits.isAtLimit() }.map(\.id))
+            lastSync = Date().addingTimeInterval(-14)
+            return
+        }
         guard !isReloading else {
             reloadAgain = true
             return
@@ -354,7 +409,7 @@ final class AppModel: ObservableObject {
                 awaitingSignIn.insert(id)
             } else if awaitingSignIn.remove(id) != nil, status.isRunning, status.isSignedIn {
                 let manager = manager
-                run("Loading your sessions into Claude \(status.label)…", opening: id) {
+                run("Loading your sessions into Claude \(status.label)…", window: id, opens: true) {
                     try await Task.sleep(for: .seconds(3))  // let Claude finish saving the new sign-in
                     try await manager.finishFirstSignIn(id)
                 }
@@ -367,10 +422,12 @@ final class AppModel: ObservableObject {
     private func reopenIfStartedWithoutProfile(_ pid: pid_t) {
         guard let profile = manager.profileStartedWithoutDataDir(pid: pid) else { return }
         let manager = manager
-        run("Opening Claude \(profile.label) with its own account…", opening: profile.id) { try await manager.open(profile.id) }
+        run("Opening Claude \(profile.label) with its own account…", window: profile.id, opens: true) { try await manager.open(profile.id) }
     }
 
-    func syncNow() {
+    /// - Parameter asked: “Share Sessions Now” rather than the timer: a failure is also an alert, which opens the
+    ///   window if it is closed. The timer's failures show in the footer only.
+    func syncNow(asked: Bool = false) {
         guard !isDemo else { return }
         let manager = manager
         Task.detached {
@@ -385,15 +442,19 @@ final class AppModel: ObservableObject {
                 }
             } catch {
                 Log.error("sync", "Sync failed: \(error.localizedDescription)")
-                await MainActor.run { self.syncError = error.localizedDescription }
+                await MainActor.run {
+                    self.syncError = error.localizedDescription
+                    if asked { self.show(error) }
+                }
             }
         }
     }
 
+    /// Does nothing while another action on that window runs: two clicks on Open start it once.
     func open(_ status: ProfileStatus) {
-        guard !isDemo else { return }
+        guard !isDemo, !isBusy(status.id) else { return }
         let manager = manager
-        run(status.isRunning ? nil : "Opening Claude \(status.displayLabel)…", opening: status.id) {
+        run(status.isRunning ? nil : "Opening Claude \(status.displayLabel)…", window: status.id, opens: true) {
             if let id = status.profile?.id { try await manager.open(id) } else { try await manager.openMain() }
         }
     }
@@ -421,7 +482,7 @@ final class AppModel: ObservableObject {
     func remove(_ status: ProfileStatus) {
         guard !isDemo, let id = status.profile?.id else { return }
         let manager = manager
-        run("Removing Claude \(status.label)…") { try await manager.remove(id) }
+        run("Removing Claude \(status.label)…", window: id) { try await manager.remove(id) }
     }
 
     func setCarryPermissionMode(_ enabled: Bool, for id: String) {
@@ -435,25 +496,29 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([manager.paths.launcher(for: profile)])
     }
 
-    /// Runs `work` with `message` in the footer. When it opens a window (`opening`), that window's warning replaces the
-    /// last open's; the start-up warnings stay either way.
-    private func run(_ message: String?, opening window: String? = nil, _ work: @escaping @Sendable () async throws -> Void) {
-        runOpening(message) {
+    /// Runs `work` with `message` in the footer.
+    /// - Parameters:
+    ///   - window: the window the action is on, whose Open button waits for it.
+    ///   - opens: the action opens `window`, so that window's warning replaces the last open's; the start-up warnings
+    ///     stay either way.
+    private func run(_ message: String?, window: String? = nil, opens: Bool = false, _ work: @escaping @Sendable () async throws -> Void) {
+        runOpening(message, window: window) {
             try await work()
-            return window
+            return opens ? window : nil
         }
     }
 
     /// The same, for work that says which window it opened once it is done.
-    private func runOpening(_ message: String?, _ work: @escaping @Sendable () async throws -> String?) {
+    private func runOpening(_ message: String?, window: String? = nil, _ work: @escaping @Sendable () async throws -> String?) {
         guard !isDemo else { return }  // demo mode changes nothing on this Mac
-        busyMessage = message
+        let operation = operations.start(message, window: window)
+        if let message { Self.announce(message) }
         Task {
             do {
                 // Never waits: the manager guards warnings with a lock it holds only while reading or writing them.
                 if let window = try await work() { openWarning = manager.openWarning(of: window) }
             } catch { show(error) }
-            busyMessage = nil
+            operations.finish(operation)
             reload()
             if statusWindow != nil { refreshStatus() }
         }
@@ -518,20 +583,27 @@ enum DemoData {
             profiles: statuses.compactMap(\.profile).map { [$0.label, $0.id] })
     }
 
+    /// WORK is at its five-hour limit with a reset time Claude named, so the pictures show the limit banner, the reset
+    /// beside the meters and the at-limit entry in the Continue sheet; LAB's sample is four hours old, so its usage
+    /// "may have changed since".
     static var statuses: [ProfileStatus] {
         let now = Date()
+        let workUsage = Usage(fiveHour: 100, week: 31, sampledAt: now.addingTimeInterval(-300))
+        var workLimits = Limits(usage: workUsage)
+        workLimits.fiveHour = LimitState(
+            kind: .fiveHour, percent: 100, sampledAt: workUsage.sampledAt, reachedAt: now.addingTimeInterval(-2_400),
+            reset: LimitReset(at: now.addingTimeInterval(5_700), source: .exact))
         return [
             ProfileStatus(
                 profile: nil, accountID: "demo-main", email: "alex@example.com",
                 usage: Usage(fiveHour: 64, week: 92, sampledAt: now.addingTimeInterval(-600)), isRunning: true),
             ProfileStatus(
                 profile: Profile(id: "work", label: "WORK", email: "alex@work.example", color: "#1971C2"),
-                accountID: "demo-work", email: "alex@work.example",
-                usage: Usage(fiveHour: 12, week: 31, sampledAt: now.addingTimeInterval(-300)), isRunning: true),
+                accountID: "demo-work", email: "alex@work.example", usage: workUsage, isRunning: true, limits: workLimits),
             ProfileStatus(
-                profile: Profile(id: "lab", label: "LAB", email: "alex.lab@example.org", color: "#2F9E44"),
+                profile: Profile(id: "lab", label: "LAB", email: "alex.lab@example.org", color: "#28863A"),
                 accountID: "demo-lab", email: "alex.lab@example.org",
-                usage: Usage(fiveHour: 0, week: 58, sampledAt: now.addingTimeInterval(-7200)), isRunning: false),
+                usage: Usage(fiveHour: 0, week: 58, sampledAt: now.addingTimeInterval(-14_400)), isRunning: false),
             ProfileStatus(
                 profile: Profile(id: "team", label: "TEAM", email: "alex@team.example", color: "#7048E8"),
                 accountID: nil, email: nil, usage: nil, isRunning: true),

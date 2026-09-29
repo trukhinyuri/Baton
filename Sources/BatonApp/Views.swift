@@ -3,6 +3,20 @@ import SwiftUI
 
 extension Color {
     init(hex: String) { self.init(nsColor: NSColor(hex: hex)) }
+
+    /// Secondary text at 4.5:1 or more in both appearances: the system's is about 3.9:1 in the light one (`TextColors`).
+    static let secondaryText = Color(nsColor: .adaptive(TextColors.secondary))
+    /// Warning text at 4.5:1 or more in both appearances: system orange is about 2:1 in the light one.
+    static let warningText = Color(nsColor: .adaptive(TextColors.warning))
+}
+
+extension NSColor {
+    /// `pair.light` in the light appearance, `pair.dark` in the dark one.
+    static func adaptive(_ pair: (light: String, dark: String)) -> NSColor {
+        NSColor(name: nil) { appearance in
+            NSColor(hex: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? pair.dark : pair.light)
+        }
+    }
 }
 
 struct ProfileBadge: View {
@@ -11,8 +25,10 @@ struct ProfileBadge: View {
     var size: CGFloat = 40
 
     var body: some View {
+        // Flat, like the band on the Dock icon, and darkened for a colour from the earlier palette: the white label is
+        // 4.5:1 or more over the whole badge, not only where a gradient is darkest.
         RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-            .fill(Color(hex: color).gradient)
+            .fill(Color(hex: Contrast.behindWhiteText(color)))
             .frame(width: size, height: size)
             .overlay {
                 Text(label)
@@ -41,7 +57,7 @@ struct UsageMeter: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(title)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondaryText)
                 .frame(minWidth: 48, alignment: .leading)
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
@@ -53,7 +69,7 @@ struct UsageMeter: View {
             .frame(height: 5)
             Text(isStale ? staleText : percent.map { "\($0)%" } ?? "–")
                 .monospacedDigit()
-                .foregroundStyle(isStale ? .secondary : .primary)
+                .foregroundStyle(isStale ? Color.secondaryText : Color.primary)
                 .frame(minWidth: 36, alignment: .trailing)
         }
         .font(.caption)
@@ -89,15 +105,18 @@ struct UsageColumn: View {
                     + Text(notes.map { " · " + $0 }.joined())
                     + Text(usage.isFresh(now: now) || !allBelow ? "" : " · may have changed since")
                     + Text(LimitText.checkHint(status, now: now) == nil ? "" : " · open it to check"))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    // Reset times are what this line is for: caption size at 4.5:1, not the faintest style.
+                    .font(.caption)
+                    .foregroundStyle(Color.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 56)
                     .help(LimitText.columnHelp(status, now: now))
             }
+            .accessibilityElement(children: .combine)
         } else {
             Text(status.isSignedIn ? "Usage appears after the first message" : "Usage appears after sign-in")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Color.secondaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -118,8 +137,9 @@ struct ProfileRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
+            // The subtitle names the window by its label already.
             ProfileBadge(label: status.label, color: status.color)
-                .accessibilityLabel("Dock label \(status.label)")
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -147,26 +167,30 @@ struct ProfileRow: View {
                         .accessibilityHidden(true)
                     Text(subtitle)
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.secondaryText)
                 }
                 if !status.isSignedIn {
                     Label("Sign in inside the Claude \(status.displayLabel) window", systemImage: "person.crop.circle.badge.exclamationmark")
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(Color.warningText)
                         .help("While this window signs in, sign-in links from your browser open here instead of in the main Claude app.")
                 } else if status.isUnexpectedAccount, let expected = status.profile?.email {
                     Label("Signed in as a different account than \(expected)", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(Color.warningText)
                 }
                 if status.isOpenWithoutProfile {
                     Label(
                         "A Claude \(status.label) window shows the main account — click \(status.isRunning ? "Show" : "Open") to replace it",
                         systemImage: "exclamationmark.triangle"
                     )
-                    .font(.caption).foregroundStyle(.orange)
-                    .help("This app copy was opened without the profile, from its own Dock icon or by macOS at login. Keep the launcher in the Dock instead.")
+                    .font(.caption).foregroundStyle(Color.warningText)
+                    .help(
+                        "This app copy was opened without its subscription's own data, from its own Dock icon or by macOS at login. Keep the launcher in the Dock instead."
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // One stop for VoiceOver: the account, the window and any warning.
+            .accessibilityElement(children: .combine)
 
             UsageColumn(status: status)
                 .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
@@ -174,6 +198,7 @@ struct ProfileRow: View {
             HStack(spacing: 4) {
                 Button(status.isRunning ? "Show" : "Open") { model.open(status) }
                     .frame(minWidth: 64)
+                    .disabled(model.isBusy(status.id))
                     .accessibilityLabel("\(status.isRunning ? "Show" : "Open") Claude \(status.displayLabel)")
                 Menu {
                     Button("Status…") { model.showStatus(of: status.id) }
@@ -188,7 +213,7 @@ struct ProfileRow: View {
                             )
                         )
                         .help(
-                            "A conversation continued into this profile keeps its permission mode (for example “accept edits”) instead of falling back to the default. Off unless you turn it on."
+                            "A conversation continued into this subscription keeps its permission mode (for example “accept edits”) instead of falling back to the default. Off unless you turn it on."
                         )
                         Divider()
                         Button("Remove Subscription…", role: .destructive) { model.pendingRemoval = status }
@@ -208,6 +233,8 @@ struct ProfileRow: View {
         .padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.6)))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Claude \(status.displayLabel)")
     }
 }
 
@@ -225,7 +252,7 @@ struct EmptyHint: View {
                     "Add another subscription: it gets its own Claude window and a labeled Dock icon, so you always know which account you're in. Your Claude Code sessions show up in every window, ready to be handed over."
                 )
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -256,11 +283,40 @@ struct LimitBanner: View {
             Text("Claude \(tired.displayLabel) is at its limit\(asOf).\(resets)")
                 .font(.callout.weight(.medium))
             Spacer()
-            if !note.isEmpty { Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(.secondary) }
+            if !note.isEmpty {
+                Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(Color.secondaryText)
+            }
             Button(best.map { "Continue in \($0)…" } ?? "Continue work…", action: action)
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.12)))
+    }
+}
+
+/// The result of the last action, in full: it wraps and can be selected, and it stays until closed with × or replaced
+/// (one without a warning goes after 20 seconds). The footer's two lines cut the warnings that ask for something.
+struct NoticeBanner: View {
+    let text: String
+    let isWarning: Bool
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: isWarning ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(isWarning ? Color.warningText : Color.green)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.callout)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: dismiss) { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Dismiss")
+                .help("Dismiss")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill((isWarning ? Color.orange : Color.green).opacity(0.12)))
     }
 }
 
@@ -274,6 +330,7 @@ final class SyncFooterState: ObservableObject {
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @StateObject private var syncFooter = SyncFooterState()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -286,6 +343,11 @@ struct ContentView: View {
                 ) { model.isContinuing = true }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 10)
+            }
+            if let notice = model.notice {
+                NoticeBanner(text: notice, isWarning: model.noticeIsWarning) { model.dismissNotice() }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
             }
             ScrollView {
                 VStack(spacing: 8) {
@@ -301,12 +363,13 @@ struct ContentView: View {
             footer
             Text("Several Claude Desktop accounts, one Mac, one baton. Not affiliated with Anthropic.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 8)
         }
         .frame(minWidth: 760, idealWidth: 900, minHeight: 380, idealHeight: 580)
+        .onAppear { model.letErrorsOpenTheWindow(with: openWindow) }
         .task(id: model.lastSync) { syncFooter.everyoneInStep = await Self.everyoneInStep(model) }
         .sheet(isPresented: $model.isAdding) { AddProfileSheet(model: model) }
         .sheet(isPresented: $model.isContinuing) { ContinueWorkSheet(model: model) }
@@ -324,7 +387,15 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text(
-                "Its app copy and sign-in move to the Trash. While its window is open, removing it is refused: quit it first (⌘Q in that window). Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the profile; cloud Projects stay with their account."
+                "Its app copy and sign-in move to the Trash. While its window is open, removing it is refused: quit it first (⌘Q in that window). Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the subscription; cloud Projects stay with their account."
+            )
+        }
+        .confirmationDialog("Deny moving sessions to the cloud on this whole Mac?", isPresented: $model.isConfirmingCloudMoveLock) {
+            Button("Turn On") { model.setCloudMoveLock(true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "Baton adds mcp__ccd_session__move_to_cloud to permissions.deny in ~/.claude/settings.json, after a backup. Every Claude Code session on this Mac then can't move a session to the cloud, in Baton's windows and outside them. Turning the lock off here removes only that entry."
             )
         }
         .alert(model.errorTitle, isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
@@ -338,9 +409,10 @@ struct ContentView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Subscriptions").font(.title2.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                 Text("Pick up any local Code session or Cowork task in another of your windows.")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondaryText)
             }
             Spacer()
             Button("Continue work…") { model.isContinuing = true }
@@ -363,12 +435,11 @@ struct ContentView: View {
             if let message = model.busyMessage {
                 ProgressView().controlSize(.small)
                 Text(message)
-            } else if let notice = model.notice {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                Text(notice).lineLimit(2)
             } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning ?? model.installWarning {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text(problem).lineLimit(2).textSelection(.enabled)
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.warningText).accessibilityHidden(true)
+                // In full: these ask for something, and a tooltip is out of reach of the keyboard. The buttons keep
+                // their size, so the text takes the width they leave and wraps.
+                Text(problem).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).layoutPriority(1)
             } else {
                 Image(systemName: "arrow.triangle.2.circlepath")
                 if model.statuses.count < 2 {
@@ -382,27 +453,30 @@ struct ContentView: View {
             }
             Spacer()
             Menu {
+                // Mac-wide, so turning it on asks first; turning it off removes only Baton's entry.
                 Toggle(
-                    "Also deny moving a session to the cloud",
+                    "Deny moving sessions to the cloud (all Claude Code on this Mac)",
                     isOn: Binding(
                         get: { model.cloudMoveLockOn },
-                        set: { model.setCloudMoveLock($0) }))
+                        set: { if $0 { model.isConfirmingCloudMoveLock = true } else { model.setCloudMoveLock(false) } }))
             } label: {
                 Label("Cloud move lock: \(model.cloudMoveLockOn ? "On" : "Off")", systemImage: "lock.shield")
             }
             .controlSize(.small)
             .fixedSize()
             .help("Optional, off by default: adds mcp__ccd_session__move_to_cloud to permissions.deny in ~/.claude/settings.json, Mac-wide.")
-            Button("Check sessions…") { model.checkSessions() }
+            Button("Check sessions…") { model.checkSessions() }.fixedSize()
             Button("Report a problem…") { model.isReporting = true }
+                .fixedSize()
                 .help("Shows a redacted report to review, then opens a prefilled GitHub issue. Nothing is sent automatically.")
             Link(destination: URL(string: "https://github.com/\(FeedbackReport.repository)#staying-within-anthropics-terms")!) {
                 Label("Anthropic terms", systemImage: "checkmark.shield")
             }
+            .fixedSize()
             .help("How Baton stays within Anthropic's terms")
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color.secondaryText)
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
     }
@@ -439,7 +513,8 @@ struct WindowStatusSheet: View {
             if let status {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Claude \(status.displayLabel) status").font(.title2.bold())
-                    Text("What this window shares, what it doesn't, and why.").font(.callout).foregroundStyle(.secondary)
+                        .accessibilityAddTraits(.isHeader)
+                    Text("What this window shares, what it doesn't, and why.").font(.callout).foregroundStyle(Color.secondaryText)
                 }
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
                     row("Window", status.isRunning ? "Open" : "Closed")
@@ -479,7 +554,7 @@ struct WindowStatusSheet: View {
 
     private func row(_ title: String, _ value: String, help: String = "") -> some View {
         GridRow {
-            Text(title).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+            Text(title).foregroundStyle(Color.secondaryText).gridColumnAlignment(.trailing)
             Text(value).textSelection(.enabled)
         }
         .help(help)
@@ -487,8 +562,8 @@ struct WindowStatusSheet: View {
 
     private func section(_ title: String, _ items: [String], empty: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.headline)
-            if items.isEmpty { Text(empty).foregroundStyle(.secondary) }
+            Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+            if items.isEmpty { Text(empty).foregroundStyle(Color.secondaryText) }
             ForEach(items, id: \.self) { Text($0).fixedSize(horizontal: false, vertical: true) }
         }
     }

@@ -93,7 +93,10 @@ public enum LimitKind: String, Codable, Sendable, CaseIterable {
 
     /// How long one window of this limit lasts.
     public var window: TimeInterval { self == .fiveHour ? 5 * 3600 : 7 * 86_400 }
+    /// The short name `baton list` prints: "5h", "week".
     public var name: String { self == .fiveHour ? "5h" : "week" }
+    /// The name the app uses, as its meters do: "5-hour", "weekly".
+    public var fullName: String { self == .fiveHour ? "5-hour" : "weekly" }
 }
 
 /// When a limit resets, and how Baton knows.
@@ -879,8 +882,11 @@ public enum LimitText {
 
     /// "5h 40%", "5h 100% · resets at 02:10", "week 100% · resets Wed at about 05:00", "5h reset at 02:10",
     /// "week reset", "week 100%, extra usage available", "5h: Claude answered since".
-    public static func describe(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String {
-        let name = state.kind.name
+    /// - Parameter fullNames: "5-hour" and "weekly", as the app says them, rather than "5h" and "week".
+    public static func describe(
+        _ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current, fullNames: Bool = false
+    ) -> String {
+        let name = fullNames ? state.kind.fullName : state.kind.name
         switch state.phase(now: now) {
         case .below:
             // Seen, not explained: the limit may have reset, or extra usage may be paying.
@@ -900,26 +906,27 @@ public enum LimitText {
         }
     }
 
-    /// A short note for the window list beside the meters: "5h resets at 02:10", "week resets Wed at about 05:00",
-    /// "5h reset at 02:10", "week reset", "week at 100%, extra usage available", "5h: Claude answered since the
-    /// limit"; `nil` below the limit.
+    /// A short note for the window list beside the meters, named as they are: "5-hour resets at 02:10", "weekly
+    /// resets Wed at about 05:00", "5-hour reset at 02:10", "weekly reset", "weekly at 100%, extra usage available",
+    /// "5-hour: Claude answered since the limit"; `nil` below the limit.
     public static func note(_ state: LimitState, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
-        let name = state.kind.name
+        let name = state.kind.fullName
         switch state.phase(now: now) {
         case .below: return state.resetByAnswer ? "\(name): Claude answered since the limit" : nil
         case .reached:
             if state.extraUsage { return "\(name) at 100%, extra usage available" }
             return reset(state, now: now, timeZone: timeZone, locale: locale).map { "\(name) \($0)" }
-        case .reset, .mayHaveReset: return describe(state, now: now, timeZone: timeZone, locale: locale)
+        case .reset, .mayHaveReset: return describe(state, now: now, timeZone: timeZone, locale: locale, fullNames: true)
         }
     }
 
     /// The whole line for `baton list`: "5h 100% · resets at 02:10 · week 62% · as of 3m ago".
+    /// - Parameter fullNames: "5-hour" and "weekly", as the app says them, rather than "5h" and "week".
     public static func summary(
-        _ limits: Limits, usage: Usage?, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current
+        _ limits: Limits, usage: Usage?, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current, fullNames: Bool = false
     ) -> String {
         guard usage != nil || limits.states.contains(where: { $0.reachedAt != nil }) else { return "usage unknown" }
-        var line = limits.states.map { describe($0, now: now, timeZone: timeZone, locale: locale) }.joined(separator: " · ")
+        var line = limits.states.map { describe($0, now: now, timeZone: timeZone, locale: locale, fullNames: fullNames) }.joined(separator: " · ")
         if let usage {
             line += " · as of \(relativeAge(since: usage.sampledAt, now: now))"
             if !usage.isFresh(now: now), limits.states.allSatisfy({ $0.phase(now: now) == .below }) { line += " (stale: may have changed since)" }

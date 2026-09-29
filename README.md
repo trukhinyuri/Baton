@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels and accounts, five-hour and weekly usage for three of them, and one waiting to sign in">
+  <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels and accounts, five-hour and weekly usage for three of them, one at its five-hour limit with a banner that says when it resets and offers to continue in another window, and one waiting to sign in">
 </p>
 
 Baton runs several Claude Desktop accounts on one Mac, each in its own window of the official Claude Desktop app, and lets you hand a local conversation from one of your windows to another. Think of it as a relay team where every runner is you.
