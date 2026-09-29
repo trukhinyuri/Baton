@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <sub>A Mac app for Claude Desktop accounts. Not related to getbaton.dev or to other tools and commands called <code>baton</code>.</sub>
+</p>
+
+<p align="center">
   <a href="https://github.com/trukhinyuri/Baton/actions/workflows/ci.yml"><img src="https://github.com/trukhinyuri/Baton/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/trukhinyuri/Baton/releases"><img src="https://img.shields.io/github/v/release/trukhinyuri/Baton?include_prereleases" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14+">
@@ -20,32 +24,45 @@
   <img src="docs/images/main-window.png" width="820" alt="Baton window listing four subscriptions with their Dock labels and accounts, five-hour and weekly usage for three of them, and one waiting to sign in">
 </p>
 
-Baton runs several Claude Desktop accounts on one Mac, each in its own window of the official Claude Desktop app with its own Dock icon, so you always know which subscription you're in. Your local Claude Code sessions show up in every window. When you want to carry on somewhere else (the work account or the personal one), you hand the conversation over with its transcript, sub-agents, Workflow history, tool outputs and notes. **Continue work…** also keeps Rewind checkpoints, except those from before a copy Claude Desktop made itself, and a Cowork task continues as a new task with its history and files. Think of it as a relay team where every runner is you.
+Baton runs several Claude Desktop accounts on one Mac, each in its own window of the official Claude Desktop app, and lets you hand a local conversation from one of your windows to another. Think of it as a relay team where every runner is you.
 
-Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Baton turns Remote Control off in its windows by default (one switch to undo it) and, before you continue, names what will not follow.
+- **One window per subscription.** Each account has its own window, Dock icon and label, so you always know which subscription you're in.
+- **Your local work follows you.** Local Claude Code sessions show up in every window. **Continue work…** carries a conversation to another window with its transcript, sub-agents, Workflow history, tool outputs and Rewind checkpoints; a Cowork task continues as a new task with its history and files.
+- **Usage in one place.** Each window's five-hour and weekly usage, as Claude Desktop records it, and when a limit resets.
+- **Local and careful.** No network code, no credentials read, a dated backup before a session card or settings file is replaced, and a window's settings changed only while that window is closed. Remote Control is off in Baton's windows by default, with one switch to undo it.
 
-It never reads credentials, has no network code, copies each session card and settings file to a dated backup before it replaces or removes it (Claude's sign-in file `config.json` is the exception: only its theme, zoom and language are edited, in place), and changes a window's settings only while that window is closed.
+Anything kept in an Anthropic account stays with that account: cloud sessions, Code Projects, claude.ai chats, routines, connectors and Remote Control. Before you continue, Baton names what will not follow.
 
 - [Install](#install) · [Quick start](#quick-start) · [Continue work in another window](#continue-work-in-another-window) · [What follows and what stays](#what-follows-and-what-stays)
 - [Limits and resets](#limits-and-resets) · [Local only](#local-only) · [Command line](#command-line) · [Privacy and safety](#privacy-and-safety) · [Staying within Anthropic's terms](#staying-within-anthropics-terms)
-- [Report a problem](#report-a-problem) · [Troubleshooting](#troubleshooting) · [Known limitations](#known-limitations) · [FAQ](#faq) · [Why Baton?](#why-baton)
+- [Report a problem](#report-a-problem) · [Troubleshooting](#troubleshooting) · [Upgrading from Claude Profiles](#upgrading-from-claude-profiles) · [Uninstall](#uninstall) · [Known limitations](#known-limitations) · [FAQ](#faq) · [Why Baton?](#why-baton)
 
 ## Install
 
-Requirements: macOS 14 Sonoma or later on Apple silicon or Intel, and [Claude Desktop](https://claude.ai/download) in `/Applications` or `~/Applications`.
+Requirements: macOS 14 Sonoma or later on Apple silicon or Intel, and [Claude Desktop](https://claude.ai/download) in `/Applications` or `~/Applications`. Coming from Claude Profiles? Read [Upgrading from Claude Profiles](#upgrading-from-claude-profiles) first.
 
-### Release candidate
+### Download
 
 Baton 1.0.0-rc.1 is a release candidate: it is ad-hoc signed and not notarized yet. The signed 1.0.0 and the Homebrew cask follow.
 
 1. Download `Baton-v1.0.0-rc.1.zip` from [Releases](https://github.com/trukhinyuri/Baton/releases) (it is marked Pre-release) and unzip it.
-2. Move `Baton.app` to `/Applications` and open it. macOS refuses the first time; open **System Settings → Privacy & Security** and click **Open Anyway** next to Baton.
+2. In Finder, drag `Baton.app` to `/Applications` **before you open it the first time**. Opened where it was unzipped, macOS runs it from a temporary copy, and the launchers Baton makes would point into that copy, which is gone after a restart.
+3. Open it from `/Applications`. macOS refuses the first time; open **System Settings → Privacy & Security** and click **Open Anyway** next to Baton.
+4. If you want the command line, link it from there: see [The `baton` command](#the-baton-command).
 
-Or build it [from source](#from-source) with `make install`: a build you make yourself opens without that step.
+To check the download first, use the [GitHub CLI](https://cli.github.com), which fetches the ZIP and its checksum file and verifies the build's provenance:
+
+```sh
+gh release download v1.0.0-rc.1 -R trukhinyuri/Baton
+shasum -a 256 -c SHA256SUMS.txt
+gh attestation verify Baton-v1.0.0-rc.1.zip -R trukhinyuri/Baton
+```
+
+Or build it [from source](#from-source) with `make install`: a build you make yourself opens without the **Open Anyway** step.
 
 ### Homebrew
 
-From 1.0: the cask arrives with the signed release, and until then this command fails. Installed the release candidate from the ZIP? Quit Baton and move that `Baton.app` to the Trash first: Homebrew won't install over an app it didn't put in `/Applications`.
+From 1.0: the cask arrives with the signed release, and until then this command fails. Installed the release candidate from the ZIP? Quit Baton and move that `Baton.app` to the Trash first, then run the command: Homebrew won't install over an app it didn't put in `/Applications`. Your profiles and launchers stay.
 
 ```sh
 brew install --cask trukhinyuri/tap/baton
@@ -67,52 +84,21 @@ cd Baton
 make install        # builds Baton.app and copies it to ~/Applications/Baton
 ```
 
-`make install` stages and verifies the new app before replacing the old one, and keeps the previous app as a ZIP in `AppBackups` in [Baton's data folder](#how-it-works) (the three latest). Your profiles are not touched. The command-line tool ships inside the app:
-
-```sh
-ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton
-```
+`make install` stages and verifies the new app before replacing the old one, and keeps the previous app as a ZIP in `AppBackups` in [Baton's data folder](#how-it-works) (the three latest). Your profiles are not touched.
 
 Use one installation (the ZIP, Homebrew or source), not two: two copies would each run their own background sync. The app warns when it finds a second copy.
 
-### Upgrading from Claude Profiles
+### The `baton` command
 
-Same app, new name. If you're upgrading from Claude Profiles, your windows, profiles and sessions carry over untouched; only the name on the tin changed. Baton renames its folder in `~/Applications` the next time it starts with every Claude window closed; its data folder keeps the old name, so nothing inside has to move.
+The command-line tool ships inside the app, and Homebrew links it for you. For the ZIP or a build from source, link it into a folder on your `PATH` with the line for your install; `~/.local/bin` needs no admin rights:
 
-- **The command is now `baton`**, and `baton pass` works too. Homebrew links it for you. If you linked `claude-profiles` yourself, that link stops working once the old app is gone; link the new command instead:
-  ```sh
-  ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton
-  ```
-  With Homebrew the app is `/Applications/Baton.app`. `make install` prints the exact command for every old link it finds.
-- **Scripts that still call `claude-profiles`** can keep doing so through the `claude-profiles` link that Baton 1.x keeps inside the app:
-  ```sh
-  ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/claude-profiles /usr/local/bin/claude-profiles
-  ```
-- **`make install`** installs into the folder you already have, renames it to `~/Applications/Baton` when no Claude window is open (or prints the exact command to finish later), and points your launchers at the new app.
-- **Installed with Homebrew?** From 1.0, run `brew update && brew upgrade`: the tap's `cask_renames.json` moves the `claude-profiles` cask to `baton`, and Homebrew says it was renamed. Don't install `baton` next to it.
-- **Installed from the ZIP?** Quit Claude Profiles and move `Claude Profiles.app` to the Trash. If it was inside `~/Applications/Claude Profiles`, put `Baton.app` in `/Applications` (or run `make install`); otherwise put it where the old app was.
-- **Claude Profiles in your Dock?** Once the old app is in the Trash, remove its Dock item and add Baton: the old item could still start it from the Trash.
-- **Claude Profiles opens at login?** Replace it with Baton in **System Settings → General → Login Items**. If an older copy still starts, Baton asks it to quit rather than handing over to it.
-- **Folder still called Claude Profiles?** Claude windows were open when Baton tried, or Baton runs from inside that folder. Quit Baton, close every Claude window and run `baton migrate`. If `Baton.app` itself is inside that folder, run the copy inside it:
-  ```sh
-  "$HOME/Applications/Claude Profiles/Baton.app/Contents/Helpers/baton" migrate
-  ```
-  It exits with 0 once the folder is renamed or there is nothing to do, 3 when the folder has to keep its name for now (the line it prints says why) and 1 on an error. Launchers are updated in place, not rebuilt.
+```sh
+mkdir -p ~/.local/bin
+ln -sf /Applications/Baton.app/Contents/Helpers/baton ~/.local/bin/baton              # the ZIP
+ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton ~/.local/bin/baton       # make install
+```
 
-### Uninstall
-
-1. In Baton, remove the subscriptions you no longer need (**⋯ → Remove Subscription…**). Their app copies and sign-ins move to the Trash. Keep them if you might reinstall.
-2. Remove the app:
-   ```sh
-   brew uninstall --cask baton         # or: make uninstall
-   ```
-   `brew uninstall --zap --cask baton` also removes the app's preferences, caches and old app copies. It never removes your profiles (`Profiles/`), their backups (`Backups/`), the launchers, `~/.claude` or Claude's own data.
-3. Give `claude://` links back to the main Claude app, in case a profile was signing in when you removed it:
-   ```sh
-   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Claude.app
-   ```
-
-To remove everything, including profiles and their sign-ins, move Baton's data folder, `~/Library/Application Support/Baton`, and its launchers folder, `~/Applications/Baton`, to the Trash after step 1. If you upgraded from Claude Profiles, the data folder is `~/Library/Application Support/Claude Profiles`, and the launchers folder may still have that name too.
+If the shell then says `command not found: baton`, add the folder to your `PATH` and open a new Terminal window: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile`. With admin rights you can link into `/usr/local/bin` instead; a new Apple silicon Mac doesn't have that folder, so run `sudo mkdir -p /usr/local/bin` first and `sudo ln -sf …` there. If macOS blocks the ZIP's `baton` the first time, allow it the same way as the app: **System Settings → Privacy & Security → Open Anyway**.
 
 ## Quick start
 
@@ -187,7 +173,7 @@ Windows signed in to different accounts can show different Claude features. Bato
 
 It deliberately leaves alone local scheduled tasks, waking the Mac for them, web search in Cowork and your permission mode. It never touches managed preferences set by an organization, sign-in data or any server. If you turn Remote Control back on inside Claude, Local only turns it off again at that window's next start, and the window's badge reads *Remote Control on* until then. To keep Remote Control in one window, turn Local only off for that profile.
 
-Optionally, and only after you turn it on, Local only also stops the agent from moving a session to the cloud, with a `permissions.deny` entry in `~/.claude/settings.json`. That file is shared by every window, so this applies to all of them; it cannot hide Claude's own **Move to cloud** button.
+Optionally, and only after you turn it on, Local only also stops the agent from moving a session to the cloud, with a `permissions.deny` entry in `~/.claude/settings.json`. That file is shared by every window, so this applies to all of them; it cannot hide Claude's own **Move to cloud** button. The **Cloud move lock** menu in Baton's footer shows and changes this switch.
 
 If a Claude Desktop version no longer has one of these settings, the status reads *not supported by this Claude version* and nothing is written.
 
@@ -285,7 +271,7 @@ A report too long for a link opens GitHub with a short summary; the full text is
 
 ## Troubleshooting
 
-**macOS says the app can't be opened, or is damaged.** A build that is not notarized needs one confirmation: open **System Settings → Privacy & Security** and click **Open Anyway**. Builds you make yourself with `make install` are not affected.
+**macOS says the app can't be opened, or is damaged.** A build that is not notarized needs one confirmation: move it to `/Applications` first ([Download](#download)), then open **System Settings → Privacy & Security** and click **Open Anyway**. Builds you make yourself with `make install` are not affected.
 
 **A window shows the main account instead of its own.** That window was started without its profile, for example from an icon kept with **Keep in Dock** or reopened by macOS at login. While Baton runs it reopens such a window with its profile; otherwise open it with its launcher or `baton open <profile>`. Keep launchers in the Dock, not the running window's icon.
 
@@ -299,9 +285,57 @@ A report too long for a link opens GitHub with a short summary; the full text is
 
 **`~/Applications` still has a Claude Profiles folder.** Baton renames it only when every Claude window is closed and Baton itself doesn't run from inside it; see [Upgrading from Claude Profiles](#upgrading-from-claude-profiles). If `~/Applications/Baton` exists as well, Baton uses it, leaves the other folder alone, and **Status…** names both and what to do.
 
+**`baton` runs a different program.** Other tools also install a command called `baton`. `which -a baton` lists every one on your `PATH`, and the first one runs: link Baton's into a folder that comes earlier ([The `baton` command](#the-baton-command)) or call it by its full path. When another `baton` is already in Homebrew's `bin` folder, the cask stops with *It seems there is already a Binary at …*, or, if a formula put it there, leaves that one linked; if you don't need the other program, remove it and install the cask again.
+
 **Building from source fails with stale paths after moving the checkout.** Use a fresh build directory: `BATON_BUILD_DIR=/tmp/baton-build make install`.
 
 Still stuck? [Report a problem](#report-a-problem).
+
+## Upgrading from Claude Profiles
+
+Same app, new name. If you're upgrading from Claude Profiles, your windows, profiles and sessions carry over untouched; only the name on the tin changed. Baton renames its folder in `~/Applications` the next time it starts with every Claude window closed; its data folder keeps the old name, so nothing inside has to move.
+
+- **The command is now `baton`**, and `baton pass` works too. Homebrew links it for you. If you linked `claude-profiles` yourself, that link stops working once the old app is gone; link the new command in its place, here for a link in `/usr/local/bin` ([other places](#the-baton-command)):
+  ```sh
+  ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton
+  ```
+  With Homebrew the app is `/Applications/Baton.app`. `make install` prints the exact command for every old link it finds.
+- **Scripts that still call `claude-profiles`** can keep doing so through the `claude-profiles` link that Baton 1.x keeps inside the app:
+  ```sh
+  ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/claude-profiles /usr/local/bin/claude-profiles
+  ```
+- **`make install`** installs into the folder you already have, renames it to `~/Applications/Baton` when no Claude window is open (or prints the exact command to finish later), and points your launchers at the new app.
+- **Installed with Homebrew?** From 1.0, run `brew update && brew upgrade`: the tap's `cask_renames.json` moves the `claude-profiles` cask to `baton`, and Homebrew says it was renamed. Don't install `baton` next to it.
+- **Installed from the ZIP?** Quit Claude Profiles and move `Claude Profiles.app` to the Trash. If it was inside `~/Applications/Claude Profiles`, put `Baton.app` in `/Applications` (or run `make install`); otherwise put it where the old app was.
+- **Claude Profiles in your Dock?** Once the old app is in the Trash, remove its Dock item and add Baton: the old item could still start it from the Trash.
+- **Claude Profiles opens at login?** Replace it with Baton in **System Settings → General → Login Items**. If an older copy still starts, Baton asks it to quit rather than handing over to it.
+- **Folder still called Claude Profiles?** Claude windows were open when Baton tried, or Baton runs from inside that folder. Quit Baton, close every Claude window and run `baton migrate`. If `Baton.app` itself is inside that folder, run the copy inside it:
+  ```sh
+  "$HOME/Applications/Claude Profiles/Baton.app/Contents/Helpers/baton" migrate
+  ```
+  It exits with 0 once the folder is renamed or there is nothing to do, 3 when the folder has to keep its name for now (the line it prints says why) and 1 on an error. Launchers are updated in place, not rebuilt.
+
+## Uninstall
+
+1. Put back what Baton changed in your main Claude app, while `baton` is still there. Close every Claude window first: these settings change only in a closed window, and a change left pending never happens once Baton is gone.
+   ```sh
+   baton local-only off main           # restores the main window's Remote Control settings
+   baton local-only cloud-lock off     # if you turned the cloud move lock on
+   baton doctor                        # lists any Auto-continue Baton turned off
+   ```
+   For each session `doctor` lists, tick **Auto-continue when limits reset** on its limit message in Claude to turn it back on. For a profile you keep, run `baton local-only off <profile>` too. Without `baton` on your `PATH`, use the one inside the app, such as `/Applications/Baton.app/Contents/Helpers/baton`.
+2. In Baton, remove the subscriptions you no longer need (**⋯ → Remove Subscription…**). Their app copies and sign-ins move to the Trash. Keep them if you might reinstall.
+3. Remove the app:
+   ```sh
+   brew uninstall --cask baton         # or: make uninstall
+   ```
+   From the ZIP, move `/Applications/Baton.app` to the Trash. `brew uninstall --zap --cask baton` also removes the app's preferences, caches and old app copies. None of these removes your profiles (`Profiles/`), their backups (`Backups/`), the launchers, `~/.claude` or Claude's own data.
+4. Give `claude://` links back to the main Claude app, in case a profile was signing in when you removed it (use `~/Applications/Claude.app` if Claude is there):
+   ```sh
+   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Claude.app
+   ```
+
+To remove everything, including profiles and their sign-ins, move Baton's data folder, `~/Library/Application Support/Baton`, and its launchers folder, `~/Applications/Baton`, to the Trash after step 2. If you upgraded from Claude Profiles, the data folder is `~/Library/Application Support/Claude Profiles`, and the launchers folder may still have that name too.
 
 ## Known limitations
 
@@ -339,6 +373,9 @@ No. Baton never switches accounts for you: you pick the window and click **Conti
 
 **Does it work with Team or Enterprise seats?**
 Technically yes: a profile can sign in to any account. Whether you may use a work seat this way is up to your organization.
+
+**How is Baton different from other Claude Desktop profile tools?**
+Other open-source projects also run several Claude Desktop accounts on one Mac. [odahcam/claude-desktop-profiles](https://github.com/odahcam/claude-desktop-profiles) (a Swift app) and [abnegate/claude-multiprofile](https://github.com/abnegate/claude-multiprofile) (a Node command-line tool) give each account its own `--user-data-dir`, as Baton does, and keep each account's conversations to itself. [Disskaette/claude-desktop-profiles-macos](https://github.com/Disskaette/claude-desktop-profiles-macos) switches one Claude Desktop between accounts by swapping its data folder, carries Code sessions across the switch and shows each account's usage. Baton's focus is carrying local work between windows that run at the same time: a session continues in another window with its sub-agents, Workflow history, tool outputs and Rewind checkpoints, folder rules keep work in the accounts it belongs to, and every change is backed up first.
 
 **Why is Remote Control off?**
 Remote Control ties a window's sessions to its Anthropic account, and Baton 1.0 covers local work only. We have not confirmed whether Remote Control plays a part when Claude forks or hides a session another account opened; Local only keeps it out of the picture and keeps work on your Mac. Turn it off for a profile that needs Remote Control.
