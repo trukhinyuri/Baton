@@ -293,8 +293,9 @@ struct LimitBanner: View {
     }
 }
 
-/// The result of the last action, in full: it wraps and can be selected, and it stays until closed with × or replaced
-/// (one without a warning goes after 20 seconds). The footer's two lines cut the warnings that ask for something.
+/// The result of the last action, in full: it wraps and can be selected. A warning stays until closed with ×; any other
+/// notice goes after 20 seconds, and a warning it covered shows again (`Notices`). The footer's two lines cut the
+/// warnings that ask for something.
 struct NoticeBanner: View {
     let text: String
     let isWarning: Bool

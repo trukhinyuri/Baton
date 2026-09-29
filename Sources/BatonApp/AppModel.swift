@@ -27,10 +27,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var isLoadingConversations = false
     /// Selected when the continue sheet opens, if still available.
     @Published var preselectedConversation: String?
-    /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed or
-    /// replaced; any other goes after 20 seconds.
-    @Published private(set) var notice: String?
-    @Published private(set) var noticeIsWarning = false
+    /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed;
+    /// any other goes after 20 seconds, and a warning it covered shows again.
+    @Published private(set) var notices = Notices()
+    var notice: String? { notices.current?.text }
+    var noticeIsWarning: Bool { notices.current?.isWarning == true }
     private var noticeTask: Task<Void, Never>?
     /// Brings the Baton window forward; set by the menu bar icon at launch, by the window and by the menu bar's items.
     /// An error while the window is closed (from the menu bar, or from a copy reopened from its own Dock icon) would
@@ -337,14 +338,13 @@ final class AppModel: ObservableObject {
     /// - Parameter isWarning: the text asks for something (choose a model, stop another window continuing a
     ///   session), so it stays until dismissed.
     func show(notice text: String, isWarning: Bool = false) {
-        notice = text
-        noticeIsWarning = isWarning
+        notices.show(text, isWarning: isWarning)
         noticeTask?.cancel()
         noticeTask = nil
         if !isWarning {
             noticeTask = Task {
                 try? await Task.sleep(for: .seconds(20))
-                if !Task.isCancelled { dismissNotice() }
+                if !Task.isCancelled { notices.expire(text) }
             }
         }
         Self.announce(text)
@@ -354,8 +354,7 @@ final class AppModel: ObservableObject {
     func dismissNotice() {
         noticeTask?.cancel()
         noticeTask = nil
-        notice = nil
-        noticeIsWarning = false
+        notices.dismiss()
     }
 
     func reload() {
