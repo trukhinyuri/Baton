@@ -18,6 +18,9 @@ struct ReportSheet: View {
     @ObservedObject var model: AppModel
     @StateObject private var form = ReportForm()
     @Environment(\.dismiss) private var dismiss
+    /// Return in the one-line summary goes on to the description rather than opening GitHub half written.
+    @FocusState private var summaryIsFocused: Bool
+    @FocusState private var descriptionIsFocused: Bool
 
     private var text: String { form.report?.document(description: form.description) ?? "" }
 
@@ -33,10 +36,13 @@ struct ReportSheet: View {
 
             TextField("Summary", text: $form.title, prompt: Text("One line: what went wrong"))
                 .textFieldStyle(.roundedBorder)
+                .focused($summaryIsFocused)
+                .onSubmit { descriptionIsFocused = true }
             VStack(alignment: .leading, spacing: 4) {
                 Text("What happened — shared as you type it, not redacted").font(.callout)
                 TextEditor(text: $form.description)
                     .font(.callout)
+                    .focused($descriptionIsFocused)
                     .frame(minHeight: 60, idealHeight: 80)
                     .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator))
                     .accessibilityLabel("What happened, not redacted")
@@ -74,7 +80,7 @@ struct ReportSheet: View {
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Open GitHub", action: openGitHub)
                     .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(summaryIsFocused ? nil : .defaultAction)
                     .help("Opens a prefilled issue form in your browser. You review it there and submit it yourself.")
             }
             .disabled(form.report == nil)
