@@ -16,6 +16,7 @@
   <a href="https://github.com/trukhinyuri/Baton/actions/workflows/ci.yml"><img src="https://github.com/trukhinyuri/Baton/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/trukhinyuri/Baton/releases"><img src="https://img.shields.io/github/v/release/trukhinyuri/Baton?include_prereleases" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Swift-6-orange" alt="Swift 6">
   <img src="https://img.shields.io/badge/Apple%20silicon%20%2B%20Intel-universal-black" alt="Universal: Apple silicon and Intel">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
 </p>
