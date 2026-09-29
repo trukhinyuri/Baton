@@ -185,9 +185,30 @@ struct EngineInstallTests {
             Issue.record("Expected rollback failure")
         } catch EngineInstall.InstallError.rollbackFailed(let backup, _) {
             #expect(try version(backup) == "1")
-            #expect(try staging(in: box.root).map(\.lastPathComponent) == [backup.lastPathComponent])
+            #expect(backup.lastPathComponent.hasPrefix(".engine-previous-"), "a name the next sweep leaves alone")
+            #expect(try staging(in: box.root).isEmpty)
+            try EngineInstall.install(from: source, to: destination, validate: { _ in })
+            #expect(try version(backup) == "1", "kept by the next installation")
         }
         #expect(exchanges == 2)
+    }
+
+    /// A crash, a force quit or a power loss while an engine is copied leaves its staging copy, as large as Claude when
+    /// engines are full copies. The next installation of that engine removes it, and nothing else.
+    @Test func stagingLeftByACrashIsRemovedByTheNextInstallation() throws {
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let source = try app(in: box.root, name: "source.app", version: "2")
+        let destination = try app(in: box.root, name: "engine.app", version: "1")
+        let leftovers = try (0..<2).map { _ in try app(in: box.root, name: ".engine-install-\(UUID().uuidString).app", version: "2") }
+        let kept = [".other-install-\(UUID().uuidString).app", ".engine-install-unfinished.app", ".engine-previous-\(UUID().uuidString).app"]
+        for name in kept { try fm.createDirectory(at: box.root.appending(path: name), withIntermediateDirectories: false) }
+
+        try EngineInstall.install(from: source, to: destination, validate: { _ in })
+
+        #expect(try version(destination) == "2")
+        #expect(leftovers.allSatisfy { !fm.fileExists(atPath: $0.path) })
+        #expect(kept.allSatisfy { fm.fileExists(atPath: box.root.appending(path: $0).path) }, "another engine's, or not a staging name")
     }
 
     @Test func firstInstallWorksAndFailedFirstInstallLeavesNoEngine() throws {
