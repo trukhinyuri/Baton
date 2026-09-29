@@ -28,6 +28,53 @@ struct ScanCacheTests {
         #expect(throws: (any Error).self) { try cache.value("text", of: file, read: read) }
     }
 
+    /// Past its budget the cache returns what it reads without keeping it, and what it keeps stays kept.
+    @Test func keepsNoMoreThanItsBudget() throws {
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let cache = ScanCache(limit: 100, budget: 10_000)
+        let files = try (0..<5).map { i in
+            let file = box.root.appending(path: "card-\(i).json")
+            try Data(repeating: UInt8(ascii: "a") + UInt8(i), count: 3_000).write(to: file)
+            return file
+        }
+        let read = { (url: URL) in try Data(contentsOf: url) }
+        for (i, file) in files.enumerated() { #expect(try cache.value("data", of: file, read: read).first == UInt8(ascii: "a") + UInt8(i)) }
+        #expect(cache.bytes == 9_000, "three of them fit")
+        for file in files { _ = try cache.value("data", of: file, read: read) }
+        #expect(cache.reads == 5 + 2, "the three kept are not read again; the two that didn't fit are")
+        // A value that knows its cost is counted by it.
+        #expect(try cache.value("facts", of: files[4], cost: { (n: Int) in n }, read: { _ in 500 }) == 500)
+        #expect(cache.bytes == 9_500)
+        // A file that is gone takes its entry with it.
+        try fm.removeItem(at: files[0])
+        #expect(throws: (any Error).self) { try cache.value("data", of: files[0], read: read) }
+        #expect(cache.bytes == 6_500)
+    }
+
+    /// An entry nobody asked for in an hour goes, such as the card of a session that was deleted.
+    @Test func forgetsWhatNobodyAskedForInAnHour() throws {
+        final class Clock: @unchecked Sendable { var now: TimeInterval = 0 }
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let clock = Clock()
+        let cache = ScanCache(limit: 100, budget: 1 << 20, clock: { clock.now })
+        let (gone, kept) = (box.root.appending(path: "gone.json"), box.root.appending(path: "kept.json"))
+        try Data(count: 1_000).write(to: gone)
+        try Data(count: 2_000).write(to: kept)
+        let read = { (url: URL) in try Data(contentsOf: url) }
+        _ = try cache.value("data", of: gone, read: read)
+        _ = try cache.value("data", of: kept, read: read)
+        try fm.removeItem(at: gone)  // never asked for again
+        clock.now = 1_800
+        _ = try cache.value("data", of: kept, read: read)
+        #expect(cache.bytes == 3_000)
+        clock.now = 3_700
+        _ = try cache.value("data", of: kept, read: read)
+        #expect(cache.bytes == 2_000, "only the entry asked for in the last hour is left")
+        #expect(cache.reads == 2)
+    }
+
     /// A fixture of many cards and transcripts: the first sync and Continue list read them all, an idle one reads
     /// none, and a change reads only what changed. Prints the times for the record.
     @Test func anIdleRefreshReadsNothing() throws {
