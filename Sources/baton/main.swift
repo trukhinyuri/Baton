@@ -49,6 +49,13 @@ let usage = """
                                           continues it by itself, nothing happens (exit 3) unless --now
       baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                           Same as `continue`
+      baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
+                                          Move the work of a window at its limit to the window with
+                                          the most room: the sessions the limit cut resume there, a
+                                          session still open where it was continues as a copy. By
+                                          default the open window at its limit, and the best window.
+                                          A busy window restarts once its current work finishes.
+                                          Exit 3: the limit resets within 15 minutes
       baton rules [--json]                Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
                                           Let only these accounts continue work in the folder and
@@ -506,6 +513,53 @@ do {
             print("Prepared files: \(handoff.folder.path)")
         }
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
+    case "handover":
+        let json = args.contains("--json")
+        let statuses = manager.statuses()
+        let source: String
+        if let name = value(of: "--from", in: args) {
+            source = destinationID(name)
+        } else {
+            let atLimit = statuses.filter { DestinationRanking.isAtLimit($0) }
+            guard let found = atLimit.first(where: \.isRunning) ?? atLimit.first else { fail("No window is at its limit, so there is nothing to hand over.") }
+            source = found.id
+        }
+        let plan = try manager.planHandover(from: source, to: value(of: "--to", in: args).map(destinationID))
+        let labels = { (id: String) in manager.displayLabel(of: id) }
+        if args.contains("--dry-run") {
+            if json {
+                print(try CLIOutput.json(HandoverSummary(plan: plan, labels: labels)))
+            } else if plan.picksUpItself {
+                print(HandoverText.line(HandoverResult(plan: plan, state: .picksUpItself), labels: labels))
+            } else {
+                let resume = plan.cut.count, copies = plan.sessions.filter(\.asCopy).count
+                print(
+                    "Would hand \(plan.sessions.count) sessions over from Claude \(labels(source)) to Claude \(labels(plan.destination)): "
+                        + "\(resume) to resume, \(copies) as copies.")
+                for session in plan.sessions {
+                    let how = session.asCopy ? "copy" : "same"
+                    print("\(session.cut ? "resume" : "move  ")  \(how)  \(session.transcript.prefix(8))  \(session.title)")
+                }
+                for leftover in plan.leftovers {
+                    if let clause = HandoverText.clause(leftover, source: labels(source), destination: labels(plan.destination)) { print("  \(clause)") }
+                }
+                if plan.seeding != .seed { print("  Claude \(labels(plan.destination)) won't resume them by itself; they'll be opened there.") }
+                if plan.destinationActivity.isBusy { print("  Claude \(labels(plan.destination)) is busy; it restarts when its current work finishes.") }
+                print("Nothing was changed.")
+            }
+            if plan.picksUpItself { exit(3) }
+            break
+        }
+        var result = try await manager.handOver(plan) { step in if !json { print(step) } }
+        if result.state == .waiting {
+            if !json { print(result.line) }
+            if let finished = try await manager.finishWaitingHandover(source: source, progress: { step in if !json { print(step) } }) {
+                result = finished
+            }
+        }
+        print(json ? try CLIOutput.json(HandoverSummary(result: result, labels: labels)) : result.line)
+        if result.state == .picksUpItself { exit(3) }
+        if result.state == .failed { exit(1) }
     case "rules":
         let rules: [FolderRule]
         do { rules = try FolderRules(paths: manager.paths).load() } catch {

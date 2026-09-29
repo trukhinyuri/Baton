@@ -237,6 +237,13 @@ baton continue --folder <path> --to <profile> [--since 24h] [--max 6] [--same [-
                                     continues it by itself, nothing happens (exit 3) unless --now
 baton pass <session|last> --to <profile> [--same [--anyway]|--fork] [--now] [--dry-run]
                                     Same as `continue`
+baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
+                                    Move the work of a window at its limit to the window with
+                                    the most room: the sessions the limit cut resume there, a
+                                    session still open where it was continues as a copy. By
+                                    default the open window at its limit, and the best window.
+                                    A busy window restarts once its current work finishes.
+                                    Exit 3: the limit resets within 15 minutes
 baton rules [--json]                Show which accounts may continue the work in which folders
 baton rule <folder> --only <email>[,<email>…] | --remove
                                     Let only these accounts continue work in the folder and

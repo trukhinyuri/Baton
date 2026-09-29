@@ -191,6 +191,16 @@ public struct AutoResume: Sendable {
         }
     }
 
+    /// Forgets the pending turn-offs of `entries` (card names) in `window`: their sessions continue there after all.
+    public func dropPending(window: String, entries: Set<String>) {
+        guard !entries.isEmpty else { return }
+        _ = try? FileLock.withLock(lockFile, blocking: true) {
+            var state = readState()
+            state.pending = (state.pending ?? []).filter { !($0.window == window && entries.contains($0.entry)) }
+            try saveState(state)
+        }
+    }
+
     /// Turns off every pending entry whose window is closed now, the way `turnOff` does, and forgets the ones Claude
     /// is done with. Entries in windows still open stay pending.
     /// - Returns: the windows where Baton turned an entry off.

@@ -505,10 +505,22 @@ public final class ProfileManager: @unchecked Sendable {
     /// Handing them over one by one while the window is still starting could start a second copy of it.
     public func open(_ id: String, links: [URL]) async throws {
         try ensureWritable()
-        try await oneAtATime(id) { try await self.openNow(id, links: links) }
+        try await oneAtATime(id) { try await self.openNow(id, links: links, prepare: nil) }
     }
 
-    private func openNow(_ id: String, links: [URL]) async throws {
+    /// Opens `window` (`"main"` or a profile id) as `open` does; when it has to start it, `prepare` runs first, with
+    /// open.lock held and the window still closed, after the sessions and settings are shared and before Local only
+    /// is applied. A window already running is brought forward without it.
+    func open(_ window: String, links: [URL], prepare: @escaping @Sendable () -> Void) async throws {
+        try ensureWritable()
+        if window == "main" {
+            try await oneAtATime("main") { try await self.openMainNow(links: links, prepare: prepare) }
+        } else {
+            try await oneAtATime(window) { try await self.openNow(window, links: links, prepare: prepare) }
+        }
+    }
+
+    private func openNow(_ id: String, links: [URL], prepare: (@Sendable () -> Void)?) async throws {
         guard let profile = profiles.first(where: { $0.id == id }) else { throw ProfileError.notFound(id) }
         let engine = paths.engine(for: profile.id)
         if DesktopData.accountID(in: paths.dataDir(for: profile.id)) == nil {
@@ -558,6 +570,7 @@ public final class ProfileManager: @unchecked Sendable {
                 do { _ = try InterfaceSync(paths: paths).run(into: paths.dataDir(for: profile.id), profileID: profile.id) } catch {
                     problems.append("Interface: \(error.localizedDescription)")
                 }
+                prepare?()
                 // Last, so no sync above can put a Remote Control switch back.
                 do { _ = try localOnly.reconcile(window: profile.id) } catch { problems.append("Local only: \(error.localizedDescription)") }
                 noteOpened(
@@ -701,10 +714,10 @@ public final class ProfileManager: @unchecked Sendable {
 
     public func openMain(links: [URL]) async throws {
         try ensureWritable()
-        try await oneAtATime("main") { try await self.openMainNow(links: links) }
+        try await oneAtATime("main") { try await self.openMainNow(links: links, prepare: nil) }
     }
 
-    private func openMainNow(links: [URL]) async throws {
+    private func openMainNow(links: [URL], prepare: (@Sendable () -> Void)?) async throws {
         guard isSignedByAnthropic(paths.claudeApp) else {
             guard fm.fileExists(atPath: paths.claudeApp.path) else { throw ProfileError.claudeNotInstalled(paths.claudeApp.path) }
             throw ProfileError.claudeNotFromAnthropic(paths.claudeApp.path)
@@ -732,6 +745,7 @@ public final class ProfileManager: @unchecked Sendable {
                 autoResume.applyPending()
                 var problems: [String] = []
                 do { _ = try prepareSessionsForLaunch() } catch { problems.append("sessions could not be shared first: \(error.localizedDescription)") }
+                prepare?()
                 do { _ = try localOnly.reconcile(window: "main") } catch { problems.append("Local only could not be applied: \(error.localizedDescription)") }
                 noteOpened("main", warning: problems.isEmpty ? nil : "Claude opened, but " + problems.joined(separator: "; "))
                 startedMeanwhile = runningClaudes().contains(where: isMain)
@@ -965,7 +979,7 @@ public final class ProfileManager: @unchecked Sendable {
         return label
     }
 
-    private func dataDir(of window: String) -> URL {
+    func dataDir(of window: String) -> URL {
         window == "main" ? paths.mainDataDir : paths.dataDir(for: window)
     }
 
