@@ -1,0 +1,580 @@
+import BatonKit
+import SwiftUI
+
+extension Color {
+    init(hex: String) { self.init(nsColor: NSColor(hex: hex)) }
+
+    /// Secondary text at 4.5:1 or more in both appearances: the system's is about 3.9:1 in the light one (`TextColors`).
+    static let secondaryText = Color(nsColor: .adaptive(TextColors.secondary))
+    /// Warning text at 4.5:1 or more in both appearances: system orange is about 2:1 in the light one.
+    static let warningText = Color(nsColor: .adaptive(TextColors.warning))
+}
+
+extension NSColor {
+    /// `pair.light` in the light appearance, `pair.dark` in the dark one.
+    static func adaptive(_ pair: (light: String, dark: String)) -> NSColor {
+        NSColor(name: nil) { appearance in
+            NSColor(hex: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? pair.dark : pair.light)
+        }
+    }
+}
+
+struct ProfileBadge: View {
+    let label: String
+    let color: String
+    var size: CGFloat = 40
+
+    var body: some View {
+        // Flat, like the band on the Dock icon, and darkened for a colour from the earlier palette: the white label is
+        // 4.5:1 or more over the whole badge, not only where a gradient is darkest.
+        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+            .fill(Color(hex: Contrast.behindWhiteText(color)))
+            .frame(width: size, height: size)
+            .overlay {
+                Text(label)
+                    .font(.system(size: size * 0.3, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.4)
+                    .padding(.horizontal, size * 0.1)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
+    }
+}
+
+struct UsageMeter: View {
+    let title: String
+    let percent: Int?
+    var isStale = false
+    /// What a grey meter reads: "reset", or "answered" when Claude answered after the limit.
+    var staleText = "reset"
+
+    private var tint: Color {
+        guard let percent, !isStale else { return .secondary }
+        return percent >= 90 ? .red : percent >= 70 ? .orange : .green
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .foregroundStyle(Color.secondaryText)
+                .frame(minWidth: 48, alignment: .leading)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.quaternary)
+                    Capsule().fill(tint)
+                        .frame(width: isStale ? 0 : proxy.size.width * CGFloat(min(percent ?? 0, 100)) / 100)
+                }
+            }
+            .frame(height: 5)
+            Text(isStale ? staleText : percent.map { "\($0)%" } ?? "–")
+                .monospacedDigit()
+                .foregroundStyle(isStale ? Color.secondaryText : Color.primary)
+                .frame(minWidth: 36, alignment: .trailing)
+        }
+        .font(.caption)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) usage")
+        .accessibilityValue(isStale ? staleText : percent.map { "\($0) percent" } ?? "unknown")
+    }
+}
+
+struct UsageColumn: View {
+    let status: ProfileStatus
+
+    /// A limit whose reset has passed, or whose sample is older than its own window: its meter shows "reset".
+    static func hasReset(_ state: LimitState, now: Date) -> Bool {
+        [.reset, .mayHaveReset].contains(state.phase(now: now)) || state.resetByAnswer
+    }
+
+    var body: some View {
+        if let usage = status.usage, status.isSignedIn {
+            let now = Date()
+            let limits = status.limits
+            let allBelow = limits.states.allSatisfy { $0.phase(now: now) == .below }
+            let notes = limits.states.compactMap { LimitText.note($0, now: now) }
+            VStack(alignment: .leading, spacing: 5) {
+                UsageMeter(
+                    title: "5-hour", percent: limits.fiveHour.percent,
+                    isStale: limits.fiveHour.phase(now: now) == .below && usage.isFiveHourStale(now: now) || Self.hasReset(limits.fiveHour, now: now),
+                    staleText: limits.fiveHour.resetByAnswer ? "answered" : "reset")
+                UsageMeter(
+                    title: "Weekly", percent: limits.week.percent, isStale: Self.hasReset(limits.week, now: now),
+                    staleText: limits.week.resetByAnswer ? "answered" : "reset")
+                (Text("Updated \(usage.sampledAt, format: .relative(presentation: .named))")
+                    + Text(notes.map { " · " + $0 }.joined())
+                    + Text(usage.isFresh(now: now) || !allBelow ? "" : " · may have changed since")
+                    + Text(LimitText.checkHint(status, now: now) == nil ? "" : " · open it to check"))
+                    // Reset times are what this line is for: caption size at 4.5:1, not the faintest style.
+                    .font(.caption)
+                    .foregroundStyle(Color.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 56)
+                    .help(LimitText.columnHelp(status, now: now))
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            Text(status.isSignedIn ? "Usage appears after the first message" : "Usage appears after sign-in")
+                .font(.caption)
+                .foregroundStyle(Color.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+struct ProfileRow: View {
+    let status: ProfileStatus
+    let isSuggested: Bool
+    @ObservedObject var model: AppModel
+
+    private var title: String {
+        status.email ?? status.profile?.email ?? (status.isSignedIn ? "Signed in" : "Not signed in")
+    }
+
+    private var subtitle: String {
+        "Claude \(status.displayLabel)" + (status.isRunning ? " · Open" : " · Closed")
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            // The subtitle names the window by its label already.
+            ProfileBadge(label: status.label, color: status.color)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                    if isSuggested {
+                        Text("Most headroom")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(Color.green.opacity(0.25)))
+                            .foregroundStyle(.primary)
+                            .accessibilityLabel("Most headroom")
+                            .help(
+                                "Most room left among your signed-in subscriptions with usage recorded in the last 3 hours, by weekly usage plus a quarter of five-hour usage"
+                            )
+                    }
+                }
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(status.isRunning ? Color.green : Color.secondary.opacity(0.35))
+                        .frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
+                    Text(subtitle)
+                        .font(.callout)
+                        .foregroundStyle(Color.secondaryText)
+                }
+                if !status.isSignedIn {
+                    Label("Sign in inside the Claude \(status.displayLabel) window", systemImage: "person.crop.circle.badge.exclamationmark")
+                        .font(.caption).foregroundStyle(Color.warningText)
+                        .help("While this window signs in, sign-in links from your browser open here instead of in the main Claude app.")
+                } else if status.isUnexpectedAccount, let expected = status.profile?.email {
+                    Label("Signed in as a different account than \(expected)", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(Color.warningText)
+                }
+                if status.isOpenWithoutProfile {
+                    Label(
+                        "A Claude \(status.label) window shows the main account — click \(status.isRunning ? "Show" : "Open") to replace it",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption).foregroundStyle(Color.warningText)
+                    .help(
+                        "This app copy was opened without its subscription's own data, from its own Dock icon or by macOS at login. Keep the launcher in the Dock instead."
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // One stop for VoiceOver: the account, the window and any warning.
+            .accessibilityElement(children: .combine)
+
+            UsageColumn(status: status)
+                .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
+
+            HStack(spacing: 4) {
+                Button(status.isRunning ? "Show" : "Open") { model.open(status) }
+                    .frame(minWidth: 64)
+                    .disabled(model.isBusy(status.id))
+                    .accessibilityLabel("\(status.isRunning ? "Show" : "Open") Claude \(status.displayLabel)")
+                Menu {
+                    Button("Status…") { model.showStatus(of: status.id) }
+                    Divider()
+                    if let profile = status.profile {
+                        Button("Show Launcher in Finder") { model.revealLauncher(status) }
+                        Toggle(
+                            "Keep the permission mode when continuing here",
+                            isOn: Binding(
+                                get: { profile.carriesPermissionMode },
+                                set: { model.setCarryPermissionMode($0, for: profile.id) }
+                            )
+                        )
+                        .help(
+                            "A conversation continued into this subscription keeps its permission mode (for example “accept edits”) instead of falling back to the default. Off unless you turn it on."
+                        )
+                        Divider()
+                        Button("Remove Subscription…", role: .destructive) { model.pendingRemoval = status }
+                    } else {
+                        Text("The main Claude app can't be removed")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("More actions for Claude \(status.displayLabel)")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.6)))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Claude \(status.displayLabel)")
+    }
+}
+
+struct EmptyHint: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "plus.rectangle.on.rectangle")
+                .font(.system(size: 26))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 40)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Ready for the next leg").font(.body.weight(.semibold))
+                Text(
+                    "Add another subscription: it gets its own Claude window and a labeled Dock icon, so you always know which account you're in. Your Claude Code sessions show up in every window, ready to be handed over."
+                )
+                .font(.callout)
+                .foregroundStyle(Color.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4])).foregroundStyle(.separator))
+    }
+}
+
+struct LimitBanner: View {
+    let tired: ProfileStatus
+    /// The window to name on the button; `nil` for a plain “Continue work…”.
+    let best: String?
+    /// Another window has room, so the banner offers to continue there; without one it only says when this one resets.
+    var canContinue = true
+    var note = ""
+    let action: () -> Void
+
+    /// " It resets at 02:10.", " It resets tomorrow at 02:10." or " It resets Wed at about 05:00."; empty when the
+    /// reset time isn't known.
+    private var resets: String { LimitText.bindingReset(tired.limits).map { " It \($0)." } ?? "" }
+
+    /// " as of 22:12" when only a sample says so.
+    private var asOf: String { LimitText.asOf(tired.limits).map { " \($0)" } ?? "" }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.orange).accessibilityHidden(true)
+            Text("Claude \(tired.displayLabel) is at its limit\(asOf).\(resets)")
+                .font(.callout.weight(.medium))
+            Spacer()
+            if !note.isEmpty {
+                Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(Color.secondaryText)
+            }
+            if canContinue {
+                Button(best.map { "Continue in \($0)…" } ?? "Continue work…", action: action)
+            } else {
+                Text("No other window has room now").font(.caption).foregroundStyle(Color.secondaryText)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.12)))
+    }
+}
+
+/// The result of the last action, in full: it wraps and can be selected. A warning stays until closed with ×; any other
+/// notice goes after 20 seconds, and a warning it covered shows again (`Notices`). The footer's two lines cut the
+/// warnings that ask for something.
+struct NoticeBanner: View {
+    let text: String
+    let isWarning: Bool
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: isWarning ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(isWarning ? Color.warningText : Color.green)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.callout)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: dismiss) { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Dismiss")
+                .help("Dismiss")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill((isWarning ? Color.orange : Color.green).opacity(0.12)))
+    }
+}
+
+/// Whether the footer may add "all windows are up to date" to the last sync: checked again after every sync.
+/// An object rather than `@State`, which the Command Line Tools can't expand (no SwiftUI macro plugin).
+@MainActor
+final class SyncFooterState: ObservableObject {
+    @Published var everyoneInStep = false
+}
+
+struct ContentView: View {
+    @ObservedObject var model: AppModel
+    @StateObject private var syncFooter = SyncFooterState()
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if let tired = model.limitReached {
+                // With folder rules, where work may continue depends on the work; the sheet offers only allowed windows.
+                // The button opens it on the session that hit the limit, headed for the window it names.
+                let best = model.bestDestination(excluding: tired.id)
+                let named = model.folderRules?.isEmpty == true ? best : nil
+                LimitBanner(
+                    tired: tired, best: named.map(model.buttonLabel(of:)), canContinue: best != nil,
+                    note: named.map(model.staleNote) ?? ""
+                ) { model.continueWork(from: tired.id, to: best) }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+            }
+            if let notice = model.notice {
+                NoticeBanner(text: notice, isWarning: model.noticeIsWarning) { model.dismissNotice() }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
+            }
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(model.statuses) { status in
+                        ProfileRow(status: status, isSuggested: status.id == model.suggestedID, model: model)
+                    }
+                    if model.statuses.count == 1 { EmptyHint() }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+            }
+            Divider()
+            footer
+            Text("Several Claude Desktop accounts, one Mac, one baton. Not affiliated with Anthropic.")
+                .font(.caption)
+                .foregroundStyle(Color.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+        }
+        .frame(minWidth: 760, idealWidth: 900, minHeight: 380, idealHeight: 580)
+        .onAppear { model.letErrorsOpenTheWindow(with: openWindow) }
+        .task(id: model.lastSync) { syncFooter.everyoneInStep = await Self.everyoneInStep(model) }
+        .sheet(isPresented: $model.isAdding) { AddProfileSheet(model: model) }
+        .sheet(isPresented: $model.isContinuing) { ContinueWorkSheet(model: model) }
+        .sheet(isPresented: $model.isCheckingSessions) { DiagnosticsSheet(entries: model.diagnostics) }
+        .sheet(isPresented: $model.isReporting) { ReportSheet(model: model) }
+        .sheet(isPresented: Binding(get: { model.statusWindow != nil }, set: { if !$0 { model.statusWindow = nil } })) {
+            WindowStatusSheet(model: model)
+        }
+        .confirmationDialog(
+            "Remove \(model.pendingRemoval.map { $0.email ?? "Claude \($0.label)" } ?? "")?",
+            isPresented: Binding(get: { model.pendingRemoval != nil }, set: { if !$0 { model.pendingRemoval = nil } }),
+            presenting: model.pendingRemoval
+        ) { status in
+            Button("Remove", role: .destructive) { model.remove(status) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(
+                "Its app copy and sign-in move to the Trash. While its window is open, removing it is refused: quit it first (⌘Q in that window). Ordinary local Code sessions stay available in other windows. Local Cowork data moves to the Trash with the subscription; cloud Projects stay with their account."
+            )
+        }
+        .confirmationDialog("Deny moving sessions to the cloud on this whole Mac?", isPresented: $model.isConfirmingCloudMoveLock) {
+            Button("Turn On") { model.setCloudMoveLock(true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "Baton adds mcp__ccd_session__move_to_cloud to permissions.deny in ~/.claude/settings.json, after a backup. Every Claude Code session on this Mac then can't move a session to the cloud, in Baton's windows and outside them. Turning the lock off here removes only that entry."
+            )
+        }
+        .alert(model.errorTitle, isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Subscriptions").font(.title2.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Text("Pick up any local Code session or Cowork task in another of your windows.")
+                    .font(.callout)
+                    .foregroundStyle(Color.secondaryText)
+            }
+            Spacer()
+            Button("Continue work…") { model.continueWork() }
+            Button {
+                model.isAdding = true
+            } label: {
+                Label("Add Subscription…", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut("n")
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if let message = model.busyMessage {
+                ProgressView().controlSize(.small)
+                Text(message)
+            } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning ?? model.installWarning {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.warningText).accessibilityHidden(true)
+                // In full: these ask for something, and a tooltip is out of reach of the keyboard. The buttons keep
+                // their size, so the text takes the width they leave and wraps.
+                Text(problem).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).layoutPriority(1)
+            } else {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                if model.statuses.count < 2 {
+                    Text("Add a subscription and your local Code sessions start relaying between windows.")
+                } else if let last = model.lastSync {
+                    Text("Local Code synced · \(last, format: .relative(presentation: .named))")
+                        + Text(syncFooter.everyoneInStep ? " · all windows are up to date" : "")
+                } else {
+                    Text("Sharing local Code sessions…")
+                }
+            }
+            Spacer()
+            Menu {
+                // Mac-wide, so turning it on asks first; turning it off removes only Baton's entry.
+                Toggle(
+                    "Deny moving sessions to the cloud (all Claude Code on this Mac)",
+                    isOn: Binding(
+                        get: { model.cloudMoveLockOn },
+                        set: { if $0 { model.isConfirmingCloudMoveLock = true } else { model.setCloudMoveLock(false) } }))
+            } label: {
+                Label("Cloud move lock: \(model.cloudMoveLockOn ? "On" : "Off")", systemImage: "lock.shield")
+            }
+            .controlSize(.small)
+            .fixedSize()
+            .help("Optional, off by default: adds mcp__ccd_session__move_to_cloud to permissions.deny in ~/.claude/settings.json, Mac-wide.")
+            Button("Check sessions…") { model.checkSessions() }.fixedSize()
+            Button("Report a problem…") { model.isReporting = true }
+                .fixedSize()
+                .help("Shows a redacted report to review, then opens a prefilled GitHub issue. Nothing is sent automatically.")
+            Link(destination: URL(string: "https://github.com/\(FeedbackReport.repository)#staying-within-anthropics-terms")!) {
+                Label("Anthropic terms", systemImage: "checkmark.shield")
+            }
+            .fixedSize()
+            .help("How Baton stays within Anthropic's terms")
+        }
+        .font(.caption)
+        .foregroundStyle(Color.secondaryText)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 9)
+    }
+
+    /// True only when every window shares all its local work and has nothing waiting for a restart: the two lists
+    /// the status panel shows ("Not shared, and why" and "Waiting for a restart") are empty for every window.
+    /// Read off the main thread from the same local files as the status panel; anything unreadable counts as not.
+    private static func everyoneInStep(_ model: AppModel) async -> Bool {
+        guard model.lastSync != nil, model.statuses.count > 1 else { return false }
+        if model.isDemo { return isInStep(DemoData.windowStatuses) }
+        let manager = model.manager
+        return await Task.detached {
+            guard let diagnostics = try? Diagnostics.inspect(paths: manager.paths) else { return false }
+            var pending: [String: [String]] = [:]
+            for row in manager.localOnlyStatus() where row.status == .pending { pending[row.window] = ["Local only"] }
+            return isInStep(WindowStatus.collect(manager: manager, diagnostics: diagnostics, pending: pending))
+        }.value
+    }
+
+    nonisolated private static func isInStep(_ windows: [WindowStatus]) -> Bool {
+        !windows.isEmpty && windows.allSatisfy { $0.skipReasons.isEmpty && $0.pendingChanges.isEmpty }
+    }
+}
+
+/// One window's account, sharing scope and why some work isn't shared, with a restart to apply pending changes.
+struct WindowStatusSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    private var status: WindowStatus? { model.windowStatuses.first { $0.id == model.statusWindow } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let status {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Claude \(status.displayLabel) status").font(.title2.bold())
+                        .accessibilityAddTraits(.isHeader)
+                    Text("What this window shares, what it doesn't, and why.").font(.callout).foregroundStyle(Color.secondaryText)
+                }
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
+                    row("Window", status.isRunning ? "Open" : "Closed")
+                    row("Account", status.account ?? "Not signed in")
+                    row("Sharing scope", status.scope ?? "None until you sign in")
+                    row("Scope from", status.scopeSource)
+                    row(
+                        "Local only", status.localOnly.map { $0 ? "On" : "Off" } ?? "Not available in this version",
+                        help:
+                            "Turns off Remote Control for this window's new sessions from its next start, so they aren't reachable from claude.ai or your phone unless you turn it on there."
+                    )
+                    row(
+                        "Claude Code running", status.liveSessions == 0 ? "No sessions" : "\(status.liveSessions) session\(status.liveSessions == 1 ? "" : "s")"
+                    )
+                }
+                section("Not shared, and why", status.skipReasons, empty: "Everything local is shared.")
+                section("Waiting for a restart", status.pendingChanges, empty: "No changes waiting.")
+                if !status.folderNotes.isEmpty { section("Baton's folders", status.folderNotes, empty: "") }
+            } else {
+                ProgressView("Checking…")
+            }
+            Spacer(minLength: 0)
+            Divider()
+            HStack {
+                if let status, !status.pendingChanges.isEmpty || status.isRunning {
+                    Button(status.restartTitle) { model.restart(status.id) }
+                        .disabled(!status.canRestart)
+                        .help(status.restartHelp)
+                }
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(22)
+        .frame(minWidth: 480, idealWidth: 560, minHeight: 360, idealHeight: 440)
+    }
+
+    private func row(_ title: String, _ value: String, help: String = "") -> some View {
+        GridRow {
+            Text(title).foregroundStyle(Color.secondaryText).gridColumnAlignment(.trailing)
+            Text(value).textSelection(.enabled)
+        }
+        .help(help)
+    }
+
+    private func section(_ title: String, _ items: [String], empty: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+            if items.isEmpty { Text(empty).foregroundStyle(Color.secondaryText) }
+            ForEach(items, id: \.self) { Text($0).fixedSize(horizontal: false, vertical: true) }
+        }
+    }
+}

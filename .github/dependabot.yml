@@ -1,0 +1,11 @@
+# The workflows pin every action by commit SHA; this opens a weekly pull request that moves the pins, and their
+# version comments, to new releases. The Swift package has no dependencies to update.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

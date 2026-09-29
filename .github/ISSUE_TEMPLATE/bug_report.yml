@@ -1,0 +1,67 @@
+name: Report a problem
+description: Something in Baton did not work as described.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us where the baton got dropped: what you did, what you expected, and what happened instead.
+
+        **Report a problem** in Baton (the footer, the menu bar or Help) or `baton report`
+        fills in the Diagnostics field below. The report replaces your home folder, user name, emails, account ids,
+        profile labels and folder names, and leaves out session titles, transcripts and anything shaped like a
+        token. Nothing else you type is changed, so leave out anything you would not post in public.
+        If Baton won't install or open, there is no report: leave Diagnostics empty and fill in the versions instead.
+        Security problems go to a [private advisory](https://github.com/trukhinyuri/Baton/security/advisories/new), not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Continue a Code session from WORK in LAB
+        2. …
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed Baton
+      options:
+        - The ZIP from Releases
+        - Homebrew
+        - From source (make install)
+        - It didn't install
+    validations:
+      required: true
+  - type: checkboxes
+    id: upgrade
+    attributes:
+      label: Upgrade
+      options:
+        - label: I upgraded from Claude Profiles.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        The report from Report a problem: Environment, Windows, Sessions check, Last sync, Recent errors and Log.
+        If it was too long for the link, it is on your clipboard and in the file you saved; paste it here or
+        attach the file. If you couldn't make one, say why and fill in the versions below.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions, without a report
+      description: Only if Diagnostics is empty.
+      placeholder: macOS 15.6, Baton 1.0.0-rc.1, Claude Desktop 1.2.3
+  - type: checkboxes
+    id: reviewed
+    attributes:
+      label: Before you submit
+      options:
+        - label: I reviewed the text above, and it contains nothing I do not want to post publicly.
+          required: true

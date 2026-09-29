@@ -1,0 +1,95 @@
+import Foundation
+import Testing
+
+@testable import BatonKit
+
+@Suite("Window notices")
+struct NoticesTests {
+    private let warning = "Claude (main) will continue it by itself when its limit resets. Turn off Auto-continue there."
+    private let roomAgain = "Claude LAB has room again."
+
+    /// Another window gets room again while a Continue warning is unread: its notice shows for a while, then the
+    /// warning is back. Before, the notice replaced the warning and then cleared itself, and the warning was gone.
+    @Test func aPassingNoticeDoesNotLoseAWarning() {
+        var notices = Notices()
+        notices.show(warning, isWarning: true)
+        notices.show(roomAgain, isWarning: false)
+        #expect(notices.current?.text == roomAgain)
+        #expect(notices.current?.isWarning == false)
+        notices.expire(roomAgain)
+        #expect(notices.current?.text == warning)
+        #expect(notices.current?.isWarning == true)
+    }
+
+    /// Closing the notice on top shows the warning under it; closing the warning ends it.
+    @Test func dismissingShowsTheWarningUnderneath() {
+        var notices = Notices()
+        notices.show(warning, isWarning: true)
+        notices.show(roomAgain, isWarning: false)
+        notices.dismiss()
+        #expect(notices.current?.text == warning)
+        notices.dismiss()
+        #expect(notices.current == nil)
+    }
+
+    /// Warnings wait for their own dismissal, newest first, each once; an earlier notice's timer leaves a newer one.
+    @Test func warningsStayUntilEachIsDismissed() {
+        var notices = Notices()
+        notices.show("First warning.", isWarning: true)
+        notices.show(warning, isWarning: true)
+        notices.show("First warning.", isWarning: true)
+        #expect(notices.current?.text == "First warning.")
+        notices.expire("First warning.")
+        #expect(notices.current?.text == "First warning.")
+        notices.dismiss()
+        #expect(notices.current?.text == warning)
+        notices.dismiss()
+        #expect(notices.current == nil)
+
+        notices.show("Opened.", isWarning: false)
+        notices.show(roomAgain, isWarning: false)
+        notices.expire("Opened.")
+        #expect(notices.current?.text == roomAgain)
+        notices.expire(roomAgain)
+        #expect(notices.current == nil)
+    }
+}
+
+@Suite("Open warnings")
+struct OpenWarningsTests {
+    /// Opening LAB cleanly, or showing the main window, leaves WORK's warning in the footer: WORK still runs without
+    /// the settings it couldn't refresh.
+    @Test func anotherWindowsOpenKeepsAWindowsWarning() {
+        let work = "Claude WORK opened, but some shared settings could not be refreshed. Sessions: damaged file."
+        var warnings = OpenWarnings()
+        warnings.record(work, for: "work")
+        warnings.record(nil, for: "lab")
+        warnings.record(nil, for: "main")
+        #expect(warnings.text == work)
+
+        let lab = "Claude LAB opened, but some shared settings could not be refreshed. Setup: disk full."
+        warnings.record(lab, for: "lab")
+        #expect(warnings.text == work + " " + lab)
+        // WORK opened again, cleanly this time: only its own warning goes.
+        warnings.record(nil, for: "work")
+        #expect(warnings.text == lab)
+        warnings.record("Newer.", for: "lab")
+        #expect(warnings.text == "Newer.")
+        warnings.record(nil, for: "lab")
+        #expect(warnings.text == nil)
+    }
+}
+
+@Suite("Share Sessions Now")
+struct SyncNoticeTests {
+    /// Asking for a sync always says what came of it, also when a launcher or `baton` was sharing at that moment.
+    @Test func anAskedSyncSaysWhatItDid() {
+        var report = SyncReport(sessions: SessionSync.Report(), cowork: CoworkSync.Report())
+        #expect(SyncReport.notice(report) == "Sessions are shared: nothing new to copy.")
+        report.sessions.cardsWritten = 1
+        #expect(SyncReport.notice(report) == "Sessions are shared: 1 change.")
+        report.sessions.cardsRemoved = 2
+        #expect(SyncReport.notice(report) == "Sessions are shared: 3 changes.")
+        #expect(SyncReport.notice(nil).contains("within a minute"))
+    }
+}

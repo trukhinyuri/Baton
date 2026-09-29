@@ -1,0 +1,220 @@
+import Foundation
+import Testing
+
+@testable import BatonKit
+
+@Suite("Continue sheet")
+struct ContinueSheetTests {
+    private func conversation(_ id: String, _ title: String, folder: String? = nil, minutesAgo: Double = 1) -> Conversation {
+        Conversation(
+            kind: .code, sessionID: id, title: title, folders: folder.map { [$0] } ?? [], lastActivity: Date().addingTimeInterval(-60 * minutesAgo),
+            transcript: URL(fileURLWithPath: "/nonexistent/\(id).jsonl"))
+    }
+
+    private func status(_ id: String, signedIn: Bool) -> ProfileStatus {
+        ProfileStatus(
+            profile: id == "main" ? nil : Profile(id: id, label: id.uppercased(), email: nil, color: "#1971C2"),
+            accountID: signedIn ? "account-\(id)" : nil, email: nil, usage: nil, isRunning: true)
+    }
+
+    /// Typing a search that hides the selected session moves the selection onto what is listed, so Continue never
+    /// acts on a session nobody can see.
+    @Test func searchNeverLeavesAHiddenSelection() {
+        let all = [conversation("c1", "Refactor auth"), conversation("c2", "billing invoices"), conversation("c3", "Billing export")]
+        let shown = ConversationIndex.listed(all, query: " billing ").shown
+        #expect(shown.map(\.id) == ["c2", "c3"])
+        #expect(ConversationIndex.selection("c1", in: shown) == "c2")
+        #expect(ConversationIndex.selection("c3", in: shown) == "c3")
+        #expect(ConversationIndex.selection(nil, in: shown) == "c2")
+        #expect(ConversationIndex.selection("c1", in: ConversationIndex.listed(all, query: "nothing").shown) == nil)
+    }
+
+    /// The sheet looks its selection up by id instead of filtering the list each time: it finds exactly what the
+    /// list shows, never one the search or the limit leaves out.
+    @Test func theSelectionIsFoundOnlyWhenListed() {
+        let all = [
+            conversation("c1", "Refactor auth"), conversation("c2", "billing invoices"),
+            conversation("c3", "Export", folder: "/Users/alex/src/Billing"), conversation("c4", "Billing export"),
+        ]
+        for query in ["", " billing ", "BILLING", "auth", "nothing"] {
+            for limit in [0, 2, 10] {
+                for id in [nil, "c1", "c2", "c3", "c4", "gone"] {
+                    let listed = ConversationIndex.listed(all, query: query, limit: limit).shown.first { $0.id == id }
+                    #expect(
+                        ConversationIndex.listedConversation(id, in: all, query: query, limit: limit) == listed,
+                        "\(id ?? "nil") for “\(query)”, limit \(limit)")
+                }
+            }
+        }
+        #expect(ConversationIndex.listedConversation("c3", in: all, query: "", limit: 2) == nil)
+        #expect(ConversationIndex.listedConversation("c3", in: all, query: "billing", limit: 2)?.id == "c3")
+    }
+
+    @Test func searchMatchesFolders() {
+        let all = [conversation("c1", "Fix it", folder: "/Users/alex/src/billing"), conversation("c2", "Other", folder: "/Users/alex/web")]
+        #expect(ConversationIndex.listed(all, query: "BILLING").shown.map(\.id) == ["c1"])
+    }
+
+    /// Without a search the list stops at its limit and says so.
+    @Test func aCappedListSaysHowManyMore() {
+        let all = (0..<5).map { conversation("c\($0)", "Session \($0)", minutesAgo: Double($0)) }
+        let listing = ConversationIndex.listed(all, query: "", limit: 3)
+        #expect(listing.shown.map(\.id) == ["c0", "c1", "c2"])
+        #expect(listing.matching == 5)
+        #expect(ConversationIndex.listNote(shown: 3, matching: 5) == "Showing the 3 most recent of 5. Search to find an older one.")
+        #expect(ConversationIndex.listNote(shown: 5, matching: 5) == nil)
+        #expect(ConversationIndex.listed(all, query: "Session").matching == 5)
+    }
+
+    /// The limit banner's Continue selects the most recent session of the window at its limit: a Code session that
+    /// last ran there or a Cowork task of its account, never a more recent one of another window.
+    @Test func theLimitBannerSelectsTheSessionOfTheWindowAtItsLimit() {
+        var lab = conversation("c1", "Newer, in LAB", minutesAgo: 1)
+        lab.runningIn = "lab"
+        var work = conversation("c2", "Hit the limit in WORK", minutesAgo: 5)
+        work.runningIn = "work"
+        let unknown = conversation("c3", "Nobody knows where", minutesAgo: 6)
+        let task = Conversation(
+            kind: .cowork, sessionID: "t1", title: "WORK's task", folders: [], lastActivity: Date().addingTimeInterval(-600),
+            transcript: URL(fileURLWithPath: "/nonexistent/t1.jsonl"), ownerID: "work")
+        let shown = [lab, work, unknown, task]
+
+        #expect(ConversationIndex.latest(from: "work", in: shown) == "c2")
+        #expect(ConversationIndex.latest(from: "work", in: [lab, unknown, task]) == "t1")
+        #expect(ConversationIndex.latest(from: "main", in: shown) == nil)
+        #expect(ConversationIndex.selection(ConversationIndex.latest(from: "work", in: shown), in: shown) == "c2")
+        #expect(ConversationIndex.selection(ConversationIndex.latest(from: "main", in: shown), in: shown) == "c1", "the most recent of any window")
+        #expect(work.source == "work" && task.source == "work" && unknown.source == nil)
+    }
+
+    /// With every window it can go to at its limit, the sheet says so and names the one that resets first.
+    @Test func saysWhenEveryWindowItCanGoToIsAtItsLimit() {
+        let now = Date()
+        func atLimit(_ id: String, resetsIn: TimeInterval?) -> ProfileStatus {
+            let usage = Usage(fiveHour: 100, week: 40, sampledAt: now.addingTimeInterval(-60))
+            var limits = Limits(usage: usage)
+            limits.fiveHour = LimitState(
+                kind: .fiveHour, percent: 100, sampledAt: usage.sampledAt, reachedAt: now.addingTimeInterval(-600),
+                reset: resetsIn.map { LimitReset(at: now.addingTimeInterval($0), source: .exact) })
+            return ProfileStatus(
+                profile: Profile(id: id, label: id.uppercased(), email: nil, color: "#1971C2"), accountID: "account-\(id)",
+                email: nil, usage: usage, isRunning: true, limits: limits)
+        }
+        let listed = [atLimit("lab", resetsIn: 3 * 3600), atLimit("team", resetsIn: 1800), atLimit("home", resetsIn: nil)]
+        #expect(listed.allSatisfy { DestinationRanking.isAtLimit($0, now: now) })
+        #expect(DestinationRanking.best(listed, now: now) == nil, "the sheet chooses none of them")
+
+        let note = DestinationRanking.allAtLimitNote(listed, now: now)
+        #expect(note.hasPrefix("Every window it can go to is at its limit. Claude TEAM resets "))
+        #expect(note.hasSuffix(", the soonest. Pick one to continue there anyway."))
+        #expect(!note.contains("…"))
+        #expect(
+            DestinationRanking.allAtLimitNote([atLimit("home", resetsIn: nil)], now: now)
+                == "Every window it can go to is at its limit. Pick one to continue there anyway.")
+    }
+
+    @Test func saysWhyNoWindowIsOffered() {
+        let alone = DestinationRanking.noDestinationReason([status("main", signedIn: true)], source: nil)
+        #expect(alone.contains("no other subscription"))
+        // The main window runs it, and the only other one isn't signed in yet.
+        let notSignedIn = DestinationRanking.noDestinationReason([status("main", signedIn: true), status("work", signedIn: false)], source: "main")
+        #expect(notSignedIn.contains("Sign in inside the Claude WORK window"))
+        let noneLeft = DestinationRanking.noDestinationReason([status("main", signedIn: true), status("work", signedIn: true)], source: "work")
+        #expect(noneLeft.contains("No other signed-in window"))
+    }
+
+    private func plan(model: ModelNote? = nil, autoResume: [AutoResumeNote] = []) -> ContinuePlan {
+        var plan = ContinuePlan(conversation: conversation("c1", "Add rate limiting to the webhook handler"), destination: "work", forks: true, model: model)
+        plan.autoResume = autoResume
+        return plan
+    }
+
+    /// Every warning comes first, each once, so none is cut after a long title or dropped for another.
+    @Test func warningsComeFirstAndNoneIsDropped() {
+        let resets = Date().addingTimeInterval(3600)
+        let stillOn = AutoResumeNote.stillOn(label: "(main)", resetsAt: resets, copied: true)
+        let model = ModelNote(model: "claude-opus-5-5[1m]", kind: .chooseBeforeSending)
+        let result = "Baton passed to Claude WORK: opened 2 sessions there."
+        let notice = ContinueNotice.compose(
+            result: result, leftOut: "Left out “A”: waits.",
+            plans: [plan(model: model, autoResume: [stillOn, .turnedOff(label: "LAB")]), plan(model: model, autoResume: [stillOn])], label: "WORK")
+        #expect(notice.isWarning)
+        #expect(
+            notice.text
+                == [stillOn.message(), model.message(destination: "WORK"), result, "Left out “A”: waits.", AutoResumeNote.turnedOff(label: "LAB").message()]
+                .joined(separator: " "))
+    }
+
+    @Test func aPlainResultIsNotAWarning() {
+        let notice = ContinueNotice.compose(
+            result: "Baton passed to Claude WORK: “X” is open there.", plans: [plan(model: ModelNote(model: "claude-sonnet-5-5", kind: .carried))],
+            label: "WORK")
+        #expect(!notice.isWarning)
+        #expect(notice.text == "Baton passed to Claude WORK: “X” is open there.")
+    }
+}
+
+@Suite("Operations in flight")
+struct OperationsInFlightTests {
+    /// Show on an open window, a quick action, ends while an app copy is still being made: the footer keeps saying so.
+    @Test func aQuickActionDoesNotClearASlowOnesMessage() {
+        var operations = OperationsInFlight()
+        let create = operations.start("Creating Claude WORK…")
+        let show = operations.start(nil, window: "lab")
+        #expect(operations.message == "Creating Claude WORK…")
+        operations.finish(show)
+        #expect(operations.message == "Creating Claude WORK…")
+        operations.finish(create)
+        #expect(operations.message == nil)
+        #expect(operations.isEmpty)
+    }
+
+    @Test func theNewestMessageShowsUntilItsActionEnds() {
+        var operations = OperationsInFlight()
+        let first = operations.start("Opening Claude WORK…", window: "work")
+        let second = operations.start("Removing Claude LAB…", window: "lab")
+        #expect(operations.message == "Removing Claude LAB…")
+        operations.finish(first)
+        #expect(operations.message == "Removing Claude LAB…")
+        #expect(!operations.isBusy(window: "work"))
+        #expect(operations.isBusy(window: "lab"))
+        operations.finish(second)
+        #expect(!operations.isBusy(window: "lab"))
+    }
+}
+
+@Suite("Add Subscription hints")
+struct ProfileHintsTests {
+    @Test func saysWhyAnEmailIsNotAccepted() {
+        #expect(Profile.emailHint("") == nil)
+        #expect(Profile.emailHint("me@gmail.com ") == nil)
+        #expect(Profile.emailHint("me@gmail") == "Enter the full email address, like you@example.com.")
+    }
+
+    /// While the address is typed, the hint waits for an “@”; once the field is left, it shows for any address.
+    @Test func theEmailHintWaitsWhileTheAddressIsTyped() {
+        #expect(Profile.emailHint("a", isTyping: true) == nil)
+        #expect(Profile.emailHint("alex", isTyping: true) == nil)
+        #expect(Profile.emailHint("alex@work", isTyping: true) == "Enter the full email address, like you@example.com.")
+        #expect(Profile.emailHint("alex") == "Enter the full email address, like you@example.com.")
+        #expect(Profile.emailHint("alex@work.example", isTyping: true) == nil)
+    }
+
+    @Test func saysWhyALabelIsNotAccepted() {
+        #expect(Profile.labelHint("", taken: []) == nil)
+        #expect(Profile.labelHint("TEAM-2", taken: []) == nil)
+        #expect(Profile.labelHint("WORK TEAM", taken: []) == "Use 1–8 letters, digits, “-” or “_”.")
+        #expect(Profile.labelHint("A.B", taken: []) == "Use 1–8 letters, digits, “-” or “_”.")
+        #expect(Profile.labelHint("WORK", taken: ["work"]) == "Already used by another subscription.")
+        #expect(Profile.labelHint("MAIN", taken: []) == "MAIN is reserved for the main Claude window.")
+        #expect(Profile.labelHint("claude", taken: []) == "CLAUDE is reserved for the main Claude window.")
+    }
+
+    /// A label emptied by hand holds Create and Open back, so it says a label is needed; the empty field of a new
+    /// sheet says nothing yet.
+    @Test func anEmptiedLabelSaysOneIsNeeded() {
+        #expect(Profile.labelHint("", taken: [], isEdited: false) == nil)
+        #expect(Profile.labelHint("", taken: [], isEdited: true) == "Enter a Dock label: 1–8 letters, digits, “-” or “_”.")
+        #expect(Profile.labelHint("WORK", taken: [], isEdited: true) == nil)
+    }
+}

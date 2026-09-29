@@ -1,0 +1,113 @@
+import Foundation
+
+/// An additional Claude Desktop profile: its own window, Dock icon and sign-in.
+/// The main Claude app is not a `Profile`; it is always present and never modified.
+public struct Profile: Codable, Identifiable, Hashable, Sendable {
+    /// Stable slug; names the data directory and the engine clone.
+    public var id: String
+    /// Short text drawn on the Dock icon, e.g. "WORK".
+    public var label: String
+    /// The account the user intends to sign in with. Used only to warn about a mismatch.
+    public var email: String?
+    /// Icon badge color, `#RRGGBB`.
+    public var color: String
+    public var createdAt: Date
+    /// Whether a conversation continued into this profile keeps its permission mode (for example "accept edits").
+    /// Off unless the owner turns it on: a mode chosen under one account is not silently granted in another.
+    /// Missing in older `profiles.json` files, which read as off.
+    public var carryPermissionMode: Bool?
+
+    public init(
+        id: String, label: String, email: String?, color: String, createdAt: Date = Date(),
+        carryPermissionMode: Bool? = nil
+    ) {
+        self.id = id
+        self.label = label
+        self.email = email
+        self.color = color
+        self.createdAt = createdAt
+        self.carryPermissionMode = carryPermissionMode
+    }
+
+    /// `carryPermissionMode`, with a missing value read as off.
+    public var carriesPermissionMode: Bool { carryPermissionMode ?? false }
+
+    /// Badge and Dock label colours, each dark enough for white text at 4.5:1 or more (`Contrast`). Profiles made with
+    /// the earlier, lighter green, teal, orange and lime keep them in `profiles.json`; their badge and Dock label are
+    /// darkened as they're drawn, the Dock label the next time the app copy or launcher is written.
+    public static let palette = ["#1971C2", "#28863A", "#7048E8", "#0C8094", "#C2255C", "#C94D0A", "#51820B", "#862E9C"]
+    public static let mainColor = "#AE5F46"
+    public static let maxLabelLength = 8
+
+    /// Ids that name the main Claude window everywhere (`"main"`, and `"claude"` in the CLI), never a profile's.
+    public static let reservedIDs: Set<String> = ["main", "claude"]
+
+    /// Labels that name the main Claude window: in `baton open MAIN`, in reports and on its badge.
+    public static func isReservedLabel(_ label: String) -> Bool {
+        reservedIDs.contains(label.trimmingCharacters(in: .whitespaces).lowercased())
+    }
+
+    /// Suggests a label from an email: `jane.doe@example.com` → `JANE`.
+    public static func suggestedLabel(for email: String, taken: Set<String>) -> String {
+        let local = email.split(separator: "@").first.map(String.init) ?? email
+        let word = local.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).first.map(String.init) ?? "acct"
+        let base = String(word.uppercased().prefix(maxLabelLength))
+        let upperTaken = Set(taken.map { $0.uppercased() }).union(reservedIDs.map { $0.uppercased() })
+        if !upperTaken.contains(base) { return base.isEmpty ? "ACCT" : base }
+        for n in 2...99 {
+            let candidate = String(base.prefix(maxLabelLength - String(n).count)) + String(n)
+            if !upperTaken.contains(candidate) { return candidate }
+        }
+        return String(UUID().uuidString.prefix(6))
+    }
+
+    /// Filesystem-safe id for a label: lowercase ASCII letters, digits and dashes.
+    public static func slug(for label: String) -> String {
+        let allowed = label.lowercased().unicodeScalars.map { scalar -> Character in
+            ("a"..."z").contains(Character(scalar)) || ("0"..."9").contains(Character(scalar)) ? Character(scalar) : "-"
+        }
+        let collapsed = String(allowed).split(separator: "-").joined(separator: "-")
+        return collapsed.isEmpty ? "profile" : String(collapsed.prefix(24))
+    }
+
+    /// A label of 1 to 8 letters, digits, "-" or "_" that doesn't name the main window (`isReservedLabel`).
+    public static func isValidLabel(_ label: String) -> Bool {
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty && trimmed.count <= maxLabelLength
+            && trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } && !isReservedLabel(trimmed)
+    }
+
+    /// One `@`, and a domain ending in a top-level domain of two or more letters in any script (`.com`, `.рф`, `.中国`)
+    /// or its `xn--` form, so an address at an internationalized domain can be added too.
+    public static func isValidEmail(_ email: String) -> Bool {
+        email.range(of: #"^[^@\s]+@[^@\s]+\.(\p{L}{2,}|xn--[A-Za-z0-9-]+)$"#, options: .regularExpression) != nil
+    }
+}
+
+/// The list of profiles, stored as JSON in the Baton state directory.
+public struct ProfileRegistry: Sendable {
+    public let paths: Paths
+
+    public init(paths: Paths) { self.paths = paths }
+
+    /// - Throws: if the registry exists but can't be read, so a damaged file is never silently replaced.
+    public func load() throws -> [Profile] {
+        guard FileManager.default.fileExists(atPath: paths.registryFile.path) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([Profile].self, from: Data(contentsOf: paths.registryFile))
+    }
+
+    public func save(_ profiles: [Profile]) throws {
+        try FileManager.default.createDirectory(at: paths.stateDir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let backup = paths.registryFile.appendingPathExtension("bak")
+        if FileManager.default.fileExists(atPath: paths.registryFile.path) {
+            try? FileManager.default.removeItem(at: backup)
+            try FileManager.default.copyItem(at: paths.registryFile, to: backup)
+        }
+        try encoder.encode(profiles).write(to: paths.registryFile, options: .atomic)
+    }
+}
