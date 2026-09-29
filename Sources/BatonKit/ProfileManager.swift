@@ -761,7 +761,7 @@ public final class ProfileManager: @unchecked Sendable {
 
     /// Hands a `claude://` link to the running window of the app at `app`. macOS delivers it to that exact copy,
     /// so no other window sees it and no permission is needed.
-    private func deliver(_ links: [URL], to app: URL) async throws {
+    func deliver(_ links: [URL], to app: URL) async throws {
         if let appActivator { return try await appActivator(app, links) }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true

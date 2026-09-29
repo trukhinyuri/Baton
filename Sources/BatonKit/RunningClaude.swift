@@ -12,18 +12,22 @@ struct RunningClaude {
     var arguments: [String]?
     /// The process, if known; tests give one without an app.
     var pid: pid_t?
+    /// When it started, if known.
+    var launchDate: Date?
 
     init(app: NSRunningApplication) {
         self.app = app
         bundlePath = app.bundleURL?.standardizedFileURL.path
         arguments = ProcessArguments.of(app.processIdentifier)
         pid = app.processIdentifier
+        launchDate = app.launchDate
     }
 
-    init(bundlePath: String?, arguments: [String]?, pid: pid_t? = nil) {
+    init(bundlePath: String?, arguments: [String]?, pid: pid_t? = nil, launchDate: Date? = nil) {
         self.bundlePath = bundlePath
         self.arguments = arguments
         self.pid = pid
+        self.launchDate = launchDate
     }
 
     /// Whether this copy shows the data in `dataDir`, which `bundle` uses when it is started the usual way.
