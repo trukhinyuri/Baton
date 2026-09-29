@@ -314,7 +314,12 @@ final class AppModel: ObservableObject {
     }
 
     func reload() {
-        if isDemo { statuses = DemoData.statuses; lastSync = Date().addingTimeInterval(-14); return }
+        if isDemo {
+            statuses = DemoData.statuses
+            atLimit = Set(statuses.filter { $0.isSignedIn && $0.limits.isAtLimit() }.map(\.id))
+            lastSync = Date().addingTimeInterval(-14)
+            return
+        }
         let manager = manager
         Task.detached {
             let fresh = manager.statuses()
@@ -510,20 +515,27 @@ enum DemoData {
             profiles: statuses.compactMap(\.profile).map { [$0.label, $0.id] })
     }
 
+    /// WORK is at its five-hour limit with a reset time Claude named, so the pictures show the limit banner, the reset
+    /// beside the meters and the at-limit entry in the Continue sheet; LAB's sample is four hours old, so its usage
+    /// "may have changed since".
     static var statuses: [ProfileStatus] {
         let now = Date()
+        let workUsage = Usage(fiveHour: 100, week: 31, sampledAt: now.addingTimeInterval(-300))
+        var workLimits = Limits(usage: workUsage)
+        workLimits.fiveHour = LimitState(
+            kind: .fiveHour, percent: 100, sampledAt: workUsage.sampledAt, reachedAt: now.addingTimeInterval(-2_400),
+            reset: LimitReset(at: now.addingTimeInterval(5_700), source: .exact))
         return [
             ProfileStatus(
                 profile: nil, accountID: "demo-main", email: "alex@example.com",
                 usage: Usage(fiveHour: 64, week: 92, sampledAt: now.addingTimeInterval(-600)), isRunning: true),
             ProfileStatus(
                 profile: Profile(id: "work", label: "WORK", email: "alex@work.example", color: "#1971C2"),
-                accountID: "demo-work", email: "alex@work.example",
-                usage: Usage(fiveHour: 12, week: 31, sampledAt: now.addingTimeInterval(-300)), isRunning: true),
+                accountID: "demo-work", email: "alex@work.example", usage: workUsage, isRunning: true, limits: workLimits),
             ProfileStatus(
-                profile: Profile(id: "lab", label: "LAB", email: "alex.lab@example.org", color: "#2F9E44"),
+                profile: Profile(id: "lab", label: "LAB", email: "alex.lab@example.org", color: "#28863A"),
                 accountID: "demo-lab", email: "alex.lab@example.org",
-                usage: Usage(fiveHour: 0, week: 58, sampledAt: now.addingTimeInterval(-7200)), isRunning: false),
+                usage: Usage(fiveHour: 0, week: 58, sampledAt: now.addingTimeInterval(-14_400)), isRunning: false),
             ProfileStatus(
                 profile: Profile(id: "team", label: "TEAM", email: "alex@team.example", color: "#7048E8"),
                 accountID: nil, email: nil, usage: nil, isRunning: true),
