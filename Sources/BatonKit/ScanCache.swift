@@ -9,7 +9,8 @@ import Foundation
 ///
 /// It holds at most `limit` entries and about `budget` bytes. Past either, a new value is returned but not kept, so
 /// a set of files larger than the cache still finds most of them kept. An entry nobody asked for in an hour goes: its
-/// file was most likely removed or renamed.
+/// file was most likely removed or renamed. Callers keep what they found in a file, not the file: a date, a few
+/// facts, a digest. Each entry counts `overhead` bytes for its key and bookkeeping on top of its value.
 public final class ScanCache: @unchecked Sendable {
     public static let shared = ScanCache()
 
@@ -42,6 +43,8 @@ public final class ScanCache: @unchecked Sendable {
     let budget: Int
     /// An entry not asked for in this long goes.
     static let idle: TimeInterval = 3600
+    /// What an entry takes besides its value, in bytes: its key, the file's stamp and the table's own storage.
+    static let overhead = 512
     /// Seconds on a clock that only moves forward; a test moves its own by hand.
     let clock: @Sendable () -> TimeInterval
 
@@ -64,8 +67,8 @@ public final class ScanCache: @unchecked Sendable {
 
     /// `read(url)` the first time and whenever the file changed; the kept value otherwise. `kind` keeps different
     /// reads of one file apart. A file that can't be stat'ed is read every time and kept for nothing.
-    /// - Parameter cost: what keeping a value takes, in bytes. By default the size of a `Data`, and the size of the
-    ///   file for anything else.
+    /// - Parameter cost: what keeping a value takes, in bytes, besides `overhead`. By default the size of a `Data`,
+    ///   and nothing more for anything else: pass it for a value larger than a date or a few numbers.
     public func value<T>(_ kind: String, of url: URL, cost: ((T) -> Int)? = nil, read: (URL) throws -> T) rethrows -> T {
         let key = kind + "\n" + url.path
         guard let before = Self.stamp(of: url) else {
@@ -84,7 +87,7 @@ public final class ScanCache: @unchecked Sendable {
         }
         if let hit { return hit }
         let value = try read(url)
-        let size = max(cost?(value) ?? (value as? Data)?.count ?? Int(before.size), 0)
+        let size = max(cost?(value) ?? (value as? Data)?.count ?? 0, 0) + Self.overhead
         lock.withLock {
             reads += 1
             forget(key)

@@ -126,6 +126,22 @@ struct NativeSessionScopeTests {
             "scope survives after all native worker cards are gone")
     }
 
+    /// A worker stays with its own card and marker: a card dated after the marker doesn't retire it.
+    @Test func workerMadeAfterItsMarkerIsStillDeleted() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let same = try box.pair(box.work, account: Sandbox.accountA)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let worker = Self.worker.replacingOccurrences(of: #""title""#, with: #""createdAt":\#(now),"indexedAt":\#(now),"title""#)
+        try box.write(worker, to: same.appending(path: "local_worker.json"))
+        try box.write(String(now - 3_600_000), to: a.appending(path: "deleted_worker"))
+
+        let report = try box.sync(propagateDeletions: true)
+
+        #expect(report.cardsRemoved == 1 && report.tombstonesRetired == 0)
+        #expect(box.exists(a.appending(path: "deleted_worker")) && box.exists(same.appending(path: "deleted_worker")))
+    }
+
     @Test func markerInAnyCopyProtectsAgainstANewerUnmarkedCopy() throws {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)

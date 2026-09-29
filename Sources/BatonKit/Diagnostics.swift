@@ -16,7 +16,8 @@ public enum Diagnostics {
         public var issues: [String] = []
     }
 
-    public static func inspect(paths: Paths) throws -> [Entry] {
+    /// - Parameter cache: what was found in each card, kept while its file stays the same.
+    public static func inspect(paths: Paths, cache: ScanCache = .shared) throws -> [Entry] {
         let profiles = try ProfileRegistry(paths: paths).load()
         let entries = [("main", "MAIN", paths.mainDataDir)] + profiles.map { ($0.id, $0.label, paths.dataDir(for: $0.id)) }
         var nativeScopes: [String: Set<String>] = [:]
@@ -51,17 +52,16 @@ public enum Diagnostics {
                         for file in try fm.contentsOfDirectory(at: org, includingPropertiesForKeys: [.isRegularFileKey])
                         where file.lastPathComponent.hasPrefix("local_") && file.pathExtension == "json" {
                             guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
-                            let data = try ScanCache.shared.value("data", of: file) { try Data(contentsOf: $0) }
-                            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                                entry.issues.append("A session card has an unsupported format."); continue
-                            }
+                            let card = try cache.value(
+                                "diagnostics", of: file, cost: { $0?.cost ?? 0 }, read: { url in try autoreleasepool { try Card(Data(contentsOf: url)) } })
+                            guard let card else { entry.issues.append("A session card has an unsupported format."); continue }
                             let key = kind + "/" + file.lastPathComponent
                             cardScopes[key, default: []].insert(account + "/" + org.lastPathComponent)
                             var hasCoworkHistory = true
                             var folderProfile: String?
                             if kind == CoworkSync.sessionsFolder {
                                 hasCoworkHistory = Self.hasCoworkHistoryFolder(for: file)
-                                if let cwd = object["cwd"] as? String, cwd.hasPrefix("/") {
+                                if let cwd = card.cwd, cwd.hasPrefix("/") {
                                     let path = URL(fileURLWithPath: cwd).standardizedFileURL.path
                                     folderProfile =
                                         entries.first { candidate in
@@ -71,7 +71,7 @@ public enum Diagnostics {
                                 }
                             }
                             records[id, default: []].append((key, kind, hasCoworkHistory, folderProfile))
-                            if SessionSync.isAccountBoundCard(object) || nativeScopes[key] != nil {
+                            if card.accountBound || nativeScopes[key] != nil {
                                 entry.accountBoundWorkers += 1
                                 nativeScopes[key, default: []].insert(account + "/" + org.lastPathComponent)
                                 nativeByProfile[id, default: []].insert(key)
@@ -80,8 +80,7 @@ public enum Diagnostics {
                             } else {
                                 entry.localCowork += 1
                             }
-                            let remote = object["sshRemoteProcessId"] != nil || object["sshRemoteTranscriptPath"] != nil
-                            if !remote, let cwd = object["cwd"] as? String, cwd.hasPrefix("/"), !fm.fileExists(atPath: cwd) { missing.insert(cwd) }
+                            if !card.remote, let cwd = card.cwd, cwd.hasPrefix("/"), !fm.fileExists(atPath: cwd) { missing.insert(cwd) }
                         }
                     }
                 } catch { entry.issues.append("Could not completely read \(kind): \(error.localizedDescription)") }
@@ -127,6 +126,24 @@ public enum Diagnostics {
             }
         }
         return reports
+    }
+
+    /// What a report reads from a card, kept instead of its bytes.
+    struct Card {
+        var accountBound: Bool
+        var cwd: String?
+        /// Its session runs on another machine over SSH.
+        var remote: Bool
+
+        /// `nil` for a card that isn't a JSON object; throws if it isn't JSON at all.
+        init?(_ data: Data) throws {
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            accountBound = SessionSync.isAccountBoundCard(object)
+            cwd = object["cwd"] as? String
+            remote = object["sshRemoteProcessId"] != nil || object["sshRemoteTranscriptPath"] != nil
+        }
+
+        var cost: Int { 48 + (cwd?.utf8.count ?? 0) }
     }
 
     /// Claude keeps either the full local_UUID directory or a sibling named with its first eight hex

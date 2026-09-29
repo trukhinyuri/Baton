@@ -45,7 +45,10 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 ### Sharing between accounts
 
 - Folder rules (`baton rule <folder> --only <email>`) keep a folder's work in the listed accounts, for continuing and for session sharing alike. An unknown email counts as not allowed, and a damaged rules file stops both until it is fixed. Copies made before a rule are retired only in closed windows, with a backup
-- A card copied into another account's window no longer carries that account's Remote Control bridge, remote MCP servers and tools, browser and computer-use grants or permission mode (a profile can opt in to keeping the permission mode). Copies between windows of the same account stay byte-for-byte identical
+- A card copied into another account's window no longer carries that account's Remote Control bridge, remote MCP servers and tools, browser and computer-use grants, the session's allow rules and added folders, or permission mode (a profile can opt in to keeping the permission mode). Copies between windows of the same account stay byte-for-byte identical
+- Computer-use grants and permission rules that earlier releases copied into another account are taken out of every copy of that session once, in both accounts, since which one gave them can't be told; grant them again where you need them
+- A session deleted in one window and later imported or continued again in another is no longer deleted a second time, and Continue no longer reuses a copy you deleted in the window it goes to
+- A card cut short by a crash is never copied over whole ones
 - A window that was closed while a session was forked can no longer point that session back at its old transcript, and a card whose session is live in another window is not overwritten
 - The signed-in email is read from compressed IndexedDB tables too
 - A window that opens a conversation it had no card for makes its own card; the older copy in that window is backed up and retired, and deleting either card deletes the conversation
@@ -75,7 +78,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - The app warns when a second copy of it is installed, since two copies would each run their own sync
 - App copies are rebuilt in a staging bundle, verified and swapped in atomically; the previous copy is restored if the new one fails verification. They are rebuilt only for a newer Claude Desktop, versions compared part by part as numbers, and never replaced with an older one
 - If Baton's data or launchers folder of the earlier name is a link that leads nowhere right now (a disk not connected), the app and `baton` stop with a line naming the link and where it leads, instead of starting a new, empty folder
-- An idle refresh reads no session card or transcript again; only files that changed are read. A remembered Continue copy whose transcript is gone is forgotten at the next sync
+- An idle refresh reads no session card or transcript again; only files that changed are read. What is kept of a card is a few facts and a digest, not the card, long reads free what they parsed as they go, and a new process, such as a Dock launcher, compares no copy an earlier sync found to match. The carry after Claude's own copies no longer walks old scratchpads every minute. A remembered Continue copy whose transcript is gone is forgotten at the next sync
 - The window status and the footer's "all windows are up to date" count a running window that the app shared sessions into since the app started as waiting for a restart
 - Opening a profile no longer fails when sessions can't be shared first; the window opens and the problem is reported
 - A session whose transcript file is empty is dated by the file instead of being listed last

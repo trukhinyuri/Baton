@@ -32,7 +32,8 @@ struct ScanCacheTests {
     @Test func keepsNoMoreThanItsBudget() throws {
         let box = try Sandbox()
         defer { try? fm.removeItem(at: box.root) }
-        let cache = ScanCache(limit: 100, budget: 10_000)
+        let cache = ScanCache(limit: 100, budget: 12_000)
+        let entry = 3_000 + ScanCache.overhead
         let files = try (0..<5).map { i in
             let file = box.root.appending(path: "card-\(i).json")
             try Data(repeating: UInt8(ascii: "a") + UInt8(i), count: 3_000).write(to: file)
@@ -40,16 +41,16 @@ struct ScanCacheTests {
         }
         let read = { (url: URL) in try Data(contentsOf: url) }
         for (i, file) in files.enumerated() { #expect(try cache.value("data", of: file, read: read).first == UInt8(ascii: "a") + UInt8(i)) }
-        #expect(cache.bytes == 9_000, "three of them fit")
+        #expect(cache.bytes == 3 * entry, "three of them fit")
         for file in files { _ = try cache.value("data", of: file, read: read) }
         #expect(cache.reads == 5 + 2, "the three kept are not read again; the two that didn't fit are")
         // A value that knows its cost is counted by it.
         #expect(try cache.value("facts", of: files[4], cost: { (n: Int) in n }, read: { _ in 500 }) == 500)
-        #expect(cache.bytes == 9_500)
+        #expect(cache.bytes == 3 * entry + 500 + ScanCache.overhead)
         // A file that is gone takes its entry with it.
         try fm.removeItem(at: files[0])
         #expect(throws: (any Error).self) { try cache.value("data", of: files[0], read: read) }
-        #expect(cache.bytes == 6_500)
+        #expect(cache.bytes == 2 * entry + 500 + ScanCache.overhead)
     }
 
     /// An entry nobody asked for in an hour goes, such as the card of a session that was deleted.
@@ -68,10 +69,10 @@ struct ScanCacheTests {
         try fm.removeItem(at: gone)  // never asked for again
         clock.now = 1_800
         _ = try cache.value("data", of: kept, read: read)
-        #expect(cache.bytes == 3_000)
+        #expect(cache.bytes == 3_000 + 2 * ScanCache.overhead)
         clock.now = 3_700
         _ = try cache.value("data", of: kept, read: read)
-        #expect(cache.bytes == 2_000, "only the entry asked for in the last hour is left")
+        #expect(cache.bytes == 2_000 + ScanCache.overhead, "only the entry asked for in the last hour is left")
         #expect(cache.reads == 2)
     }
 
@@ -102,7 +103,7 @@ struct ScanCacheTests {
         #expect(try sync().cardsCompared >= 20)
         let idle = try sync()
         #expect(idle.changes == 0 && idle.cardsCompared == 0)
-        #expect(cache.bytes < 40 * 1_000, "40 cards of 50 KB each are kept as a few hundred bytes each")
+        #expect(cache.bytes < 40 * 2_000, "40 cards of 50 KB each are kept as a kilobyte or so each")
 
         // One card changes: only its copy is compared again, and gets the change.
         try box.write(
@@ -119,6 +120,87 @@ struct ScanCacheTests {
         let mine = try sync()
         #expect(mine.cardsCompared == 2 && mine.cardsWritten == 1, "the newer copy in work goes back to main")
         #expect(box.read(a.appending(path: "local_4.json"))?.contains(#""notes":"work""#) == true)
+    }
+
+    /// A new process, such as `baton open`, compares no copy that an earlier one found to match its card.
+    @Test func aNewProcessComparesNoCopyAlreadyFoundToMatch() throws {
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        for i in 0..<10 {
+            try box.write(
+                #"{"sessionId":"local_\#(i)","cliSessionId":"00000000-0000-4000-8000-00000000000\#(i)","cwd":"/Users/me/src/app","bridgeSessionIds":["b"]}"#,
+                to: a.appending(path: "local_\(i).json"))
+        }
+        func sync(_ cache: ScanCache) throws -> SessionSync.Report {
+            var sync = SessionSync(paths: box.paths, dataDirs: [box.main, box.work])
+            sync.cache = cache
+            sync.liveSessionIDs = []
+            return try sync.run(propagateDeletions: false)
+        }
+        let cache = ScanCache()
+        for _ in 0..<3 { _ = try sync(cache) }
+        #expect(try sync(cache).cardsCompared == 0)
+
+        let fresh = try sync(ScanCache())
+        #expect(fresh.cardsCompared == 0 && fresh.changes == 0, "what an earlier process found to match is kept on disk")
+        // A copy changed since is compared again, in any process.
+        try box.write(
+            #"{"sessionId":"local_3","cliSessionId":"00000000-0000-4000-8000-000000000003","cwd":"/Users/me/src/app","title":"new"}"#,
+            to: a.appending(path: "local_3.json"), modified: Date().addingTimeInterval(60))
+        let changed = try sync(ScanCache())
+        #expect(changed.cardsCompared == 2 && changed.cardsWritten == 1)
+        #expect(box.read(b.appending(path: "local_3.json"))?.contains("new") == true)
+    }
+
+    /// The Continue list keeps a date per transcript and a few fields per card, so transcripts that add up to more
+    /// than the budget are still not read again on an idle refresh.
+    @Test func transcriptsLargerThanTheBudgetAreNotReadAgain() throws {
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let project = box.paths.claudeProjectsDir.appending(path: "-Users-me-src-app", directoryHint: .isDirectory)
+        try fm.createDirectory(at: project, withIntermediateDirectories: true)
+        let line = #"{"type":"user","timestamp":"2026-09-28T10:00:00.000Z","text":"\#(String(repeating: "y", count: 4_000))"}"# + "\n"
+        for i in 0..<40 {
+            let session = String(format: "00000000-0000-4000-8000-%012d", i)
+            try box.write(#"{"title":"S\#(i)","cliSessionId":"\#(session)","cwd":"/Users/me/src/app"}"#, to: a.appending(path: "local_\(i).json"))
+            try Data(String(repeating: line, count: 16).utf8).write(to: project.appending(path: "\(session).jsonl"))
+        }
+        let cache = ScanCache(limit: 100_000, budget: 128 << 10)  // 40 transcripts of 64 KB are 2.5 MB
+        let windows: [(id: String, dataDir: URL)] = [("main", box.main)]
+        #expect(ConversationIndex.scan(paths: box.paths, windows: windows, cache: cache).count == 40)
+        let reads = cache.reads
+        #expect(ConversationIndex.scan(paths: box.paths, windows: windows, cache: cache).count == 40)
+        #expect(cache.reads == reads, "nothing read again")
+    }
+
+    /// What the carry, the Cowork inventory, the report and the Continue list keep of each card is a few facts,
+    /// not the card.
+    @Test func readersKeepWhatTheyFoundNotTheCard() throws {
+        let box = try Sandbox()
+        defer { try? fm.removeItem(at: box.root) }
+        try box.write("{\"lastKnownAccountUuid\":\"\(Sandbox.accountA)\"}", to: box.main.appending(path: "config.json"))
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let cowork = box.main.appending(path: "local-agent-mode-sessions/\(Sandbox.accountA)/org-1", directoryHint: .isDirectory)
+        try fm.createDirectory(at: cowork, withIntermediateDirectories: true)
+        let filler = String(repeating: "x", count: 100_000)
+        for i in 0..<20 {
+            let session = String(format: "00000000-0000-4000-8000-%012d", i)
+            let card = #"{"title":"S\#(i)","cliSessionId":"\#(session)","priorCliSessionIds":["\#(session)"],"cwd":"/Users/me","notes":"\#(filler)"}"#
+            try box.write(card, to: a.appending(path: "local_\(i).json"))
+            try box.write(card, to: cowork.appending(path: "local_\(i).json"))
+        }
+        let cache = ScanCache()
+        _ = NativeForkCarry.candidates(dataDirs: [box.main], transcripts: [:], cache: cache)
+        var inventory = CoworkSync(paths: box.paths, dataDirs: [box.main])
+        inventory.cache = cache
+        _ = try inventory.run(propagateDeletions: false)
+        _ = try Diagnostics.inspect(paths: box.paths, cache: cache)
+        _ = ConversationIndex.scan(paths: box.paths, windows: [("main", box.main)], cache: cache)
+        #expect(cache.reads == 20 + 20 + 40 + 40, "each reader read each card once")
+        #expect(cache.bytes < 120 * 2_000, "4 MB of cards, kept as a kilobyte or so per card and reader")
     }
 
     /// A fixture of many cards and transcripts: the first sync and Continue list read them all, an idle one reads
@@ -154,7 +236,9 @@ struct ScanCacheTests {
 
         let cache = ScanCache()
         let first = try refresh(cache)
-        _ = try refresh(cache)  // reads the copies the first sync wrote into the second window
+        // The second reads the copies the first sync wrote into the second window and saves that they match; the third
+        // reads that record once.
+        for _ in 0..<2 { _ = try refresh(cache) }
         let readsFirst = cache.reads
         // The same idle refresh as before this cache (everything read again), then with it.
         let fresh = ScanCache()

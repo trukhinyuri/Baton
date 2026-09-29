@@ -80,8 +80,13 @@ public enum ConversationIndex {
     ///   refresh reads none of them again.
     public static func scan(paths: Paths, windows: [(id: String, dataDir: URL)], cache: ScanCache = .shared) -> [Conversation] {
         let fm = FileManager.default
-        func readCard(_ url: URL) -> [String: Any]? { cache.value("card-json", of: url) { Self.readCard($0) } }
-        func lastActivity(of transcript: URL) -> Date? { cache.value("last-activity", of: transcript) { Self.lastActivity(of: $0) } }
+        // What the list needs of each card and transcript is kept, not the parsed card or the file.
+        func readCard(_ url: URL) -> CardSummary? {
+            cache.value("card-summary", of: url, cost: { $0?.cost ?? 0 }, read: { url in autoreleasepool { Self.readCard(url).map(CardSummary.init) } })
+        }
+        func lastActivity(of transcript: URL) -> Date? {
+            cache.value("last-activity", of: transcript) { url in autoreleasepool { Self.lastActivity(of: url) } }
+        }
         let transcripts = transcriptFiles(in: paths.claudeProjectsDir)
         var found: [String: Conversation] = [:]
         var readCards = Set<String>()
@@ -92,32 +97,26 @@ public enum ConversationIndex {
                     // Shared copies of a card are the same everywhere; account-bound cards (native Project or
                     // Remote Control workers) exist only with their account and are never offered for continuing.
                     guard !readCards.contains(name), let card = readCard(pair.appending(path: name)) else { continue }
-                    guard !SessionSync.isAccountBoundCard(card) else { continue }
+                    guard !card.accountBound else { continue }
                     readCards.insert(name)
-                    guard card["isArchived"] as? Bool != true,
-                        let session = (card["cliSessionId"] as? String)?.lowercased(), let transcript = transcripts[session],
-                        found[session] == nil
-                    else { continue }
-                    let folder = (card["originCwd"] as? String) ?? (card["cwd"] as? String)
+                    guard !card.archived, let session = card.session, let transcript = transcripts[session], found[session] == nil else { continue }
                     found[session] = Conversation(
-                        kind: .code, sessionID: session, title: title(of: card),
-                        folders: folder.map { $0.contains(SessionSync.scratchFolder) ? [] : [$0] } ?? [],
+                        kind: .code, sessionID: session, title: card.title,
+                        folders: card.folder.map { $0.contains(SessionSync.scratchFolder) ? [] : [$0] } ?? [],
                         lastActivity: lastActivity(of: transcript) ?? .distantPast,
                         transcript: transcript, ownerID: nil,
-                        card: pair.appending(path: name), model: nonEmpty(card["model"]), effort: nonEmpty(card["effort"]))
+                        card: pair.appending(path: name), model: card.model, effort: card.effort)
                 }
             }
             for pair in (try? SessionSync.sessionPairs(dataDirs: [dataDir], folder: CoworkSync.sessionsFolder)) ?? [] {
                 for name in (try? fm.contentsOfDirectory(atPath: pair.path)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
-                    guard let card = readCard(pair.appending(path: name)), card["isArchived"] as? Bool != true,
-                        let session = (card["cliSessionId"] as? String)?.lowercased(), found[session] == nil
+                    guard let card = readCard(pair.appending(path: name)), !card.archived, let session = card.session, found[session] == nil
                     else { continue }
                     // Old releases copied some cards between profiles; only the task with its history on disk counts.
                     let taskFolder = pair.appending(path: String(name.dropLast(".json".count)), directoryHint: .isDirectory)
                     guard let transcript = transcriptFiles(in: taskFolder.appending(path: ".claude/projects"))[session] else { continue }
                     found[session] = Conversation(
-                        kind: .cowork, sessionID: session, title: title(of: card),
-                        folders: (card["userSelectedFolders"] as? [String]) ?? [],
+                        kind: .cowork, sessionID: session, title: card.title, folders: card.selectedFolders,
                         lastActivity: lastActivity(of: transcript) ?? .distantPast,
                         transcript: transcript, ownerID: id, taskFolder: taskFolder)
                 }
@@ -211,7 +210,7 @@ public enum ConversationIndex {
         return last
     }
 
-    private static func nonEmpty(_ value: Any?) -> String? {
+    static func nonEmpty(_ value: Any?) -> String? {
         (value as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 
@@ -253,6 +252,38 @@ public enum ConversationIndex {
             if newest.map({ date > $0 }) ?? true { newest = date }
         }
         return newest ?? SyncFolders.modificationDate(transcript)
+    }
+
+    /// What the list reads from a card.
+    struct CardSummary {
+        var accountBound: Bool
+        var archived: Bool
+        /// `cliSessionId`, lowercased.
+        var session: String?
+        var title: String
+        /// `originCwd`, or else `cwd`.
+        var folder: String?
+        var model: String?
+        var effort: String?
+        /// A Cowork task's `userSelectedFolders`.
+        var selectedFolders: [String]
+
+        init(_ card: [String: Any]) {
+            accountBound = SessionSync.isAccountBoundCard(card)
+            archived = card["isArchived"] as? Bool == true
+            session = (card["cliSessionId"] as? String)?.lowercased()
+            title = ConversationIndex.title(of: card)
+            folder = (card["originCwd"] as? String) ?? (card["cwd"] as? String)
+            model = ConversationIndex.nonEmpty(card["model"])
+            effort = ConversationIndex.nonEmpty(card["effort"])
+            selectedFolders = (card["userSelectedFolders"] as? [String]) ?? []
+        }
+
+        /// Roughly what keeping it takes, in bytes.
+        var cost: Int {
+            let strings = [session, title, folder, model, effort].compactMap { $0 } + selectedFolders
+            return 160 + strings.reduce(0) { $0 + $1.utf8.count + 32 }
+        }
     }
 
     static func readCard(_ url: URL) -> [String: Any]? {

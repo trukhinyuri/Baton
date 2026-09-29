@@ -41,13 +41,15 @@ struct SessionSyncAccountTests {
     }
 
     /// Computer-use app grants and the session's allow rules are what one account granted; another account's window
-    /// starts without them. With the permission mode opt-in the permission fields come along, the grants still don't.
+    /// starts without them. With the permission mode opt-in the mode and the choice of it come along, the grants and
+    /// rules still don't.
     @Test func crossAccountCopyDropsComputerUseGrantsAndPermissionRules() throws {
         let grants =
             #""cuAllowedApps":[{"bundleId":"com.apple.Terminal","displayName":"Terminal","grantedAt":1790000000000,"tier":"full"}],"cuFlagsGrantedAt":1790000000000,"cuFutureGrant":{"x":1}"#
-        let permissions =
-            #""permissionMode":"acceptEdits","bypassChosenInApp":true,"autoChosenInApp":"auto","sessionPermissionUpdates":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"git push:*"}]},{"type":"addDirectories","destination":"session","directories":["/Users/me/lib"]}],"alwaysAllowedReasons":["r"]"#
-        let card = #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),\#(permissions),"customTitle":"T"}"#
+        let mode = #""permissionMode":"acceptEdits","bypassChosenInApp":true,"autoChosenInApp":"auto""#
+        let rules =
+            #""sessionPermissionUpdates":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"git push:*"}]},{"type":"addDirectories","destination":"session","directories":["/Users/me/lib"]}],"alwaysAllowedReasons":["r"]"#
+        let card = #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),\#(mode),\#(rules),"customTitle":"T"}"#
         for optIn in [false, true] {
             let box = try Sandbox()
             let a = try box.pair(box.main, account: Sandbox.accountA)
@@ -58,7 +60,7 @@ struct SessionSyncAccountTests {
 
             _ = try box.sync()
 
-            let kept = optIn ? #",\#(permissions)"# : ""
+            let kept = optIn ? #",\#(mode)"# : ""
             #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)"\#(kept),"customTitle":"T"}"#)
             #expect(box.read(same.appending(path: "local_1.json")) == card, "the same account's window gets it all")
             #expect(try box.sync().changes == 0)
@@ -119,7 +121,8 @@ struct SessionSyncAccountTests {
     }
 
     /// Copies made by earlier releases are the same file everywhere, with the same date. The first one written
-    /// is the original; the others lose what came from its account.
+    /// is the original; the others lose what came from its account. Its computer-use grant and permission mode are
+    /// in both accounts' copies, so which account gave them can't be told: they go from the original too.
     @Test func earlierIdenticalCopiesAreCleanedOnce() throws {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
@@ -132,10 +135,67 @@ struct SessionSyncAccountTests {
 
         let report = try box.sync()
 
-        #expect(report.cardsWritten == 1)
-        #expect(box.read(b.appending(path: "local_1.json")) == Self.card, "the original stays as it is")
+        #expect(report.cardsWritten == 2 && report.grantsRemoved == 2)
+        let original = Self.card.replacingOccurrences(of: #""permissionMode":"bypassPermissions","#, with: "")
+            .replacingOccurrences(of: #""cuGrantFlags":{"clipboardRead":true},"#, with: "")
+        #expect(box.read(b.appending(path: "local_1.json")) == original, "the original keeps everything else")
         #expect(!(box.read(a.appending(path: "local_1.json")) ?? "").contains("bridge-1"))
         #expect(try box.sync().changes == 0)
+    }
+
+    /// Older releases copied computer-use grants and session rules into other accounts. When the session was used
+    /// in the other account since, its copy is the newest; which account gave the grants can't be told from the
+    /// cards, so they go from every copy, once, and a later grant in one account stays there.
+    @Test func grantsOlderReleasesCopiedGoFromEveryAccount() throws {
+        let grants =
+            #""cuAllowedApps":[{"bundleId":"com.apple.Terminal","displayName":"Terminal","grantedAt":1790000000000,"tier":"full"}],"sessionPermissionUpdates":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"git push:*"}]}]"#
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"bridgeSessionIds":["x"],"title":"T"}"#, to: a.appending(path: "local_1.json"),
+            modified: Date().addingTimeInterval(-3_600))
+        try box.write(#"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"T2"}"#, to: b.appending(path: "local_1.json"))
+
+        let report = try box.sync()
+
+        #expect(report.grantsRemoved == 2)
+        #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T2"}"#)
+        #expect(
+            box.read(a.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T2","bridgeSessionIds":["x"]}"#)
+        let list = box.paths.stateDir.appending(path: "cross-account-grants.json")
+        #expect(box.read(list)?.contains("local_1") == true)
+        #expect(try box.sync().changes == 0)
+        // Once every window is closed and no copy has them, they are off the list.
+        _ = try box.sync(propagateDeletions: true)
+        #expect(box.read(list)?.contains("local_1") == false)
+
+        // A grant made again in A stays in A and is not copied to B.
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"T3"}"#, to: a.appending(path: "local_1.json"),
+            modified: Date().addingTimeInterval(60))
+        _ = try box.sync()
+        #expect(box.read(a.appending(path: "local_1.json"))?.contains("git push") == true)
+        #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T3"}"#)
+    }
+
+    /// Values Claude writes into every card allow nothing and are no sign of a copy from another account; a
+    /// permission mode two windows keep by the opt-in isn't either.
+    @Test func defaultsAndKeptModesAreNotTakenOut() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        try box.carryPermissionMode(true)
+        let card =
+            #"{"sessionId":"local_1","permissionMode":"acceptEdits","sessionPermissionUpdates":[],"cuGrantFlags":{"clipboardRead":false},"bypassChosenInApp":false,"title":"T"}"#
+        try box.write(card, to: a.appending(path: "local_1.json"))
+        try box.write(card, to: b.appending(path: "local_1.json"))
+
+        let report = try box.sync()
+
+        #expect(report.grantsRemoved == 0)
+        #expect(box.read(a.appending(path: "local_1.json")) == card)
+        #expect(box.read(box.paths.stateDir.appending(path: "cross-account-grants.json")) == #"{"cards":{},"version":1}"#)
     }
 
     @Test func goldenSanitizedRealCard() throws {

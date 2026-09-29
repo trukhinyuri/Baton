@@ -142,6 +142,24 @@ struct NativeForkCarryTests {
         #expect(fork.box.read(fork.box.paths.carriedFile) == manifest)
     }
 
+    /// Once the copy is older than the clock slack, nothing the old session makes counts: a pair with nothing left
+    /// to carry is remembered and its folders are not walked again, so a carried file the new session removed stays
+    /// removed.
+    @Test func aPairWithNothingLeftIsNotReadAgain() throws {
+        let fork = try DesktopFork()
+        let later = Date().addingTimeInterval(NativeForkCarry.clockSlack + 60)
+        func run() throws -> [NativeForkCarry.Report] { try NativeForkCarry.run(paths: fork.box.paths, dataDirs: [fork.box.main], now: later) }
+        #expect(try run().count == 1)
+        #expect(fork.box.read(fork.box.paths.carriedFile)?.contains("settled") == true)
+        try FileManager.default.removeItem(at: fork.carriedScratch.appending(path: "GUIDE.md"))
+        #expect(try run().isEmpty)
+        #expect(!fork.box.exists(fork.carriedScratch.appending(path: "GUIDE.md")))
+        // Before the slack is over, what the old session makes may still count: the pair is planned again.
+        let soon = try DesktopFork()
+        _ = try soon.run()
+        #expect(soon.box.read(soon.box.paths.carriedFile)?.contains("settled") == false)
+    }
+
     @Test func dryRunWritesNothing() throws {
         let fork = try DesktopFork()
         let report = try #require(try fork.run(dryRun: true).first)

@@ -367,6 +367,21 @@ struct ContinuePlanTests {
         #expect(extras == ["\(first.sessionID).jsonl"], "only one copy on disk")
     }
 
+    /// The user deleted the copy in that window: the sync would remove it again once it opened, so Continue makes a
+    /// new one.
+    @Test func aCopyDeletedThereIsNotReused() throws {
+        let (box, manager, conversation, _) = try setUp()
+        var first = try #require(try manager.plan([conversation], in: "work", mode: .fork).first)
+        try manager.prepare(&first)
+        let pair = try box.pair(box.work, account: Sandbox.accountB)
+        try box.write("1759000000000", to: pair.appending(path: "deleted_local_\(first.sessionID)"))
+
+        var second = try #require(try manager.plan([conversation], in: "work", mode: .fork).first)
+        try manager.prepare(&second)
+
+        #expect(second.sessionID != first.sessionID, "a new copy, not the one deleted there")
+    }
+
     @Test func prepareFailureLeavesNoPartialCopies() async throws {
         let box = try Sandbox()
         try ProfileRegistry(paths: box.paths).save([Profile(id: "work", label: "WORK", email: nil, color: "#1971C2")])

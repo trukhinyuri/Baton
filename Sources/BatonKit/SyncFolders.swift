@@ -27,8 +27,26 @@ enum SyncFolders {
     }
 
     /// Read from the file system each time: `URL` caches resource values, which would hide a write Claude has
-    /// just made.
-    static func modificationDate(_ url: URL) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    /// just made. Of the link itself for a symbolic link, as `attributesOfItem` gives it, but with one `lstat` and no
+    /// extended attributes.
+    static func modificationDate(_ url: URL) -> Date? { modificationTime(url).map(date) }
+
+    /// The modification time to the nanosecond, of the link itself for a symbolic link.
+    static func modificationTime(_ url: URL) -> timespec? {
+        var info = stat()
+        return lstat(url.path, &info) == 0 ? info.st_mtimespec : nil
+    }
+
+    /// The same `Date` as `attributesOfItem` gives for this time.
+    static func date(_ time: timespec) -> Date {
+        Date(timeIntervalSinceReferenceDate: (Double(time.tv_sec) - Date.timeIntervalBetween1970AndReferenceDate) + 1.0e-9 * Double(time.tv_nsec))
+    }
+
+    /// Gives `url` the modification time `time` to the nanosecond. `setAttributes` rounds to the microsecond, which
+    /// can make a copy look newer than the file it was copied from.
+    @discardableResult
+    static func setModificationTime(_ url: URL, _ time: timespec) -> Bool {
+        var times = [timespec(tv_sec: 0, tv_nsec: Int(UTIME_OMIT)), time]
+        return utimensat(AT_FDCWD, url.path, &times, AT_SYMLINK_NOFOLLOW) == 0
     }
 }

@@ -25,6 +25,8 @@ public struct CoworkSync: Sendable {
 
     public let paths: Paths
     public let dataDirs: [URL]
+    /// What was found in each card, kept while its file stays the same.
+    public var cache: ScanCache = .shared
 
     /// The old deletion baseline is no longer read or written; it cannot prove runtime ownership.
     var stateFile: URL { paths.stateDir.appending(path: "cowork-sync.json") }
@@ -47,10 +49,13 @@ public struct CoworkSync: Sendable {
             for url in try FileManager.default.contentsOfDirectory(at: pair, includingPropertiesForKeys: nil) {
                 let name = url.lastPathComponent
                 guard name.hasPrefix("local_"), name.hasSuffix(".json") else { continue }
-                let data = try ScanCache.shared.value("data", of: url) { try Data(contentsOf: $0) }
+                // Only whether the card is account-bound is kept, not its bytes.
+                let bound = try cache.value("account-bound", of: url) { url in
+                    try autoreleasepool { SessionSync.isAccountBound(try Data(contentsOf: url)) }
+                }
                 report.cardsPreserved += 1
                 scopes[name, default: []].insert(SessionSync.scope(of: pair))
-                if SessionSync.isAccountBound(data) { native.insert(name) }
+                if bound { native.insert(name) }
             }
         }
         report.accountBoundCards = native.count

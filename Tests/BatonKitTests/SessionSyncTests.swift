@@ -64,6 +64,21 @@ struct SessionSyncTests {
         #expect(again.changes == 0 && again.wroteInto.isEmpty, "a second run has nothing to do")
     }
 
+    /// A copy gets its card's modification time to the nanosecond, never a later one, so it never reads as newer.
+    @Test func aCopyHasItsCardsTimeToTheNanosecond() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        let card = a.appending(path: "local_1.json")
+        try box.write(#"{"title":"one"}"#, to: card)
+        #expect(SyncFolders.setModificationTime(card, timespec(tv_sec: 1_790_000_000, tv_nsec: 123_456_789)))
+
+        _ = try box.sync()
+
+        let copied = try #require(SyncFolders.modificationTime(b.appending(path: "local_1.json")))
+        #expect(copied.tv_sec == 1_790_000_000 && copied.tv_nsec == 123_456_789)
+    }
+
     @Test func newestCardWinsAndOldCopyIsBackedUp() throws {
         let box = try Sandbox()
         let a = try box.pair(box.main, account: Sandbox.accountA)
@@ -95,6 +110,53 @@ struct SessionSyncTests {
         #expect(full.tombstonesWritten == 1)
         #expect(!box.exists(b.appending(path: "local_x.json")))
         #expect(box.exists(b.appending(path: "deleted_x")))
+    }
+
+    /// A conversation deleted in one window and imported again later in another, through Claude's import or a
+    /// resume link, has a card made after the deletion. It stays, and the old marker goes once no window is open.
+    /// Deleted again, it goes everywhere. A card without its dates counts as made when it was written, if imported.
+    @Test func aSessionImportedAgainAfterItsDeletionStays() throws {
+        let ms = { (date: Date) in String(Int64(date.timeIntervalSince1970 * 1000)) }
+        for dated in [true, false] {
+            let box = try Sandbox()
+            let a = try box.pair(box.main, account: Sandbox.accountA)
+            let b = try box.pair(box.work, account: Sandbox.accountB)
+            let yesterday = Date().addingTimeInterval(-86_400)
+            try box.write(ms(yesterday), to: a.appending(path: "deleted_\(Sandbox.cli)"), modified: yesterday)
+            let dates = dated ? #""createdAt":\#(ms(yesterday.addingTimeInterval(-3_600))),"indexedAt":\#(ms(Date())),"# : ""
+            let card = #"{"sessionId":"local_\#(Sandbox.cli)","cliSessionId":"\#(Sandbox.cli)","cwd":"/repo",\#(dates)"adoptedFromOtherSurface":true}"#
+            try box.write(card, to: b.appending(path: "local_\(Sandbox.cli).json"))
+
+            #expect(try box.sync().cardsWritten == 1)
+            #expect(box.read(a.appending(path: "local_\(Sandbox.cli).json")) == card)
+            let closed = try box.sync(propagateDeletions: true)
+            #expect(closed.cardsRemoved == 0 && closed.tombstonesWritten == 0 && closed.tombstonesRetired == 1)
+            #expect(!box.exists(a.appending(path: "deleted_\(Sandbox.cli)")), "as Claude's own import does")
+            #expect(box.exists(a.appending(path: "local_\(Sandbox.cli).json")) && box.exists(b.appending(path: "local_\(Sandbox.cli).json")))
+
+            let deleted = Date().addingTimeInterval(5)
+            try FileManager.default.removeItem(at: b.appending(path: "local_\(Sandbox.cli).json"))
+            try box.write(ms(deleted), to: b.appending(path: "deleted_\(Sandbox.cli)"))
+            let again = try box.sync(propagateDeletions: true)
+            #expect(again.cardsRemoved == 1 && !box.exists(a.appending(path: "local_\(Sandbox.cli).json")))
+            #expect(box.read(a.appending(path: "deleted_\(Sandbox.cli)")) == ms(deleted), "the marker keeps the time of the deletion")
+        }
+    }
+
+    /// A card used in another window after its session was deleted, but made before that, is still deleted.
+    @Test func aCardMadeBeforeItsDeletionStaysDeleted() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        let hourAgo = Date().addingTimeInterval(-3_600)
+        try box.write(String(Int64(hourAgo.timeIntervalSince1970 * 1000)), to: a.appending(path: "deleted_local_x"))
+        let made = Int64(hourAgo.addingTimeInterval(-86_400).timeIntervalSince1970 * 1000)
+        try box.write(#"{"sessionId":"local_x","createdAt":\#(made),"indexedAt":\#(made),"title":"used since"}"#, to: b.appending(path: "local_x.json"))
+
+        #expect(try box.sync().cardsWritten == 0)
+        let closed = try box.sync(propagateDeletions: true)
+        #expect(closed.cardsRemoved == 1 && closed.tombstonesRetired == 0)
+        #expect(!box.exists(b.appending(path: "local_x.json")))
     }
 
     @Test func archivedSessionsAreMerged() throws {
