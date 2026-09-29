@@ -238,6 +238,30 @@ struct OpenLockOrderTests {
         #expect(windows.started == 1)
     }
 
+    /// open.lock is kept until the copy started shows up, so an open that waited for it in another process, such as a
+    /// Dock launcher's `baton open`, finds the window running instead of starting a second copy on the same data.
+    @Test func anOpenWaitingForTheLockFindsTheWindowStarted() async throws {
+        let box = try Sandbox()
+        let windows = FakeWindows()
+        let manager = try box.closedWorkWindow(windows, launchDelay: 0.3)
+        let openLock = box.paths.stateDir.appending(path: "open.lock")
+        let foundRunning = Flag()
+        let looked = DispatchGroup()
+        manager.whilePreparing = { _ in
+            // Another process's open: a thread of its own opens the lock file itself, so it waits for this one.
+            looked.enter()
+            Thread.detachNewThread {
+                _ = try? FileLock.withLock(openLock, blocking: true) { foundRunning.set(!windows.running.isEmpty) }
+                looked.leave()
+            }
+        }
+
+        try await manager.open("work")
+
+        #expect(await finished(looked, within: 10))
+        #expect(foundRunning.value, "the other open took open.lock before the window it waited for was listed")
+    }
+
     /// A window started from its Dock icon or by the CLI while Baton prepared it is not started again.
     @Test func aWindowStartedWhileBeingPreparedIsNotStartedAgain() async throws {
         let box = try Sandbox()
