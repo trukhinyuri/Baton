@@ -131,28 +131,35 @@ struct ContinueWorkSheet: View {
                 Text(note).font(.caption).foregroundStyle(Color.secondaryText)
             }
 
-            HStack(spacing: 8) {
-                Text("Continue in")
-                Picker("Continue in", selection: $form.destination) {
-                    ForEach(destinations) { status in
-                        Text(destinationTitle(status)).tag(status.id)
+            // Every window it can go to, each with its usage or the limit it is at: nothing to open to compare them.
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 10) {
+                if !destinations.isEmpty {
+                    GridRow(alignment: .firstTextBaseline) {
+                        Text("Continue in")
+                        Picker("Continue in", selection: $form.destination) {
+                            ForEach(destinations) { status in
+                                Text(destinationTitle(status)).tag(status.id)
+                            }
+                        }
+                        .pickerStyle(.radioGroup)
+                        .labelsHidden()
                     }
                 }
-                .labelsHidden()
-                .frame(maxWidth: 360)
-                Spacer()
                 if let selected, selected.kind != .cowork {
-                    Picker("How", selection: $form.mode) {
-                        Text("Automatic").tag(ContinueMode.auto)
-                        Text("Same session").tag(ContinueMode.same)
-                        Text("As a copy").tag(ContinueMode.fork)
+                    GridRow(alignment: .firstTextBaseline) {
+                        Text("How")
+                        Picker("How", selection: $form.mode) {
+                            Text("Automatic").tag(ContinueMode.auto)
+                            Text("Same session").tag(ContinueMode.same)
+                            Text("As a copy").tag(ContinueMode.fork)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize()
+                        .help(
+                            "Automatic continues sessions still open in a running Claude Code process and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session."
+                        )
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .help(
-                        "Automatic continues sessions still open in a running Claude Code process and sessions with a message in the last 10 minutes as a copy, so two windows never write to one session, and others as the same session."
-                    )
                 }
             }
 
@@ -256,7 +263,7 @@ struct ContinueWorkSheet: View {
             }
         }
         .padding(22)
-        .frame(minWidth: 700, idealWidth: 780, minHeight: 540, idealHeight: 590)
+        .frame(minWidth: 700, idealWidth: 780, minHeight: 540, idealHeight: 660)
         .interactiveDismissDisabled(form.working)
         .onAppear {
             model.loadConversations()
