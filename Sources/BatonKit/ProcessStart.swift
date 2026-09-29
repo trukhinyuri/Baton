@@ -65,6 +65,7 @@ public enum CLIDispatch {
         switch args.first {
         case nil, "list", "doctor", "report", "conversations", "rules": true
         case "local-only": args.dropFirst().first == "status" || args.dropFirst().prefix(2) == ["cloud-lock", "status"]
+        case "handover": args.dropFirst().prefix(2) == ["auto", "status"]
         default: false
         }
     }

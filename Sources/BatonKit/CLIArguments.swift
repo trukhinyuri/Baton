@@ -29,6 +29,7 @@ public enum CLIArguments {
         case "conversations": Syntax(flags: ["--all", "--json"])
         case "rule": Syntax(flags: ["--remove"], values: ["--only"], plain: 1...1)
         case "report": Syntax(flags: ["--open"], values: ["--save"])
+        case "handover" where args.dropFirst().first == "auto": Syntax(plain: 2...2)
         case "handover": Syntax(flags: ["--dry-run", "--json"], values: ["--from", "--to"])
         case "continue" where args.dropFirst().first == "--folder":
             Syntax(flags: continueFlags.union(["--new"]), values: ["--folder", "--to", "--since", "--max"])

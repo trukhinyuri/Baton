@@ -66,6 +66,10 @@ final class AppModel: ObservableObject {
     @Published var isConfirmingCloudMoveLock = false
     /// Windows blocked at a limit as of the last reload (see `LimitWatch`).
     @Published private(set) var atLimit: Set<String> = []
+    /// What the limit banner says for a window whose work is being handed over (moving, waiting), by window id.
+    @Published private(set) var handoverLines: [String: String] = [:]
+    /// Windows whose work this app is handing over now.
+    private var handingOver: Set<String> = []
     private let limitWatch = LimitWatch()
 
     let manager: ProfileManager
@@ -180,6 +184,8 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.applyLocalOnlyToClosedWindows() }
         }
         limitWatch.start(self)
+        // Handovers a quit or a crash of Baton left unfinished: a destination to restart once free, a source to close.
+        resumeHandovers()
         // macOS reopens windows at login by starting each app copy without its arguments, possibly before this app.
         manager.recentlyStartedWithoutDataDir(within: 120).forEach(reopenIfStartedWithoutProfile)
     }
@@ -567,6 +573,108 @@ final class AppModel: ObservableObject {
             reload()
             if statusWindow != nil { refreshStatus() }
         }
+    }
+}
+
+// MARK: - Handing work over when a window reaches its limit
+
+extension AppModel {
+    /// The limit banner: a window whose work is being handed over, else an open window at its limit, and its line.
+    var limitBanner: (status: ProfileStatus, line: String)? {
+        if let (id, line) = handoverLines.min(by: { $0.key < $1.key }), let status = statuses.first(where: { $0.id == id }) {
+            return (status, line)
+        }
+        guard let tired = limitReached else { return nil }
+        return (tired, HandoverTrigger.bannerLine(tired, noRoom: manager.noRoomLine(for: tired.id, statuses: statuses)))
+    }
+
+    /// After each reload (`LimitWatch.update`): hands over the work of every open window that has just reached its
+    /// limit while it was used, unless `baton handover auto off` turned that off.
+    func handOverDue(_ statuses: [ProfileStatus]) {
+        guard !isDemo, !manager.isReadOnly else { return }
+        let log = HandoverLog(paths: manager.paths)
+        let due = HandoverTrigger.due(
+            statuses, handled: { log.handled(source: $0, resetsAt: $1) },
+            busy: { self.handingOver.contains($0) || log.inProgress(source: $0) })
+        guard !due.isEmpty, HandoverAuto(paths: manager.paths).isOn else { return }
+        for source in due { handOver(from: source) }
+    }
+
+    /// Hands `source`'s work to the window with the most room (or `destination`), as `baton handover` does: the banner
+    /// says it is moving, then waiting for a busy destination, and the result line shows in the window and as a
+    /// notification. A source left open is closed once nothing works there.
+    func handOver(from source: String, to destination: String? = nil) {
+        guard !isDemo, handingOver.insert(source).inserted else { return }
+        let manager = manager
+        Task {
+            do {
+                let plan = try await Task.detached { try manager.planHandover(from: source, to: destination) }.value
+                guard !plan.picksUpItself else {
+                    handingOver.remove(source)
+                    return
+                }
+                await runHandover(source: source, destination: plan.destination) { progress in
+                    try await manager.handOver(plan, progress: progress)
+                }
+            } catch {
+                // No room, handed over already or elsewhere: the banner says what holds, and the log why.
+                Log.notice("handover", "Didn't hand over window \(source): \(error.localizedDescription)")
+                handingOver.remove(source)
+            }
+        }
+    }
+
+    /// Takes up the handovers Baton left unfinished: one stopped while it started starts over, one waiting for its
+    /// destination waits again, and a source left open is closed once nothing works there.
+    private func resumeHandovers() {
+        guard !isDemo, !manager.isReadOnly else { return }
+        let log = HandoverLog(paths: manager.paths)
+        for entry in log.unfinished() where !handingOver.contains(entry.source) && !log.inProgress(source: entry.source) {
+            let manager = manager, source = entry.source
+            switch entry.state {
+            case "starting":
+                let to = try? manager.restartStoppedHandover(source: source)
+                handOver(from: source, to: to ?? nil)
+            case "waiting":
+                handingOver.insert(source)
+                Task { await runHandover(source: source, destination: entry.destination) { _ in try await manager.finishWaitingHandover(source: source) } }
+            default:
+                Task.detached { _ = try? await manager.watchHandoverSource(source) }
+            }
+        }
+    }
+
+    /// Runs one handover with its line in the banner and its destination's Open button waiting, then shows the result.
+    private func runHandover(
+        source: String, destination: String, _ work: @escaping @Sendable (_ progress: @escaping @Sendable (String) -> Void) async throws -> HandoverResult?
+    ) async {
+        let manager = manager
+        let moving = HandoverText.moving(source: displayLabel(of: source), destination: displayLabel(of: destination))
+        handoverLines[source] = moving
+        Self.announce(moving)
+        let operation = operations.start(nil, window: destination)
+        do {
+            guard var result = try await work({ _ in }) else { throw CancellationError() }
+            if result.state == .waiting {
+                handoverLines[source] = result.line
+                Self.announce(result.line)
+                if let finished = try await manager.finishWaitingHandover(source: source) { result = finished }
+            }
+            handoverLines[source] = nil
+            show(notice: result.line, isWarning: result.isWarning)
+            LimitWatch.notify(title: "\(displayLabel(of: source)) is at its limit", body: result.line, id: "handover-\(source)")
+            if result.state == .done { openWarnings.record(manager.openWarning(of: destination), for: destination) }
+            // Closed as soon as its current work finishes, when Claude Code still worked there at the handover.
+            if !result.sourceClosed { Task.detached { _ = try? await manager.watchHandoverSource(source) } }
+        } catch is CancellationError {
+            handoverLines[source] = nil  // nothing was waiting any more
+        } catch {
+            handoverLines[source] = nil
+            show(notice: "\(displayLabel(of: source))'s work didn't move: \(error.localizedDescription)", isWarning: true)
+        }
+        handingOver.remove(source)
+        operations.finish(operation)
+        reload()
     }
 }
 

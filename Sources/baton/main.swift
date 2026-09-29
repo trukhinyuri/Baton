@@ -58,6 +58,8 @@ let usage = """
                                           one left open at its limit is closed then. Run it again to
                                           go on after an interrupt.
                                           Exit 3: the limit resets within 15 minutes
+      baton handover auto on|off|status   Whether the app does this by itself when an open window
+                                          reaches its limit while you work there (on by default)
       baton rules [--json]                Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
                                           Let only these accounts continue work in the folder and
@@ -517,6 +519,15 @@ do {
             print("Prepared files: \(handoff.folder.path)")
         }
         if let warning = manager.lastOpenWarning { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
+    case "handover" where args.dropFirst().first == "auto":
+        let auto = HandoverAuto(paths: manager.paths)
+        switch args.dropFirst(2).first {
+        case "on": try auto.set(true)
+        case "off": try auto.set(false)
+        case "status": break
+        default: fail("handover auto takes on, off or status")
+        }
+        print("Handing work over by itself when a window reaches its limit: \(auto.isOn ? "on" : "off").")
     case "handover":
         let json = args.contains("--json")
         let dryRun = args.contains("--dry-run")

@@ -246,6 +246,8 @@ baton handover [--from <profile>] [--to <profile>] [--dry-run] [--json]
                                     one left open at its limit is closed then. Run it again to
                                     go on after an interrupt.
                                     Exit 3: the limit resets within 15 minutes
+baton handover auto on|off|status   Whether the app does this by itself when an open window
+                                    reaches its limit while you work there (on by default)
 baton rules [--json]                Show which accounts may continue the work in which folders
 baton rule <folder> --only <email>[,<email>…] | --remove
                                     Let only these accounts continue work in the folder and

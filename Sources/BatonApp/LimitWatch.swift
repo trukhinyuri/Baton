@@ -36,6 +36,7 @@ final class LimitWatch {
         for status in checked.announce { announce(status, model: model) }
         schedule([LimitSchedule.nextRefresh(statuses, now: now), room.nextCheck].compactMap { $0 }.min(), model: model)
         applyPending(model: model)
+        model.handOverDue(statuses)
         return checked.blocked
     }
 
@@ -75,9 +76,13 @@ final class LimitWatch {
         let title = LimitSchedule.roomAgain(status)
         let body = LimitSchedule.roomAgainReason(status)
         model.show(notice: title + ". " + body)
+        Self.notify(title: title, body: body, id: "room-again-\(status.id)")
+    }
+
+    /// A macOS notification, if allowed.
+    static func notify(title: String, body: String, id: String) {
         // Only an installed app bundle may use notifications; `swift run` would stop here.
         guard Bundle.main.bundleURL.pathExtension == "app", Bundle.main.bundleIdentifier != nil else { return }
-        let id = "room-again-\(status.id)"
         // Asks for permission the first time; after that macOS answers with the choice made. Denied: the notice above stays.
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, _ in
             guard granted else { return }

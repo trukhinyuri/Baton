@@ -263,36 +263,19 @@ struct EmptyHint: View {
     }
 }
 
+/// A window at its limit, in one line: that its work is moving and where, that it waits for a busy window, that no
+/// window has room, or that it picks its work up by itself soon. Nothing to choose: the work follows by itself.
 struct LimitBanner: View {
-    let tired: ProfileStatus
-    /// The window to name on the button; `nil` for a plain “Continue work…”.
-    let best: String?
-    /// Another window has room, so the banner offers to continue there; without one it only says when this one resets.
-    var canContinue = true
-    var note = ""
-    let action: () -> Void
-
-    /// " It resets at 02:10.", " It resets tomorrow at 02:10." or " It resets Wed at about 05:00."; empty when the
-    /// reset time isn't known.
-    private var resets: String { LimitText.bindingReset(tired.limits).map { " It \($0)." } ?? "" }
-
-    /// " as of 22:12" when only a sample says so.
-    private var asOf: String { LimitText.asOf(tired.limits).map { " \($0)" } ?? "" }
+    let line: String
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.orange).accessibilityHidden(true)
-            Text("Claude \(tired.displayLabel) is at its limit\(asOf).\(resets)")
+            Text(line)
                 .font(.callout.weight(.medium))
-            Spacer()
-            if !note.isEmpty {
-                Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(Color.secondaryText)
-            }
-            if canContinue {
-                Button(best.map { "Continue in \($0)…" } ?? "Continue work…", action: action)
-            } else {
-                Text("No other window has room now").font(.caption).foregroundStyle(Color.secondaryText)
-            }
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.12)))
@@ -342,17 +325,10 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let tired = model.limitReached {
-                // With folder rules, where work may continue depends on the work; the sheet offers only allowed windows.
-                // The button opens it on the session that hit the limit, headed for the window it names.
-                let best = model.bestDestination(excluding: tired.id)
-                let named = model.folderRules?.isEmpty == true ? best : nil
-                LimitBanner(
-                    tired: tired, best: named.map(model.buttonLabel(of:)), canContinue: best != nil,
-                    note: named.map(model.staleNote) ?? ""
-                ) { model.continueWork(from: tired.id, to: best) }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 10)
+            if let banner = model.limitBanner {
+                LimitBanner(line: banner.line)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
             }
             if let notice = model.notice {
                 NoticeBanner(text: notice, isWarning: model.noticeIsWarning) { model.dismissNotice() }
