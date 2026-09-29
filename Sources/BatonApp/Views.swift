@@ -445,7 +445,7 @@ struct ContentView: View {
             if let message = model.busyMessage {
                 ProgressView().controlSize(.small)
                 Text(message)
-            } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning ?? model.installWarning {
+            } else if let problem = model.registryError ?? model.syncError ?? model.setupWarning ?? model.installWarning ?? model.withheldNotice {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.warningText).accessibilityHidden(true)
                 // In full: these ask for something, and a tooltip is out of reach of the keyboard. The buttons keep
                 // their size, so the text takes the width they leave and wraps.

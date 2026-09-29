@@ -307,6 +307,7 @@ do {
         print(
             "\(r.sessions.accountBoundCards + r.cowork.accountBoundCards) account-linked cards scoped · \(r.sessions.ambiguousAccountBoundCards + r.cowork.ambiguousAccountBoundCards) ambiguous cards left untouched"
         )
+        for line in manager.withheldLines(r) { print(line) }
         let carried = r.carried.reduce(0) { $0 + $1.added.count }
         if carried > 0 { print("\(carried) files carried into \(r.carried.count) sessions Claude Desktop continued as a copy") }
         if dryRun { print("Nothing was changed.") }
@@ -365,6 +366,13 @@ do {
             for row in manager.localOnlyStatus() { print("Claude \(manager.displayLabel(of: row.window)): \(describe(row.status))") }
             print(describe(manager.cloudMoveLock.status()))
             for line in manager.remoteControlAmbiguities() { print(line) }
+            // What the next sync would keep out of windows, counted without writing anything.
+            if let preview = try? manager.syncSessions(dryRun: true) {
+                for summary in preview.withheldSummary {
+                    print("Folder rule \(summary.rule): \(summary.sessions) sessions kept out of \(summary.windows.count) windows")
+                }
+                for line in manager.withheldLines(preview) { print("  \(line)") }
+            }
             for change in manager.autoResume.changes() {
                 print(
                     "Auto-continue turned off by Baton in Claude \(manager.displayLabel(of: change.window)) for "

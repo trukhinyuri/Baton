@@ -60,6 +60,61 @@ struct SessionSyncRulesTests {
         #expect(try box.sync().changes == 0)
     }
 
+    @Test func withheldCardsAreReportedWithRuleAndWindows() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        let other = try box.pair(box.work, account: Sandbox.accountB, org: "org-2")
+        try FolderRules(paths: box.paths).set("/employer", accounts: ["me@employer.example"])
+        try box.setEmail("me@employer.example", in: box.main, account: Sandbox.accountA)
+        try box.setEmail("me@home.example", in: box.work, account: Sandbox.accountB)
+        try box.write(Self.employerCard, to: a.appending(path: "local_1.json"))
+        try box.write(#"{"sessionId":"local_2","cwd":"/employer/site"}"#, to: a.appending(path: "local_2.json"))
+        try box.write(#"{"sessionId":"local_3","cwd":"/elsewhere"}"#, to: a.appending(path: "local_3.json"))
+
+        let report = try box.sync()
+
+        #expect(!box.exists(b.appending(path: "local_1.json")) && !box.exists(other.appending(path: "local_2.json")))
+        #expect(report.withheldByRule == 4, "two cards, each kept out of two folders of the work window")
+        let work = box.work.standardizedFileURL.path
+        #expect(
+            report.withheld == [
+                SessionSync.WithheldCard(
+                    card: "local_1.json", transcript: Sandbox.cli, folder: "/employer/app", rule: "/employer",
+                    accounts: ["me@employer.example"], windows: [work]),
+                SessionSync.WithheldCard(
+                    card: "local_2.json", transcript: nil, folder: "/employer/site", rule: "/employer",
+                    accounts: ["me@employer.example"], windows: [work]),
+            ])
+        let sync = SyncReport(sessions: report, cowork: CoworkSync.Report())
+        #expect(sync.withheldSummary.count == 1)
+        #expect(sync.withheldSummary.first?.rule == "/employer" && sync.withheldSummary.first?.sessions == 2)
+        #expect(sync.withheldSummary.first?.windows == [work])
+        #expect(
+            sync.withheldLines(label: { $0 == work ? "WORK" : "?" }) == ["A folder rule keeps 2 sessions in …/employer out of WORK. baton rules shows it."])
+        #expect(SyncReport(sessions: SessionSync.Report(), cowork: CoworkSync.Report()).withheldLines(label: { $0 }).isEmpty, "no rule, no line")
+    }
+
+    @Test func retiredByRuleIsReported() throws {
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        try box.setEmail("me@employer.example", in: box.main, account: Sandbox.accountA)
+        try box.setEmail("me@home.example", in: box.work, account: Sandbox.accountB)
+        try box.write(Self.employerCard, to: a.appending(path: "local_1.json"))
+        try box.write(Self.employerCard, to: b.appending(path: "local_1.json"))
+        try FolderRules(paths: box.paths).set("/employer", accounts: ["me@employer.example"])
+
+        let report = try box.sync { $0.isWindowOpen = { _ in false } }
+
+        #expect(report.retiredByRule == 1 && report.withheldByRule == 0)
+        #expect(report.withheld.map(\.card) == ["local_1.json"])
+        #expect(report.withheld.first?.windows == [box.work.standardizedFileURL.path])
+        #expect(report.withheld.first?.rule == "/employer")
+        let lines = SyncReport(sessions: report, cowork: CoworkSync.Report()).withheldLines(label: { _ in "WORK" })
+        #expect(lines == ["A folder rule keeps 1 session in …/employer out of WORK. baton rules shows it."])
+    }
+
     /// The audit probe as it was written: neither window has a known email.
     @Test func ruleCoveredCardIsNotSharedWhenNoEmailIsKnown() throws {
         let box = try Sandbox()

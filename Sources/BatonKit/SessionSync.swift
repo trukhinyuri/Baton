@@ -48,6 +48,8 @@ public struct SessionSync: Sendable {
         public var withheldByRule = 0
         /// Copies removed from a closed window whose account a folder rule does not allow.
         public var retiredByRule = 0
+        /// Every card a folder rule kept out of a window in this run, withheld or retired, by card name.
+        public var withheld: [WithheldCard] = []
         /// Copies left as they are because a running `claude` process has their session open.
         public var keptLive = 0
         /// "Session deleted" markers removed after every window had them for 90 days.
@@ -67,6 +69,22 @@ public struct SessionSync: Sendable {
             cardsWritten + cardsRemoved + tombstonesWritten + duplicatesRetired + archiveIndexesWritten + retiredByRule + tombstonesExpired
                 + tombstonesRetired
         }
+    }
+
+    /// A card a folder rule keeps out of some windows.
+    public struct WithheldCard: Equatable, Sendable {
+        /// `local_<id>.json`.
+        public var card: String
+        /// The Claude Code conversation (`cliSessionId`).
+        public var transcript: String?
+        /// The card's folder the rule covers.
+        public var folder: String
+        /// The rule's folder.
+        public var rule: String
+        /// The accounts (emails) the rule allows.
+        public var accounts: [String]
+        /// The data directories (standardized paths) the card was kept out of.
+        public var windows: [String]
     }
 
     static let sessionsFolder = "claude-code-sessions"
@@ -244,6 +262,17 @@ public struct SessionSync: Sendable {
         }
         // Each window's email is read once, and only when a rule covers a card.
         var emails: [String: String?] = [:]
+        var withheld: [String: WithheldCard] = [:]
+        func withhold(_ name: String, _ card: Card, from dataDir: URL) {
+            guard let allowed = FolderRules.allowedAccounts(for: card.facts.folders, in: rules), let rule = allowed.rules.first else { return }
+            let window = dataDir.standardizedFileURL.path
+            if withheld[name] == nil {
+                withheld[name] = WithheldCard(
+                    card: name, transcript: card.facts.transcript, folder: card.facts.folders.first(where: rule.covers) ?? rule.folder,
+                    rule: rule.folder, accounts: allowed.accounts.sorted(), windows: [])
+            }
+            if withheld[name]?.windows.contains(window) == false { withheld[name]?.windows.append(window) }
+        }
         func allows(_ card: Card, in pair: URL) -> Bool {
             guard let allowed = FolderRules.allowedAccounts(for: card.facts.folders, in: rules) else { return true }
             let dataDir = dataDir(of: pair), account = pair.deletingLastPathComponent().lastPathComponent
@@ -371,7 +400,11 @@ public struct SessionSync: Sendable {
                 // Marked somewhere but reached nowhere: shared as an ordinary session, without the Remote Control keys.
                 let released = decided.released.contains(name)
                 if !allows(card, in: pair) {
-                    guard present.contains(name) else { report.withheldByRule += 1; continue }
+                    guard present.contains(name) else {
+                        report.withheldByRule += 1
+                        withhold(name, card, from: dataDir)
+                        continue
+                    }
                     // Retire a copy only where Claude can't be holding it, and only once it is safe elsewhere.
                     guard !windowOpen, holders[name, default: []].contains(where: { $0 != pair && allows(card, in: $0) }) else { continue }
                     keepBytes(of: name, at: target)
@@ -381,6 +414,7 @@ public struct SessionSync: Sendable {
                     }
                     present.remove(name)
                     report.retiredByRule += 1
+                    withhold(name, card, from: dataDir)
                     continue
                 }
                 if !present.contains(name), let transcript = card.facts.transcript, heldTranscripts.contains(transcript) { continue }
@@ -522,6 +556,11 @@ public struct SessionSync: Sendable {
                 report.tombstonesExpired += 1
             }
         }
+        report.withheld = withheld.values.map { card in
+            var card = card
+            card.windows.sort()
+            return card
+        }.sorted { $0.card < $1.card }
         if !dryRun {
             if nextBaselines.lists != baselines.lists { try nextBaselines.save(to: baselineFile) }
             // Unchanged when no card was read again and no copy newly found to match.

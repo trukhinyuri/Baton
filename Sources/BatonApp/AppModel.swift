@@ -52,6 +52,8 @@ final class AppModel: ObservableObject {
     /// Each window's warning from the last time an open action started it (`ProfileManager.openWarning(of:)`).
     @Published private var openWarnings = OpenWarnings()
     @Published var pendingRemoval: ProfileStatus?
+    /// What folder rules kept out of windows in the last sync, for the footer (`ProfileManager.withheldLines`).
+    @Published private(set) var withheldNotice: String?
     /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
     @Published private(set) var installWarning: String?
     /// Which accounts may continue work in which folders; `nil` if the rules file can't be read.
@@ -460,9 +462,11 @@ final class AppModel: ObservableObject {
                     if asked { await MainActor.run { self.show(notice: SyncReport.notice(nil)) } }
                     return
                 }
+                let withheld = manager.withheldLines(report)
                 await MainActor.run {
                     self.lastSync = Date()
                     self.lastSyncReport = report
+                    self.withheldNotice = withheld.isEmpty ? nil : withheld.joined(separator: " ")
                     self.lastSyncChanges = report.changes
                     self.syncError = nil
                     if asked { self.show(notice: SyncReport.notice(report)) }

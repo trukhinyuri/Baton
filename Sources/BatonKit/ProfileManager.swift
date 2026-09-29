@@ -115,6 +115,27 @@ public struct SyncReport: Equatable, Sendable {
     /// What was carried into sessions Claude Desktop copied itself.
     public var carried: [NativeForkCarry.Report] = []
     public var changes: Int { sessions.changes + cowork.changes + carried.reduce(0) { $0 + $1.changes } }
+
+    /// What folder rules kept out of windows, per rule: its folder, how many sessions, and the windows (standardized
+    /// data directory paths) they were kept out of. Sorted by folder.
+    public var withheldSummary: [(rule: String, sessions: Int, windows: [String])] {
+        Dictionary(grouping: sessions.withheld, by: \.rule).map { rule, cards in
+            (rule, Set(cards.map(\.card)).count, Array(Set(cards.flatMap(\.windows))).sorted())
+        }.sorted { $0.rule < $1.rule }
+    }
+
+    /// One line per rule: "A folder rule keeps 19 sessions in …/AcmeAssistant out of PAY, VIR and (main). baton
+    /// rules shows it." `label` names a window by its data directory path, `windowOrder` sorts them.
+    public func withheldLines(label: (String) -> String, windowOrder: [String] = []) -> [String] {
+        withheldSummary.map { summary in
+            let ordered = summary.windows.sorted { (windowOrder.firstIndex(of: $0) ?? .max, $0) < (windowOrder.firstIndex(of: $1) ?? .max, $1) }
+            let names = ordered.map(label)
+            let list = names.count > 1 ? names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1] : names.joined()
+            let folder = "…/" + (summary.rule as NSString).lastPathComponent
+            let count = summary.sessions == 1 ? "1 session" : "\(summary.sessions) sessions"
+            return "A folder rule keeps \(count) in \(folder) out of \(list). baton rules shows it."
+        }
+    }
 }
 
 /// Creates, opens and removes profiles. Every operation is local to this Mac.
@@ -210,6 +231,15 @@ public final class ProfileManager: @unchecked Sendable {
     /// `"MAIN"` or the profile's label.
     public func label(of windowID: String) -> String {
         windowID == "main" ? "MAIN" : profiles.first { $0.id == windowID }?.label ?? windowID
+    }
+
+    /// `report.withheldLines` with this Mac's window names, profiles in the order of the list and main last.
+    public func withheldLines(_ report: SyncReport) -> [String] {
+        let windows = windows
+        let order = (windows.filter { $0.id != "main" } + windows.filter { $0.id == "main" }).map(\.dataDir.standardizedFileURL.path)
+        return report.withheldLines(
+            label: { path in windows.first { $0.dataDir.standardizedFileURL.path == path }.map { displayLabel(of: $0.id) } ?? path },
+            windowOrder: order)
     }
 
     /// Workers Remote Control reaches in several windows, which Baton leaves alone, one line each. Reads only.
