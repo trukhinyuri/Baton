@@ -611,6 +611,34 @@ public enum DestinationRanking {
     }
 }
 
+extension DestinationRanking {
+    /// How far, in points of `4 × weekly + five-hour`, a closed or idle window may trail a busy best one and still be
+    /// chosen for a handover: restarting a busy window has to wait until nothing works there.
+    public static let quietPreference = 40
+
+    /// Where a window's work goes when it reaches its limit: among the signed-in windows with room other than
+    /// `source`, those whose account every folder rule in `required` allows (one entry per session that has to
+    /// resume, `nil` where no rule applies), else those allowed for the most of them; then by `ranked`'s order. A
+    /// closed or idle window within `quietPreference` points of the best is taken over a busy best.
+    public static func forHandover(
+        _ statuses: [ProfileStatus], excluding source: String, required: [Set<String>?] = [],
+        activity: (String) -> WindowActivity, now: Date = Date()
+    ) -> String? {
+        let ranked = ranked(statuses, excluding: source, now: now)
+        let allowed = { (status: ProfileStatus) in required.filter { isAllowed(status, accounts: $0) }.count }
+        let most = ranked.map(allowed).max() ?? 0
+        let candidates = ranked.filter { allowed($0) == most }
+        guard let best = candidates.first else { return nil }
+        guard activity(best.id).isBusy else { return best.id }
+        let top = key(best.limits, now: now)
+        let quiet = candidates.first { status in
+            let found = key(status.limits, now: now)
+            return !activity(status.id).isBusy && found.0 == top.0 && found.1 == top.1 && found.2 - top.2 <= quietPreference
+        }
+        return quiet?.id ?? best.id
+    }
+}
+
 /// “now”, “12m ago”, “5h ago”, “3d ago”.
 public func relativeAge(since date: Date, now: Date = Date()) -> String {
     let seconds = max(0, Int(now.timeIntervalSince(date)))
