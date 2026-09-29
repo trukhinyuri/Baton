@@ -123,7 +123,7 @@ func describe(_ status: LocalOnly.Status) -> String {
     switch status {
     case .on: "Local only: Remote Control off for new sessions"
     case .off: "Local only off"
-    case .pending: "Local only applies when this window next starts"
+    case .pending: "Local only applies once this window is closed while Baton runs, or when Baton opens it"
     case .notSupported: "Local only not available in this Claude Desktop version"
     }
 }

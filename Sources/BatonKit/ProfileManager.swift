@@ -157,6 +157,11 @@ public final class ProfileManager: @unchecked Sendable {
         self.signInRouting = SignInRouting(paths: paths)
         self.cliPath = cliPath
         self.isReadOnly = readOnly
+        let isThisUser = paths.home.standardizedFileURL.path == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        managedPreferences =
+            isThisUser
+            ? URL(fileURLWithPath: "/Library/Managed Preferences", isDirectory: true)
+            : paths.home.appending(path: "Library/Managed Preferences", directoryHint: .isDirectory)
     }
 
     /// Throws in demo mode, before anything is changed.
@@ -238,8 +243,13 @@ public final class ProfileManager: @unchecked Sendable {
         var warnings: [String] = []
         do { _ = try signInRouting.restoreMainIfIdle(allProfileIDs: profiles.map(\.id)) } catch { warnings.append(error.localizedDescription) }
         if let warning = claudeVersionWarning { warnings.append(warning) }
+        warnings += ManagedPolicy.warnings(in: managedPreferences, user: NSUserName())
         return warnings
     }
+
+    /// Where an organization's managed preferences for Claude Desktop are (see `ManagedPolicy`). A manager for another
+    /// home, as in tests, reads that home's `Library/Managed Preferences` instead of this Mac's.
+    var managedPreferences: URL
 
     /// The profile whose window currently receives sign-in links, if any.
     public var profileSigningIn: String? { signInRouting.state?.profileID }
@@ -789,6 +799,23 @@ public final class ProfileManager: @unchecked Sendable {
     /// window right away and to every window before it starts.
     public var localOnly: LocalOnly { LocalOnly(paths: paths, isRunning: { self.isWindowOpen($0) }) }
 
+    /// Applies Local only to every closed window still waiting for it (`LocalOnly.Status.pending`), so a window started
+    /// from the Dock or Spotlight rather than through Baton starts with it too. It takes open.lock, so it never runs
+    /// while sync.lock is held (see the lock order).
+    /// - Returns: a line for each window it couldn't apply to.
+    @discardableResult
+    public func applyLocalOnlyToClosedWindows() -> [String] {
+        guard !isReadOnly else { return [] }
+        let localOnly = localOnly
+        var problems: [String] = []
+        for window in windows.map(\.id) where localOnly.status(window: window) == .pending && !isWindowOpen(window) {
+            do { _ = try localOnly.reconcile(window: window) } catch {
+                problems.append("Local only could not be applied to Claude \(displayLabel(of: window)): \(error.localizedDescription)")
+            }
+        }
+        return problems
+    }
+
     /// Each window's Local only status, MAIN first, for the window list and `doctor`.
     public func localOnlyStatus() -> [(window: String, label: String, status: LocalOnly.Status)] {
         let localOnly = localOnly
@@ -938,7 +965,16 @@ public final class ProfileManager: @unchecked Sendable {
     @discardableResult
     public func syncSessions(dryRun: Bool = false) throws -> SyncReport? {
         try ensureWritable()
-        return try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: false) {
+        let report = try shareSessions(dryRun: dryRun)
+        // Once sync.lock is let go: Local only takes open.lock, which comes before it in the lock order.
+        if !dryRun, report != nil {
+            for problem in applyLocalOnlyToClosedWindows() { Log.error("local-only", problem) }
+        }
+        return report
+    }
+
+    private func shareSessions(dryRun: Bool) throws -> SyncReport? {
+        try FileLock.withLock(paths.stateDir.appending(path: "sync.lock"), blocking: false) {
             if !dryRun { createSessionFolders() }
             let propagateDeletions = !isAnyClaudeRunning
             var sync = SessionSync(paths: paths, dataDirs: dataDirs)
@@ -1163,6 +1199,41 @@ public final class ProfileManager: @unchecked Sendable {
         guard (try? process.run()) != nil else { return -1 }
         process.waitUntilExit()
         return process.terminationStatus
+    }
+}
+
+/// Claude Desktop's managed preferences, which an organization sets on its Macs through a configuration profile.
+/// Baton only reads them, and says when one of them concerns what it does.
+enum ManagedPolicy {
+    static let domain = "com.anthropic.claudefordesktop"
+
+    /// The preferences set to true for the whole Mac or for `user`.
+    static func enabled(in folder: URL, user: String) -> Set<String> {
+        var keys = Set<String>()
+        for file in [folder.appending(path: "\(domain).plist"), folder.appending(path: "\(user)/\(domain).plist")] {
+            guard let data = try? Data(contentsOf: file),
+                let values = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+            else { continue }
+            for (key, value) in values where (value as? Bool) == true { keys.insert(key) }
+        }
+        return keys
+    }
+
+    /// A line for each managed preference that concerns Baton; empty when none is set.
+    static func warnings(in folder: URL, user: String) -> [String] {
+        let set = enabled(in: folder, user: user)
+        var warnings: [String] = []
+        if set.contains("disableMultiAccount") {
+            warnings.append(
+                "Your organization set Claude Desktop on this Mac to one account at a time (the managed policy "
+                    + "“Single account only”). Check with them before you sign in to other subscriptions here.")
+        }
+        if set.contains("disableDeepLinkRegistration") {
+            warnings.append(
+                "Your organization turned off claude:// links in Claude Desktop on this Mac, so Continue can't open "
+                    + "sessions in another window for you. Open them from that window's sidebar instead.")
+        }
+        return warnings
     }
 }
 

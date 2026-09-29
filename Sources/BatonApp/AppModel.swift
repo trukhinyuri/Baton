@@ -49,6 +49,7 @@ final class AppModel: ObservableObject {
     /// Profiles whose window was open and not yet signed in at the last check.
     private var awaitingSignIn: Set<String> = []
     private var launchObserver: NSObjectProtocol?
+    private var quitObserver: NSObjectProtocol?
 
     init() {
         if !isDemo { Self.handOverToRunningCopy() }
@@ -126,6 +127,14 @@ final class AppModel: ObservableObject {
             else { return }
             Task { @MainActor in self?.reopenIfStartedWithoutProfile(pid) }
         }
+        // A window that quits gets Local only right away, before it is started again from the Dock or Spotlight.
+        quitObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier == ClaudeVersion.bundleIdentifier
+            else { return }
+            Task { @MainActor in self?.applyLocalOnlyToClosedWindows() }
+        }
         limitWatch.start(self)
         // macOS reopens windows at login by starting each app copy without its arguments, possibly before this app.
         manager.recentlyStartedWithoutDataDir(within: 120).forEach(reopenIfStartedWithoutProfile)
@@ -195,6 +204,11 @@ final class AppModel: ObservableObject {
         guard !isDemo else { return }
         let manager = manager
         run("Restarting Claude \(displayLabel(of: id))…") { try await manager.restart(id) }
+    }
+
+    private func applyLocalOnlyToClosedWindows() {
+        let manager = manager
+        Task.detached { for problem in manager.applyLocalOnlyToClosedWindows() { Log.error("local-only", problem) } }
     }
 
     private func remember(_ message: String?) {
