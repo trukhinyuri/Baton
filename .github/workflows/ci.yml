@@ -26,6 +26,8 @@ jobs:
             xcode: "26.3"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Select Xcode ${{ matrix.xcode }}
         run: |
           sudo xcode-select -s "/Applications/Xcode_${{ matrix.xcode }}.app" || { ls -d /Applications/Xcode*.app; exit 1; }
@@ -42,6 +44,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.3.app && swift --version
       - name: Rosetta
@@ -64,6 +68,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.3.app && swift --version
       - name: Install leveldb
@@ -79,6 +85,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Docs
         run: scripts/check-docs.sh
       - name: Repository files
