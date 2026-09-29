@@ -269,6 +269,8 @@ struct ContinueWorkSheet: View {
             model.loadConversations()
             chooseDefaults()
             refreshPlan()
+            // Demo mode's picture of the offer to wait: it never looks at real limits, so it is handed one.
+            if let offer = model.demoOffer { form.offer = offer }
         }
         .onDisappear { form.isGone = true }
         .onChange(of: form.search) { form.selection = ConversationIndex.selection(form.selection, in: filtered) }
