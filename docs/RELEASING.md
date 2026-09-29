@@ -84,7 +84,10 @@ before `1.0.0`.
    their entry over: rename `## 1.0.0-rc.1 — 2026-09-29` to `## 1.0.0 — <date>`, fold in any later candidate's
    entries and replace the release-candidate line with what changed since. Otherwise the release, and the Homebrew users
    the tap moves to it, get none of the 1.0 changes and none of the upgrade notes.
-2. Check the release title for the version in `docs/launch/repo-metadata.md` and the workflow's `case`.
+2. Check the release title for the version in `docs/launch/repo-metadata.md` and the workflow's `case`. Update the
+   README's [Download](../README.md#download) section for the new version: the ZIP's name in the steps and the
+   commands, and, for the first signed release, drop the release-candidate wording and the **Open Anyway** step there,
+   and the note under Homebrew that the command fails until 1.0.
 3. Make sure the screenshots in `docs/images` show the current app: after `make app`, run `scripts/screenshots.sh`,
    which draws them from the sample data ([TESTING.md](TESTING.md#checking-a-build)), and look at each one.
 4. Run the green bar locally: `make test`, `swift build -Xswiftc -warnings-as-errors`,
