@@ -144,13 +144,30 @@ struct ProfileHintsTests {
         #expect(Profile.emailHint("me@gmail") == "Enter the full email address, like you@example.com.")
     }
 
+    /// While the address is typed, the hint waits for an “@”; once the field is left, it shows for any address.
+    @Test func theEmailHintWaitsWhileTheAddressIsTyped() {
+        #expect(Profile.emailHint("a", isTyping: true) == nil)
+        #expect(Profile.emailHint("alex", isTyping: true) == nil)
+        #expect(Profile.emailHint("alex@work", isTyping: true) == "Enter the full email address, like you@example.com.")
+        #expect(Profile.emailHint("alex") == "Enter the full email address, like you@example.com.")
+        #expect(Profile.emailHint("alex@work.example", isTyping: true) == nil)
+    }
+
     @Test func saysWhyALabelIsNotAccepted() {
         #expect(Profile.labelHint("", taken: []) == nil)
         #expect(Profile.labelHint("TEAM-2", taken: []) == nil)
         #expect(Profile.labelHint("WORK TEAM", taken: []) == "Use 1–8 letters, digits, “-” or “_”.")
         #expect(Profile.labelHint("A.B", taken: []) == "Use 1–8 letters, digits, “-” or “_”.")
         #expect(Profile.labelHint("WORK", taken: ["work"]) == "Already used by another subscription.")
-        #expect(Profile.labelHint("MAIN", taken: []) == "Names the main Claude.")
-        #expect(Profile.labelHint("CLAUDE", taken: []) == "Names the main Claude.")
+        #expect(Profile.labelHint("MAIN", taken: []) == "MAIN is reserved for the main Claude window.")
+        #expect(Profile.labelHint("claude", taken: []) == "CLAUDE is reserved for the main Claude window.")
+    }
+
+    /// A label emptied by hand holds Create and Open back, so it says a label is needed; the empty field of a new
+    /// sheet says nothing yet.
+    @Test func anEmptiedLabelSaysOneIsNeeded() {
+        #expect(Profile.labelHint("", taken: [], isEdited: false) == nil)
+        #expect(Profile.labelHint("", taken: [], isEdited: true) == "Enter a Dock label: 1–8 letters, digits, “-” or “_”.")
+        #expect(Profile.labelHint("WORK", taken: [], isEdited: true) == nil)
     }
 }
