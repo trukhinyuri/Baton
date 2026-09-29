@@ -33,8 +33,8 @@ see [Release candidates](#release-candidates).
 
 ## Repository settings
 
-GitHub keeps these in the repository's settings, not in a file, so no script can check them. Go through the list once,
-before the first tag, and again after any change to the repository:
+GitHub keeps these in the repository's settings, not in a file, so only the name is checked, by the release workflow.
+Go through the list once, before the first tag, and again after any change to the repository:
 
 - [ ] **Renamed** to `trukhinyuri/Baton` (**Settings → General**); `gh repo view trukhinyuri/Baton` finds it.
 - [ ] **Private vulnerability reporting on** (**Settings → Advanced Security → Private vulnerability reporting →
