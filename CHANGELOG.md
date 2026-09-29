@@ -62,7 +62,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 
 - **Local only**, on by default, turns off two Remote Control settings in every managed window, the main one included: the default for new sessions and, where Claude has it, staying reachable. It writes them only while that window is closed, after a dated backup, and turning it off restores the previous values. A running window shows *pending*, and a Claude version without these settings shows *not supported* and gets no write
 - Local only reaches windows started outside Baton too, such as the main Claude opened from the Dock: it is applied to every closed window after each sync and as soon as a Claude window quits. A window it can't be applied to is reported once, not after every sync
-- `baton local-only on|off|status`, a global and per-profile switch in the app, and a badge on each window
+- `baton local-only on|off|status` for every window or one of them; the app's window status shows each window's Local only state
 - An optional setting stops the agent from moving a session to the cloud (`permissions.deny` in `~/.claude/settings.json`), written only when you turn it on
 
 ### Report a problem and diagnostics
@@ -96,7 +96,6 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - A launcher that fails shows why in an alert and opens nothing. Baton run from Downloads, or from the temporary copy macOS makes of a downloaded app, never writes that place into the launchers, and its window asks you to move Baton to Applications
 - A settings file linked into place, say from a dotfiles folder, stays a link: Local only, the cloud move lock and Auto-continue write the file it leads to, keep its permissions and back up its content. The settings shared into a subscription before it starts go through a link only when it leads inside that subscription's own data; one that leads anywhere else, such as to the main app's settings, is left as it is
 - An Add that fails halfway removes what it made, so trying again keeps the same name, and a partial copy of a Claude Code build left by a failed copy or a force quit is removed
-
 - Creating profiles at the same time from the app and the CLI keeps both, and removing a profile refuses while its window is running instead of quitting it
 - Only the current and the previous downloaded Claude Code build are kept in each profile
 - The app warns when a second copy of it is installed, since two copies would each run their own sync
