@@ -353,6 +353,35 @@ struct HandoverPlanTests {
         #expect(result.line.contains("(main) can't resume it by itself — it's open there: “Fix CI”"), "\(result.line)")
     }
 
+    @Test func chosenDestinationAtItsLimitIsRefused() throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Armed")
+        try scene.armed([S.a])
+        var statuses = scene.statuses
+        let hit = LimitHit(kind: .fiveHour, at: scene.now.addingTimeInterval(-300), resetsAt: scene.reset, session: "limit")
+        statuses[0].usage = Usage(fiveHour: 100, week: 10, sampledAt: scene.now)
+        statuses[0].limits = Limits(samples: [UsageSample(at: scene.now.addingTimeInterval(-600), fiveHour: 90, week: 10)], hits: [hit])
+
+        #expect(throws: HandoverError.destinationAtLimit("(main)")) {
+            try scene.manager.planHandover(from: "work", to: "main", statuses: statuses, now: scene.now)
+        }
+    }
+
+    @Test func busySourceKeepsArmedCutSessionsForItsReset() throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Armed")
+        try scene.session(S.b, title: "Live")
+        try scene.armed([S.a])
+        scene.world.start("work")
+        scene.world.work(S.b, in: "work")
+
+        let plan = try scene.plan()
+
+        #expect(plan.resumeInSource.map(\.transcript) == [S.a])
+        #expect(plan.leftovers.contains(.resumeInSource(count: 1)))
+        #expect(HandoverSummary(plan: plan, labels: { $0 }).sessions.first { $0.session == S.a }?.resumes == false)
+    }
+
     @Test func folderRuleKeepsSessionsOutOfTheDestination() throws {
         let scene = try S()
         try scene.session(S.a, title: "Allowed")
@@ -534,6 +563,109 @@ struct HandoverRunTests {
         #expect(!result.resumed.isEmpty && !result.resumed.contains(S.a), "\(result.resumed)")
     }
 
+    @Test func busySourceContinuesItsArmedSessionsItself() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Armed")
+        try scene.session(S.b, title: "Live")
+        try scene.armed([S.a])
+        scene.world.start("work")
+        scene.world.work(S.b, in: "work")
+
+        let result = try await scene.manager.handOver(try scene.plan(), dwell: 0.3, lastWait: 0.3)
+
+        #expect(result.state == .done && !result.sourceClosed)
+        #expect(!scene.world.links.contains("link main \(S.a)"), "WORK resumes it at its reset, so (main) doesn't too")
+        #expect(scene.entry(S.a, in: "main") == nil, "not seeded in (main)")
+        #expect(scene.entry(S.a, in: "work")?.optedIn == true, "left on in WORK")
+        #expect(scene.manager.autoResume.pending().isEmpty, "and not turned off when WORK closes")
+        #expect(!result.resumed.contains(S.a))
+        #expect(result.line.contains("1 continues in WORK when its limit resets, as Claude Code still works there"), "\(result.line)")
+    }
+
+    @Test func logIsReadyBeforeTheDestinationOpens() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.armed([S.a])
+        let paths = scene.box.paths
+        let seen = Seen()
+        let world = scene.world
+        scene.manager.appLauncher = { app, _, links in
+            seen.entry = HandoverLog(paths: paths).entries().last
+            world.start(world.window(of: app))
+            world.handed(app, links)
+        }
+
+        _ = try await scene.manager.handOver(try scene.plan(), dwell: 0.3, lastWait: 0.3)
+
+        let entry = try #require(seen.entry)
+        #expect(entry.state == "waiting" && entry.sourceClosed, "a Ctrl-C from here on is finished from the log")
+        #expect(entry.pending?.show == [S.a] && entry.pending?.seed == [S.card(S.a)] && entry.pending?.lengths?[S.a] != nil)
+    }
+
+    @Test func handoverStoppedWhileStartingStartsOver() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.armed([S.a])
+        let log = HandoverLog(paths: scene.box.paths)
+        let started = Date(timeIntervalSince1970: (scene.now.timeIntervalSince1970 - 30).rounded(.down))
+        try log.save(
+            HandoverLog.Entry(
+                source: "work", resetsAt: scene.reset, destination: "main", startedAt: started, state: "starting", sessions: 1, cards: [S.card(S.a)]))
+        let armed = try #require(scene.entry(S.a, in: "work"))
+        _ = try scene.manager.autoResume.turnOff(armed, window: "work", account: Sandbox.accountB)
+        #expect(throws: HandoverError.alreadyHandedOver("WORK")) { try scene.plan() }
+        #expect(log.unfinished(source: "work").map(\.state) == ["starting"])
+
+        #expect(try scene.manager.restartStoppedHandover(source: "work") == "main")
+
+        #expect(log.entries().isEmpty)
+        #expect(scene.entry(S.a, in: "work")?.optedIn == true, "its turn-off is put back, so it is cut again")
+        let plan = try scene.plan()
+        #expect(plan.cut.map(\.transcript) == [S.a])
+        let result = try await scene.manager.handOver(plan, dwell: 0.3, lastWait: 0.3)
+        #expect(result.state == .done && result.resumed == [S.a])
+        #expect(try scene.manager.restartStoppedHandover(source: "work") == nil)
+    }
+
+    @Test func sessionThatContinuedMeanwhileIsNotResumedAgain() async throws {
+        let (scene, planned) = try busyScene()
+        _ = try await scene.manager.handOver(planned.plan, dwell: 0.1, lastWait: 0.1)
+        let transcript = scene.box.paths.claudeProjectsDir.appending(path: "-repo/\(S.a).jsonl")
+        let handle = try FileHandle(forWritingTo: transcript)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((#"{"type":"user","message":"go on"}"# + "\n").utf8))
+        try handle.close()
+        scene.world.stopWork(in: "main")
+
+        let result = try #require(try await scene.manager.finishWaitingHandover(source: "work", poll: 0.1, dwell: 0.3, lastWait: 0.3))
+
+        #expect(result.state == .done && result.resumed == [S.a])
+        #expect(scene.world.links.isEmpty, "not shown again: \(scene.world.events)")
+        #expect(scene.entry(S.a, in: "main") == nil, "not seeded again")
+    }
+
+    @Test func anotherBatonAtWorkIsLeftAlone() async throws {
+        let (scene, planned) = try busyScene()
+        let log = HandoverLog(paths: scene.box.paths)
+        let held = try #require(try log.working(source: "work"))
+        #expect(log.inProgress(source: "work"))
+
+        await #expect(throws: HandoverError.inProgress("WORK")) {
+            _ = try await scene.manager.handOver(planned.plan, dwell: 0.1, lastWait: 0.1)
+        }
+        #expect(log.entries().isEmpty)
+        held.release()
+        #expect(!log.inProgress(source: "work"))
+
+        _ = try await scene.manager.handOver(planned.plan, dwell: 0.1, lastWait: 0.1)
+        let again = try #require(try log.working(source: "work"))
+        await #expect(throws: HandoverError.inProgress("WORK")) {
+            _ = try await scene.manager.finishWaitingHandover(source: "work", poll: 0.1, dwell: 0.1, lastWait: 0.1)
+        }
+        again.release()
+        #expect(log.waiting(source: "work") != nil, "still waiting for (main)")
+    }
+
     @Test func secondHandoverOfTheSameEpisodeIsRefused() async throws {
         let (scene, planned) = try busyScene()
         _ = try await scene.manager.handOver(planned.plan, dwell: 0.1, lastWait: 0.1)
@@ -595,6 +727,7 @@ struct HandoverTextTests {
             (.layoutNotCarried("the store is in use"), "their pins and groups couldn't be written (the store is in use)"),
             (.notMoved(titles: ["Fix CI"]), "1 couldn't be brought to PAY and stays in ROBIN: “Fix CI”"),
             (.copiesStay(count: 2), "the 2 copies made in PAY stay there"),
+            (.resumeInSource(count: 2), "2 continue in ROBIN when its limit resets, as Claude Code still works there"),
         ]
         for (leftover, text) in clauses {
             #expect(HandoverText.clause(leftover, source: "ROBIN", destination: "PAY") == text)
@@ -618,7 +751,7 @@ struct HandoverTextTests {
         let leftovers: [HandoverLeftover] = [
             .folderRule(count: 1, folder: "/a", accounts: ["a@example.org"]), .remoteControl(count: 1), .copies(count: 2),
             .notResumed(titles: ["a"]), .cannotResume(titles: ["b"]), .ungrouped(count: 1, group: "g"), .layoutNotCarried("r"), .coworkStays(count: 1),
-            .notMoved(titles: ["c"]), .copiesStay(count: 1),
+            .notMoved(titles: ["c"]), .copiesStay(count: 1), .resumeInSource(count: 1),
         ]
         for state in [HandoverResult.State.done, .waiting, .picksUpItself, .resetFirst, .failed] {
             for leftover in leftovers {
@@ -637,5 +770,15 @@ struct HandoverCommandTests {
         #expect(CLIArguments.problem(in: ["handover", "--from", "work", "--to", "main", "--dry-run", "--json"]) == nil)
         #expect(CLIArguments.problem(in: ["handover", "--dryrun"]) != nil)
         #expect(CLIArguments.problem(in: ["handover", "work"]) != nil, "the window goes after --from")
+    }
+}
+
+/// What a hook saw, read after it ran.
+private final class Seen: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: HandoverLog.Entry?
+    var entry: HandoverLog.Entry? {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
     }
 }

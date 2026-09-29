@@ -54,7 +54,9 @@ let usage = """
                                           the most room: the sessions the limit cut resume there, a
                                           session still open where it was continues as a copy. By
                                           default the open window at its limit, and the best window.
-                                          A busy window restarts once its current work finishes.
+                                          A busy window restarts once its current work finishes, and
+                                          one left open at its limit is closed then. Run it again to
+                                          go on after an interrupt.
                                           Exit 3: the limit resets within 15 minutes
       baton rules [--json]                Show which accounts may continue the work in which folders
       baton rule <folder> --only <email>[,<email>…] | --remove
@@ -530,9 +532,14 @@ do {
             guard let found = atLimit.first(where: \.isRunning) ?? atLimit.first else { fail("No window is at its limit, so there is nothing to hand over.") }
             source = found.id
         }
+        if !dryRun, log.inProgress(source: source) { fail(HandoverError.inProgress(labels(source)).localizedDescription) }
         // A handover stopped halfway (Ctrl-C, a crash) goes on where it stopped: its destination restarts once free,
-        // and its source is closed once nothing works there.
-        if !dryRun, let unfinished = log.unfinished(source: source).last {
+        // and its source is closed once nothing works there. One stopped before its destination was ready starts
+        // over, towards the same window.
+        var stoppedTo: String?
+        if !dryRun, let unfinished = log.unfinished(source: source).last, unfinished.state == "starting" {
+            stoppedTo = try manager.restartStoppedHandover(source: source)
+        } else if !dryRun, let unfinished = log.unfinished(source: source).last {
             say("Continuing the handover of Claude \(labels(source))'s work to Claude \(labels(unfinished.destination))…")
             async let closing = manager.watchHandoverSource(source)
             let finished = try await manager.finishWaitingHandover(source: source, progress: say)
@@ -542,20 +549,27 @@ do {
             if finished?.state == .failed { exit(1) }
             break
         }
-        let plan = try manager.planHandover(from: source, to: value(of: "--to", in: args).map(destinationID))
+        let chosen = value(of: "--to", in: args).map(destinationID)
+        let plan: HandoverPlan
+        do { plan = try manager.planHandover(from: source, to: chosen ?? stoppedTo) } catch HandoverError.destinationAtLimit where chosen == nil {
+            // The window the stopped handover chose has reached its limit meanwhile: the best one now.
+            plan = try manager.planHandover(from: source)
+        }
         if dryRun {
             if json {
                 print(try CLIOutput.json(HandoverSummary(plan: plan, labels: labels)))
             } else if plan.picksUpItself {
                 print(HandoverText.line(HandoverResult(plan: plan, state: .picksUpItself), labels: labels))
             } else {
-                let resume = plan.cut.count, copies = plan.sessions.filter(\.asCopy).count
+                let later = Set(plan.resumeInSource.map(\.card))
+                let resume = plan.cut.count - later.count, copies = plan.sessions.filter(\.asCopy).count
                 print(
                     "Would hand \(plan.sessions.count) sessions over from Claude \(labels(source)) to Claude \(labels(plan.destination)): "
                         + "\(resume) to resume, \(copies) as copies.")
                 for session in plan.sessions {
                     let how = session.asCopy ? "copy" : "same"
-                    print("\(session.cut ? "resume" : "move  ")  \(how)  \(session.transcript.prefix(8))  \(session.title)")
+                    let what = later.contains(session.card) ? "later " : session.cut ? "resume" : "move  "
+                    print("\(what)  \(how)  \(session.transcript.prefix(8))  \(session.title)")
                 }
                 for leftover in plan.leftovers {
                     if let clause = HandoverText.clause(leftover, source: labels(source), destination: labels(plan.destination)) { print("  \(clause)") }

@@ -16,10 +16,14 @@ public struct HandoverSession: Codable, Equatable, Sendable {
     public var asCopy: Bool
     /// Its last message, for the order sessions are shown in.
     public var lastActivity: Date
+    /// Its auto-continue is on in the window at its limit, which continues it there at the reset while it runs.
+    public var armed: Bool
 
-    public init(card: String, transcript: String, title: String, folders: [String] = [], cut: Bool, asCopy: Bool, lastActivity: Date) {
+    public init(
+        card: String, transcript: String, title: String, folders: [String] = [], cut: Bool, asCopy: Bool, lastActivity: Date, armed: Bool = false
+    ) {
         self.card = card; self.transcript = transcript.lowercased(); self.title = title; self.folders = folders
-        self.cut = cut; self.asCopy = asCopy; self.lastActivity = lastActivity
+        self.cut = cut; self.asCopy = asCopy; self.lastActivity = lastActivity; self.armed = armed
     }
 }
 
@@ -47,6 +51,10 @@ public enum HandoverLeftover: Codable, Equatable, Sendable {
     case notMoved(titles: [String])
     /// Copies made in the destination that stay there unused: the source's limit reset first.
     case copiesStay(count: Int)
+    /// Sessions the limit cut that continue in the window at its limit when it resets: it stays open because Claude
+    /// Code works there, so its own auto-continue for them stays on, and resuming them elsewhere too would put one
+    /// session in two windows.
+    case resumeInSource(count: Int)
 }
 
 /// What handing a window's work over would do, worked out without changing anything.
@@ -64,6 +72,16 @@ public struct HandoverPlan: Equatable, Sendable {
 
     /// Sessions that resume in the destination.
     public var cut: [HandoverSession] { sessions.filter(\.cut) }
+
+    /// Sessions the limit cut that continue in the source at its reset instead, while the source stays open: moved as
+    /// themselves and on with their auto-continue there. A busy source is expected to stay open.
+    public var resumeInSource: [HandoverSession] {
+        sourceActivity.isBusy ? sessions.filter(Self.waitsForSource) : []
+    }
+
+    /// A cut session, not a copy, whose auto-continue is on in the source: the source continues it at its reset if
+    /// it is still open then.
+    static func waitsForSource(_ session: HandoverSession) -> Bool { session.cut && session.armed && !session.asCopy }
 }
 
 /// What a handover did.
@@ -105,6 +123,10 @@ public enum HandoverError: LocalizedError, Equatable {
     /// No other window has room: the line says so and names the one that frees up first, when known.
     case noRoom(String)
     case sameWindow(String)
+    /// The chosen window is at its limit too.
+    case destinationAtLimit(String)
+    /// Another Baton is handing the window's work over right now.
+    case inProgress(String)
 
     public var errorDescription: String? {
         switch self {
@@ -112,6 +134,8 @@ public enum HandoverError: LocalizedError, Equatable {
         case .alreadyHandedOver(let label): "\(label)'s work for this limit was handed over already."
         case .noRoom(let line): line
         case .sameWindow(let label): "\(label) is the window at its limit; choose another one."
+        case .destinationAtLimit(let label): "\(label) is at its limit too; choose another window."
+        case .inProgress(let label): "Baton is handing \(label)'s work over already."
         }
     }
 }
@@ -134,6 +158,9 @@ public struct HandoverLog: Sendable {
         public var sourceCut: [String]
         /// Session ids of those, in order.
         public var sourceShow: [String]
+        /// Transcript sizes of the sessions to show when the handover prepared them, so a session that continued
+        /// since (before an interrupt, or by the user's hand) is neither seeded nor shown again.
+        public var lengths: [String: UInt64]? = nil
     }
 
     public struct Entry: Codable, Equatable, Sendable {
@@ -142,7 +169,8 @@ public struct HandoverLog: Sendable {
         public var destination: String
         public var startedAt: Date
         public var finishedAt: Date?
-        /// waiting, done, cancelled or failed.
+        /// starting (closing the source and making copies; nothing prepared for the destination yet), waiting (ready
+        /// for the destination), done, cancelled or failed.
         public var state: String
         public var sessions: Int
         public var resumed: [String] = []
@@ -153,6 +181,8 @@ public struct HandoverLog: Sendable {
         public var seeding: Seeding = .seed
         public var leftovers: [HandoverLeftover] = []
         public var pending: Pending?
+        /// The cards the handover set out to move, for taking up one that stopped while it started.
+        public var cards: [String]? = nil
     }
 
     struct State: Codable {
@@ -197,12 +227,13 @@ public struct HandoverLog: Sendable {
         } ?? false
     }
 
-    /// Handovers of `source`, or of every window, not finished yet: waiting for their destination, or done with the
-    /// source left open before its reset, so Baton still has to close it once nothing works there.
+    /// Handovers of `source`, or of every window, not finished yet: stopped while starting, waiting for their
+    /// destination (or stopped while it opened), or done with the source left open before its reset, so Baton still
+    /// has to close it once nothing works there.
     public func unfinished(source: String? = nil, now: Date = Date()) -> [Entry] {
         entries().filter { entry in
             guard source.map({ $0 == entry.source }) ?? true else { return false }
-            if entry.state == "waiting" { return true }
+            if entry.state == "waiting" || entry.state == "starting" { return true }
             return entry.state == "done" && !entry.sourceClosed && (entry.resetsAt.map { $0 > now } ?? false)
         }
     }
@@ -227,6 +258,33 @@ public struct HandoverLog: Sendable {
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder.handovers.encode(state).write(to: file, options: .atomic)
         }
+    }
+
+    /// Forgets `entry`, a handover stopped before it prepared anything, so its episode can be handed over afresh.
+    func remove(_ entry: Entry) throws {
+        try FileLock.withLock(lock, blocking: true) {
+            var state = State()
+            state.entries = entries().filter { !($0.source == entry.source && abs($0.startedAt.timeIntervalSince(entry.startedAt)) < 1) }
+            try JSONEncoder.handovers.encode(state).write(to: file, options: .atomic)
+        }
+    }
+
+    /// Held by the process handing `source`'s work over for as long as it works on it; the system lets it go when
+    /// that process ends, so a handover stopped by Ctrl-C or a crash can be taken up again.
+    /// - Returns: `nil` when another handover of `source` holds it.
+    func working(source: String) throws -> FileLock.Held? {
+        try FileLock.Held.attempt(file.deletingLastPathComponent().appending(path: "handover-\(source).lock"))
+    }
+
+    /// Whether a handover of `source` runs right now, in this process or another.
+    public func inProgress(source: String) -> Bool {
+        do {
+            guard let held = try working(source: source) else { return true }
+            held.release()
+        } catch {
+            Log.error("handover", "Couldn't check the handover lock of window \(source): \(error.localizedDescription)")
+        }
+        return false
     }
 
     private var lock: URL { file.deletingLastPathComponent().appending(path: "handovers.lock") }
@@ -368,6 +426,8 @@ public enum HandoverText {
             return "\(titles.count) couldn't be brought to \(destination) and \(one ? "stays" : "stay") in \(source): " + names(titles)
         case .copiesStay(let count):
             return count == 1 ? "the copy made in \(destination) stays there" : "the \(count) copies made in \(destination) stay there"
+        case .resumeInSource(let count):
+            return "\(count) \(count == 1 ? "continues" : "continue") in \(source) when its limit resets, as Claude Code still works there"
         }
     }
 
@@ -417,6 +477,7 @@ extension ProfileManager {
             guard destination != source else { throw HandoverError.sameWindow(label) }
             guard let chosen = statuses.first(where: { $0.id == destination }) else { throw ProfileError.notFound(destination) }
             guard chosen.isSignedIn else { throw ProfileError.notSignedIn(displayLabel(of: destination)) }
+            guard !DestinationRanking.isAtLimit(chosen, now: now) else { throw HandoverError.destinationAtLimit(displayLabel(of: destination)) }
             target = destination
         } else {
             let required = zip(candidates, allowed).filter { $0.0.session.cut }.map { $0.1?.accounts }
@@ -445,6 +506,10 @@ extension ProfileManager {
         if remoteControl > 0 { leftovers.append(.remoteControl(count: remoteControl)) }
         let copies = sessions.filter(\.asCopy).count
         if copies > 0 { leftovers.append(.copies(count: copies)) }
+        if sourceActivity.isBusy {
+            let later = sessions.filter(HandoverPlan.waitsForSource).count
+            if later > 0 { leftovers.append(.resumeInSource(count: later)) }
+        }
         let cowork = ConversationIndex.scan(paths: paths, windows: windows).filter {
             $0.kind == .cowork && $0.ownerID == source && now.timeIntervalSince($0.lastActivity) < LimitKind.fiveHour.window
         }.count
@@ -512,7 +577,7 @@ extension ProfileManager {
                 let folders = summary.folder.map { $0.contains(SessionSync.scratchFolder) ? [] : [$0] } ?? []
                 let item = HandoverSession(
                     card: cardName, transcript: session, title: summary.title, folders: folders, cut: cut, asCopy: live.contains(session),
-                    lastActivity: ConversationIndex.lastActivity(of: transcript) ?? .distantPast)
+                    lastActivity: ConversationIndex.lastActivity(of: transcript) ?? .distantPast, armed: armed.contains(cardName))
                 found.append(HandoverCandidate(session: item, remoteControl: remoteControl))
             }
         }
@@ -551,10 +616,13 @@ extension ProfileManager {
             throw ProfileError.notSignedIn(displayLabel(of: plan.destination))
         }
         let log = HandoverLog(paths: paths)
+        // Held until this returns: another Baton leaves this handover alone meanwhile, and takes it up if it stops.
+        guard let working = try log.working(source: plan.source) else { throw HandoverError.inProgress(displayLabel(of: plan.source)) }
+        defer { working.release() }
         var entry = HandoverLog.Entry(
             source: plan.source, resetsAt: plan.resetsAt, destination: plan.destination,
-            startedAt: Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.down)), state: "waiting",
-            sessions: plan.sessions.count, seeding: plan.seeding)
+            startedAt: Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.down)), state: "starting",
+            sessions: plan.sessions.count, seeding: plan.seeding, cards: plan.sessions.map(\.card))
         // One handover per episode, even when the app and the CLI start one at the same moment.
         guard try log.claim(entry, now: now) else { throw HandoverError.alreadyHandedOver(displayLabel(of: plan.source)) }
 
@@ -565,6 +633,7 @@ extension ProfileManager {
         let liveBefore = liveSessions(in: plan.source)
         let sourceClosed = activity(of: plan.source).isBusy ? false : await quitWindow(plan.source)
         entry.sourceClosed = sourceClosed
+        plan.sourceActivity = sourceClosed ? .closed : activity(of: plan.source)
         let live =
             sourceClosed
             ? liveBefore.intersection(liveSessionIDs?() ?? LiveSessions.ids(claudeDir: paths.claudeDir)) : liveSessions(in: plan.source)
@@ -592,17 +661,36 @@ extension ProfileManager {
         }
         let failed = Set(notCopied.map(\.card))
         plan.sessions.removeAll { failed.contains($0.card) }
-        plan.leftovers.removeAll { if case .copies = $0 { return true } else { return false } }
+
+        // A cut session whose auto-continue stays on in a source that stays open would continue there at its reset
+        // too, so it isn't resumed in the destination: the source continues it then, and its entry stays on.
+        let armed = AutoResume.armedEntries(in: sourceDir, account: sourceAccount, now: now) ?? []
+        let armedCards = Set(armed.map(\.key))
+        var later = Set<String>()
+        for i in plan.sessions.indices {
+            plan.sessions[i].armed = armedCards.contains(plan.sessions[i].card)
+            if !sourceClosed, HandoverPlan.waitsForSource(plan.sessions[i]) {
+                plan.sessions[i].cut = false
+                later.insert(plan.sessions[i].card)
+            }
+        }
+        plan.leftovers.removeAll {
+            switch $0 {
+            case .copies, .resumeInSource: true
+            default: false
+            }
+        }
         if !renamed.isEmpty { plan.leftovers.append(.copies(count: renamed.count)) }
+        if !later.isEmpty { plan.leftovers.append(.resumeInSource(count: later.count)) }
         if !notCopied.isEmpty { plan.leftovers.append(.notMoved(titles: notCopied.map(\.title))) }
 
         let handed = Set(plan.sessions.map(\.card))
-        for armed in (AutoResume.armedEntries(in: sourceDir, account: sourceAccount, now: now) ?? []) where handed.contains(armed.key) {
+        for armedEntry in armed where handed.contains(armedEntry.key) && !later.contains(armedEntry.key) {
             do {
                 if sourceClosed {
-                    try autoResume.turnOff(armed, window: plan.source, account: sourceAccount, now: now)
+                    try autoResume.turnOff(armedEntry, window: plan.source, account: sourceAccount, now: now)
                 } else {
-                    try autoResume.addPending(armed, window: plan.source, account: sourceAccount, now: now)
+                    try autoResume.addPending(armedEntry, window: plan.source, account: sourceAccount, now: now)
                 }
             } catch {
                 Log.error("handover", "Auto-continue in window \(plan.source): \(error.localizedDescription)")
@@ -623,19 +711,24 @@ extension ProfileManager {
         let show = cut.map { shown[$0.transcript] ?? $0.transcript }
         var titles: [String: String] = [:]
         for session in cut { titles[shown[session.transcript] ?? session.transcript] = session.title }
+        let transcripts = ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)
+        var lengths: [String: UInt64] = [:]
+        for session in show { lengths[session] = transcripts[session.lowercased()].map(Self.transcriptSize) ?? 0 }
         entry.pending = HandoverLog.Pending(
             slice: slice.map(SidebarLayoutData.init), seed: cut.map { renamed[$0.card] ?? $0.card }, show: show, titles: titles,
-            sourceCut: cut.map(\.card), sourceShow: cut.map(\.transcript))
+            sourceCut: cut.map(\.card), sourceShow: cut.map(\.transcript), lengths: lengths)
         entry.leftovers = plan.leftovers
         entry.sessions = plan.sessions.count
         result.plan = plan
         result.sourceClosed = sourceClosed
+        // Ready for the destination: from here on, a handover stopped by Ctrl-C or a crash is finished from the log.
+        entry.state = "waiting"
+        try log.save(entry)
 
         // 2. The destination: started now if closed or idle; a busy one restarts once nothing works there.
         var activity = activity(of: plan.destination)
         if activity == .idle, await quitWindow(plan.destination) { activity = .closed }
         guard activity == .closed else {
-            entry.state = "waiting"
             result.state = .waiting
             result = finished(result, entry: &entry)
             try log.save(entry)
@@ -653,8 +746,12 @@ extension ProfileManager {
         progress: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> HandoverResult? {
         try ensureWritable()
+        let log = HandoverLog(paths: paths)
+        guard log.waiting(source: source) != nil else { return nil }
+        guard let working = try log.working(source: source) else { throw HandoverError.inProgress(displayLabel(of: source)) }
+        defer { working.release() }
         while true {
-            guard let entry = HandoverLog(paths: paths).waiting(source: source) else { return nil }
+            guard let entry = log.waiting(source: source) else { return nil }
             var result = HandoverResult(plan: storedPlan(entry), state: .waiting, sourceClosed: entry.sourceClosed)
             if let reset = entry.resetsAt, now() >= reset {
                 return try await cancelHandover(entry, result: result, dwell: dwell, lastWait: lastWait)
@@ -701,6 +798,30 @@ extension ProfileManager {
         return true
     }
 
+    /// Takes up a handover of `source` that stopped while it started (Ctrl-C or a crash while it closed the source or
+    /// made copies), before anything was ready for its destination: puts back the auto-continue it turned off in the
+    /// source and drops the turn-offs it left waiting, so its sessions are cut again, then forgets it, so the episode
+    /// is handed over afresh. Copies it made are used again.
+    /// - Returns: that handover's destination, or `nil` when no handover of `source` stopped that way.
+    public func restartStoppedHandover(source: String) throws -> String? {
+        try ensureWritable()
+        let log = HandoverLog(paths: paths)
+        guard let working = try log.working(source: source) else { throw HandoverError.inProgress(displayLabel(of: source)) }
+        defer { working.release() }
+        guard let entry = log.entries().last(where: { $0.source == source && $0.state == "starting" }) else { return nil }
+        let cards = Set(entry.cards ?? [])
+        autoResume.dropPending(window: source, entries: cards)
+        for change in autoResume.changes()
+        where change.window == source && change.action == .turnedOff && change.changedAt >= entry.startedAt && cards.contains(change.entry) {
+            do { _ = try autoResume.undo(change) } catch {
+                Log.error("handover", "Couldn't put back auto-continue in window \(source): \(error.localizedDescription)")
+            }
+        }
+        try log.remove(entry)
+        Log.notice("handover", "Starting over the handover from window \(source) that stopped before its destination was ready")
+        return entry.destination
+    }
+
     // MARK: Steps
 
     /// Opens the closed destination with the layout and the seeded entries written first, shows each session to
@@ -714,6 +835,14 @@ extension ProfileManager {
         let destinationAccount = DesktopData.accountID(in: destinationDir) ?? ""
         let sourceAccount = DesktopData.accountID(in: dataDir(of: entry.source))
         let seeding = entry.seeding
+        // A session that continued since the handover prepared it (before an interrupt, or by the user's hand) counts
+        // as resumed and is neither seeded nor shown again.
+        let transcripts = ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)
+        let continued = pending.show.filter { session in
+            guard let before = pending.lengths?[session] else { return false }
+            return (transcripts[session.lowercased()].map(Self.transcriptSize) ?? 0) > before
+        }
+        let seed = zip(pending.seed, pending.show).filter { !continued.contains($0.1) }.map(\.0)
         let prepared = PrepareOutcome()
         let scope = sidebarScope(destinationDir)
         let paths = paths, autoResume = autoResume, source = entry.source
@@ -731,10 +860,10 @@ extension ProfileManager {
                         prepared.set(failure: error.localizedDescription)
                     }
                 }
-                if seeding == .seed, !pending.seed.isEmpty {
+                if seeding == .seed, !seed.isEmpty {
                     do {
                         _ = try autoResume.seed(
-                            pending.seed.map { AutoResumeEntry(key: $0, resetsAt: Date()) }, window: destination, account: destinationAccount,
+                            seed.map { AutoResumeEntry(key: $0, resetsAt: Date()) }, window: destination, account: destinationAccount,
                             source: sourceAccount.map { (source, $0) })
                     } catch {
                         Log.error("handover", "Couldn't seed auto-continue in window \(destination): \(error.localizedDescription)")
@@ -761,9 +890,10 @@ extension ProfileManager {
         // A session without its card in the destination would be imported by its link under a new card: named instead.
         let cards = cardsBySession(in: destinationDir)
         let title = { (session: String) in pending.titles[session] ?? session }
-        let missing = pending.show.filter { cards[$0.lowercased()] == nil }
+        let toShow = pending.show.filter { !continued.contains($0) }
+        let missing = toShow.filter { cards[$0.lowercased()] == nil }
         if !missing.isEmpty { result.plan.leftovers.append(.notMoved(titles: missing.map(title))) }
-        let order = showOrder(pending.show.filter { cards[$0.lowercased()] != nil }, in: destinationDir)
+        let order = showOrder(toShow.filter { cards[$0.lowercased()] != nil }, in: destinationDir)
         var shown = ShowInTurn.Result()
         if !order.isEmpty {
             progress("Resuming \(order.count) session\(order.count == 1 ? "" : "s") in \(displayLabel(of: destination))…")
@@ -776,8 +906,9 @@ extension ProfileManager {
                 shown.failure = error.localizedDescription
             }
         }
+        result.resumed = continued
         if seeding == .seed {
-            result.resumed = shown.resumed
+            result.resumed += shown.resumed
             result.notResumed = shown.notResumed
             if !shown.notResumed.isEmpty { result.plan.leftovers.append(.notResumed(titles: shown.notResumed.map(title))) }
         } else {
@@ -992,8 +1123,11 @@ public struct HandoverSummary: Encodable, Equatable {
         self.destination = destination
         resetsAt = plan.resetsAt
         seeding = plan.seeding.rawValue
+        let later = Set(plan.resumeInSource.map(\.card))
         sessions = plan.sessions.map {
-            Session(card: $0.card, session: $0.transcript, title: $0.title, folders: $0.folders, resumes: $0.cut, asCopy: $0.asCopy)
+            Session(
+                card: $0.card, session: $0.transcript, title: $0.title, folders: $0.folders, resumes: $0.cut && !later.contains($0.card),
+                asCopy: $0.asCopy)
         }
         leftovers = plan.leftovers.compactMap { HandoverText.clause($0, source: source, destination: destination) }
         if plan.picksUpItself { state = HandoverResult.State.picksUpItself.rawValue }

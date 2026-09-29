@@ -107,16 +107,17 @@ extension ProfileManager {
     public func resumeWatch(_ sessions: [String], in window: String) -> @Sendable (String) -> Bool {
         let projects = paths.claudeProjectsDir
         let files = ConversationIndex.transcriptFiles(in: projects)
-        let before = Dictionary(uniqueKeysWithValues: sessions.map { ($0.lowercased(), files[$0.lowercased()].map(Self.size) ?? 0) })
+        let before = Dictionary(uniqueKeysWithValues: sessions.map { ($0.lowercased(), files[$0.lowercased()].map(Self.transcriptSize) ?? 0) })
         return { [self] session in
             let session = session.lowercased()
             guard liveSessions(in: window).contains(session) else { return false }
             let file = files[session] ?? ConversationIndex.transcriptFiles(in: projects)[session]
-            return file.map(Self.size).map { $0 > before[session] ?? 0 } ?? false
+            return file.map(Self.transcriptSize).map { $0 > before[session] ?? 0 } ?? false
         }
     }
 
-    private static func size(_ url: URL) -> UInt64 {
+    /// The size of a transcript file, 0 when it can't be read: grows as its session continues.
+    static func transcriptSize(_ url: URL) -> UInt64 {
         ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.uint64Value ?? 0
     }
 }

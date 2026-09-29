@@ -1546,6 +1546,24 @@ enum FileLock {
             }
         }
 
+        /// Takes the lock only if nobody holds it, another open of it in this process included.
+        /// - Returns: `nil` when it is held.
+        static func attempt(_ url: URL) throws -> Held? {
+            let descriptor = try FileLock.openFile(url)
+            guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+                let code = errno
+                close(descriptor)
+                if code == EWOULDBLOCK || code == EAGAIN { return nil }
+                throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+            }
+            return Held(path: url.standardizedFileURL.path, descriptor: descriptor)
+        }
+
+        private init(path: String, descriptor: Int32) {
+            self.path = path
+            self.descriptor = descriptor
+        }
+
         deinit { release() }
 
         /// Runs `body` on this thread with the lock counted as this thread's, so a `withLock` for it in there runs
