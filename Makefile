@@ -47,9 +47,9 @@ install: app
 	sh scripts/install-app.sh $(if $(DEST),"$(DEST)")
 	@dir="$$($(WHERE))"; dir="$${dir%/}"; \
 	if [ "$$dir" = "$(HOME)/Applications/Claude Profiles" ]; then \
-		echo "Optional CLI, once that folder is renamed to Baton: ln -sf \"$(HOME)/Applications/Baton/Baton.app/Contents/Helpers/baton\" /usr/local/bin/baton"; \
+		echo "Optional CLI, once that folder is renamed to Baton: mkdir -p ~/.local/bin && ln -sf \"$(HOME)/Applications/Baton/Baton.app/Contents/Helpers/baton\" ~/.local/bin/baton"; \
 	elif [ -x "$$dir/Baton.app/Contents/Helpers/baton" ]; then \
-		echo "Optional CLI, if you have no baton link yet: ln -sf \"$$dir/Baton.app/Contents/Helpers/baton\" /usr/local/bin/baton"; \
+		echo "Optional CLI, if you have no baton link yet: mkdir -p ~/.local/bin && ln -sf \"$$dir/Baton.app/Contents/Helpers/baton\" ~/.local/bin/baton"; \
 	fi
 
 # To the Trash, never deleted, with the install script's own helper.

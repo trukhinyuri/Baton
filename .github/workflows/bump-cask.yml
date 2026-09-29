@@ -42,6 +42,8 @@ jobs:
         run: echo "::warning::HOMEBREW_TAP_PAT is not set, so the tap was not bumped to $TAG. Set it and run Bump Homebrew cask by hand (docs/RELEASING.md)."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.HAS_TAP_PAT == 'true'
+        with:
+          persist-credentials: false
       - name: Download and check the release
         if: env.HAS_TAP_PAT == 'true'
         env:

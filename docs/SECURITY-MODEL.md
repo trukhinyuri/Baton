@@ -46,4 +46,4 @@ gh attestation verify Baton-v1.0.0.zip -R trukhinyuri/Baton
 spctl --assess --type execute -vv "/Applications/Baton.app"
 ```
 
-A build you make yourself is signed ad hoc, which is enough for your own Mac.
+A release candidate, such as 1.0.0-rc.1, is published the same way but signed ad hoc and not notarized, as a GitHub prerelease: the first two commands apply to it, and `spctl` rejects it. A build you make yourself is signed ad hoc, which is enough for your own Mac.

@@ -6,6 +6,8 @@ Status: accepted
 
 Until 1.0 the app was called Claude Profiles. 1.0 is called Baton to keep "Claude", Anthropic's trademark, out of the product's own name; Claude Desktop is named only to say what Baton works with. Everything a person sees or types changes: the app, `Baton.app`, the `baton` command, the Homebrew cask, the repository and the launchers folder in `~/Applications`. People who already use Claude Profiles must keep their windows, sign-ins, launchers in the Dock and sessions, and an upgrade must never leave their data half in one folder and half in another.
 
+This Baton is a Mac app for Claude Desktop accounts. It is not related to getbaton.dev, a desktop app for running coding agents, or to other tools and command-line programs called `baton`.
+
 ## Decision
 
 - **Identifiers the system depends on keep the old name.** The bundle id stays `io.github.trukhinyuri.claudeprofiles`, launchers stay `io.github.trukhinyuri.claudeprofiles.launcher.<id>`, and the log subsystem stays the bundle id. The one-copy-at-a-time check finds a running copy by bundle id, so the old and the new app see each other during the upgrade and never sync at once. The UserDefaults domain, Launch Services and privacy (TCC) records, Dock items of launchers and the cask's `zap` paths follow the bundle id too. Renamed Mac apps keep theirs: Slack still ships `com.tinyspeck.slackmacgap`, and the App Store doesn't allow changing it. Everything that is Claude's keeps Claude's name: `~/.claude`, `~/Library/Application Support/Claude`, Claude Desktop's own bundle id in the engines, and launchers named `Claude <LABEL>.app`.
@@ -22,4 +24,13 @@ Until 1.0 the app was called Claude Profiles. 1.0 is called Baton to keep "Claud
 - An upgrade with Claude windows still open keeps the launchers folder's old name until the next start with every Claude window closed, or until the printed `baton migrate`; nothing is lost in the meantime, and Baton works from the old folder.
 - The bundle id and the launcher ids show the old name to anyone who reads `Info.plist`, `defaults` or the log. That is the price of keeping the Dock items, preferences and the one-copy check across the upgrade.
 - A link someone made by hand into the old launchers folder, such as `/usr/local/bin/claude-profiles`, stops working once the old app or folder is gone and has to point at `~/Applications/Baton`; the install script prints the command for the usual places.
+- Other products and commands are called Baton too; the README says this one is not related to them, the GitHub About text calls it a Mac app for Claude Desktop accounts, and the README's troubleshooting shows how to tell which `baton` runs. Revisit the name before the signed 1.0.0 and the Homebrew cask if that causes confusion: a rename after them costs far more.
 - Revisit if macOS gains a supported way to carry an app's records over to a new bundle id, or once 2.0 can drop the `claude-profiles` command.
+
+## History
+
+The history is kept as it happened; nothing was rewritten.
+
+- **ClaudeUnlimited.** The first commit (`69126e8`, 2026-09-25) and the repository were created under this name. It was renamed to Claude Profiles 16 minutes later (`c7c3d60`), before any tag or release.
+- **Claude Profiles.** 0.1.0 (2026-09-25) and 0.2.0 (2026-09-27, tag `v0.2.0`, published as the release "Claude Profiles v0.2.0"), in the repository `trukhinyuri/ClaudeProfiles`. 0.3.0 was never published.
+- **Baton.** From 1.0, starting with the release candidate 1.0.0-rc.1, in the repository `trukhinyuri/Baton`. GitHub redirects the earlier repository names.

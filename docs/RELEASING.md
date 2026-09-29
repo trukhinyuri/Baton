@@ -15,8 +15,10 @@ in place. Without notarization there is no final tag: Homebrew disables a cask t
 downloads the ZIP would have to override macOS to open it. A release candidate needs step 1 and skips steps 2 and 3;
 see [Release candidates](#release-candidates).
 
-1. **The repository is `trukhinyuri/Baton`.** Rename it on GitHub first; GitHub redirects the old URLs. The cask,
-   the README badges, the issue links in the app and `scripts/product.env` already point there.
+1. **The repository is `trukhinyuri/Baton`, with the settings below in place.** Rename it on GitHub first; GitHub
+   redirects the old URLs. The cask, the README badges, the issue links in the app and `scripts/product.env` already
+   point there, and the release workflow's first check stops in a repository whose name differs from `REPO_SLUG` in
+   `scripts/product.env`. Then go through [Repository settings](#repository-settings).
 2. **The tap exists:** `trukhinyuri/homebrew-tap`, set up by hand as
    [packaging/homebrew/README.md](../packaging/homebrew/README.md#setting-up-the-tap) describes: `cask_renames.json`,
    no `Casks/claude-profiles.rb`, and no `Casks/baton.rb` until the first release adds it with the real sha256.
@@ -27,7 +29,28 @@ see [Release candidates](#release-candidates).
    <key id> <issuer id>` checks the certificate and sets all of them through the GitHub CLI without showing a value;
    it asks for the `.p12` password and the tap token. With `MACOS_CERTIFICATE` missing the workflow stops before building and publishes
    nothing. Only a run started by hand for the tag with `allow_unsigned` ticked publishes an ad-hoc signed, not
-   notarized build, with a note saying so in the release, and leaves the tap unchanged.
+   notarized build, as a prerelease with a note saying so, and leaves the tap unchanged.
+
+## Repository settings
+
+GitHub keeps these in the repository's settings, not in a file, so only the name is checked, by the release workflow.
+Go through the list once, before the first tag, and again after any change to the repository:
+
+- [ ] **Renamed** to `trukhinyuri/Baton` (**Settings → General**); `gh repo view trukhinyuri/Baton` finds it.
+- [ ] **Private vulnerability reporting on** (**Settings → Advanced Security → Private vulnerability reporting →
+      Enable**). `SECURITY.md`, the README, the issue forms and the app send security reports only to
+      `/security/advisories/new`; signed out, the repository's **Security** tab shows **Report a vulnerability** once
+      it is on.
+- [ ] **Issues on**: the app's **Report a problem** and `baton report --open` open the issue form.
+- [ ] **Discussions** off, unless you decide to answer questions there; then add it to
+      `.github/ISSUE_TEMPLATE/config.yml` as a contact link.
+- [ ] **About, topics and social preview** set as [launch/repo-metadata.md](launch/repo-metadata.md) lists.
+- [ ] **Branch protection** (or a ruleset) on `main`: changes through pull requests, and these CI checks required:
+      `Test (macos-14, Xcode 16.2)`, `Test (macos-15, Xcode 26.3)`, `Universal build and Rosetta smoke test`,
+      `LevelDB compatibility` and `Docs and repository files`. Update the list when a job in `ci.yml` is renamed.
+- [ ] **Dependabot alerts on** (**Settings → Advanced Security**). Version updates need no switch:
+      `.github/dependabot.yml` opens pull requests for the actions pinned by commit SHA.
+- [ ] **Actions secrets** for a signed release, as in step 3 above; a release candidate needs none.
 
 ## Release candidates
 
@@ -36,7 +59,9 @@ before `1.0.0`.
 
 1. Rename the repository to `trukhinyuri/Baton` first (step 1 of [Before the first tag](#before-the-first-tag)) and tag
    there: the README's download link and clone URL and the app's issue links point to it, so a prerelease published
-   under the old name leaves testers with no working link to the build or to report a problem.
+   under the old name leaves testers with no working link to the build or to report a problem. The workflow refuses
+   to run anywhere else. Go through [Repository settings](#repository-settings) too, at least private vulnerability
+   reporting and Issues.
 2. Set `VERSION` to `<major.minor.patch>-rc.<N>`, such as `1.0.0-rc.1`, and head its `CHANGELOG.md` entry
    `## 1.0.0-rc.1 — 2026-09-29`, with a first line saying it is a release candidate. The app's
    `CFBundleShortVersionString` and `CFBundleVersion` get the numbers only (`1.0.0`); `BatonVersion` in its
@@ -59,7 +84,11 @@ before `1.0.0`.
    their entry over: rename `## 1.0.0-rc.1 — 2026-09-29` to `## 1.0.0 — <date>`, fold in any later candidate's
    entries and replace the release-candidate line with what changed since. Otherwise the release, and the Homebrew users
    the tap moves to it, get none of the 1.0 changes and none of the upgrade notes.
-2. Check the release title for the version in `docs/launch/repo-metadata.md` and the workflow's `case`.
+2. Check the release title for the version in `docs/launch/repo-metadata.md` and the workflow's `case`. Update the
+   README's [Download](../README.md#download) section for the new version: the ZIP's name in the steps and the
+   commands, and, for the first signed release, drop the release-candidate wording and the **Open Anyway** step there,
+   and the sentence under Homebrew that the command fails until 1.0. Keep the paragraph after it: people who installed
+   a release candidate from the ZIP still have to move that app to the Trash before `brew install`.
 3. Make sure the screenshots in `docs/images` show the current app: after `make app`, run `scripts/screenshots.sh`,
    which draws them from the sample data ([TESTING.md](TESTING.md#checking-a-build)), and look at each one.
 4. Run the green bar locally: `make test`, `swift build -Xswiftc -warnings-as-errors`,
