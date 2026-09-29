@@ -310,6 +310,8 @@ struct ContinueWorkSheet: View {
                 form.offer = nil
                 if form.offerForAll { goAll(now: true) } else { go(now: true) }
             }
+            // Back to the sheet, to choose another window or session; Esc does the same.
+            Button("Cancel", role: .cancel) { form.offer = nil }
         } message: { offer in
             Text(offer.message())
         }
