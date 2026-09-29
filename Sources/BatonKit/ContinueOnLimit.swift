@@ -593,11 +593,14 @@ public enum DestinationRanking {
         }.map(\.element)
     }
 
+    /// The first of `ranked`, or `preferred` while it is among them: the window the limit banner named stays chosen
+    /// for the session it opened the Continue sheet on.
     public static func best(
         _ statuses: [ProfileStatus], excluding excluded: String? = nil, accounts: Set<String>? = nil,
-        now: Date = Date()
+        preferring preferred: String? = nil, now: Date = Date()
     ) -> String? {
-        ranked(statuses, excluding: excluded, accounts: accounts, now: now).first?.id
+        let ranked = ranked(statuses, excluding: excluded, accounts: accounts, now: now)
+        return ranked.first { $0.id == preferred }?.id ?? ranked.first?.id
     }
 
     /// The one to mark “Most headroom”: only when at least two subscriptions have a fresh sample to compare,

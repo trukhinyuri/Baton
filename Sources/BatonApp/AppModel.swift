@@ -25,8 +25,10 @@ final class AppModel: ObservableObject {
     @Published var isContinuing = false
     @Published private(set) var conversations: [Conversation] = []
     @Published private(set) var isLoadingConversations = false
-    /// Selected when the continue sheet opens, if still available.
-    @Published var preselectedConversation: String?
+    /// What the limit banner asks the Continue sheet to select: the most recent session of the window at its limit
+    /// (`continueFrom`) and the window the banner named (`continueTo`). Both `nil` for a plain “Continue work…”.
+    private(set) var continueFrom: String?
+    private(set) var continueTo: String?
     /// The result of the last action, shown above the list in full. One with a warning stays until it is dismissed;
     /// any other goes after 20 seconds, and a warning it covered shows again.
     @Published private(set) var notices = Notices()
@@ -39,16 +41,16 @@ final class AppModel: ObservableObject {
     var presentWindow: (@MainActor () -> Void)?
     @Published var isCheckingSessions = false
     @Published var diagnostics: [Diagnostics.Entry] = []
-    /// What the footer shows: the start-up warnings, which stay until Baton quits, then the last open's warning.
+    /// What the footer shows: the start-up warnings, which stay until Baton quits, then each window's open warning.
     /// Worked out when read, not kept by a didSet: Swift runs no didSet for what a class sets in its own init.
     var setupWarning: String? {
-        let shown = [startUpWarning, openWarning].compactMap { $0 }.joined(separator: " ")
+        let shown = [startUpWarning, openWarnings.text].compactMap { $0 }.joined(separator: " ")
         return shown.isEmpty ? nil : shown
     }
     /// Set once, in init, through `warnAtStartUp`.
     @Published private var startUpWarning: String?
-    /// The warning of the window the last open action started (`ProfileManager.openWarning(of:)`).
-    @Published private var openWarning: String? { didSet { remember(openWarning) } }
+    /// Each window's warning from the last time an open action started it (`ProfileManager.openWarning(of:)`).
+    @Published private var openWarnings = OpenWarnings()
     @Published var pendingRemoval: ProfileStatus?
     /// Set when this app is installed more than once (say `make install` plus the Homebrew cask).
     @Published private(set) var installWarning: String?
@@ -200,6 +202,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Brings the Baton window forward, opening it if it is closed: a menu command's sheet shows now, not the next
+    /// time the window opens.
+    func bringWindowForward() { presentWindow?() }
+
+    /// Opens the Continue sheet. From the limit banner it selects the most recent session of the window at its limit
+    /// (`tired`) and the window the banner named (`destination`); from anywhere else, the most recent session of any
+    /// window and the one with the most room.
+    func continueWork(from tired: String? = nil, to destination: String? = nil) {
+        continueFrom = tired
+        continueTo = destination
+        isContinuing = true
+    }
+
     func show(_ error: Error) {
         errorTitle = WindowStatus.alertTitle(for: error)
         errorMessage = error.localizedDescription
@@ -303,9 +318,10 @@ final class AppModel: ObservableObject {
     var limitReached: ProfileStatus? { statuses.first { $0.isRunning && isAtLimit($0) } }
 
     /// Where to continue by default: the signed-in subscription not at its limit with the most headroom, by weekly usage
-    /// plus a quarter of five-hour usage (see `DestinationRanking.ranked`), among those signed in with `accounts` if given.
-    func bestDestination(excluding excluded: String?, accounts: Set<String>? = nil) -> String? {
-        DestinationRanking.best(statuses, excluding: excluded, accounts: accounts)
+    /// plus a quarter of five-hour usage (see `DestinationRanking.ranked`), among those signed in with `accounts` if
+    /// given, or `preferred` while it is one of them.
+    func bestDestination(excluding excluded: String?, accounts: Set<String>? = nil, preferring preferred: String? = nil) -> String? {
+        DestinationRanking.best(statuses, excluding: excluded, accounts: accounts, preferring: preferred)
     }
 
     /// The accounts that may continue work touching `folders`, by the folder rules; `nil` when no rule applies.
@@ -432,20 +448,24 @@ final class AppModel: ObservableObject {
         run("Opening Claude \(profile.label) with its own account…", window: profile.id, opens: true) { try await manager.open(profile.id) }
     }
 
-    /// - Parameter asked: “Share Sessions Now” rather than the timer: a failure is also an alert, which opens the
-    ///   window if it is closed. The timer's failures show in the footer only.
+    /// - Parameter asked: “Share Sessions Now” rather than the timer: its result is a notice, and a failure is also an
+    ///   alert, which opens the window if it is closed. The timer's failures show in the footer only.
     func syncNow(asked: Bool = false) {
         guard !isDemo else { return }
         let manager = manager
         Task.detached {
             do {
                 // nil: the CLI or a launcher is syncing right now; the next tick will catch up.
-                guard let report = try manager.syncSessions() else { return }
+                guard let report = try manager.syncSessions() else {
+                    if asked { await MainActor.run { self.show(notice: SyncReport.notice(nil)) } }
+                    return
+                }
                 await MainActor.run {
                     self.lastSync = Date()
                     self.lastSyncReport = report
                     self.lastSyncChanges = report.changes
                     self.syncError = nil
+                    if asked { self.show(notice: SyncReport.notice(report)) }
                 }
             } catch {
                 Log.error("sync", "Sync failed: \(error.localizedDescription)")
@@ -506,8 +526,8 @@ final class AppModel: ObservableObject {
     /// Runs `work` with `message` in the footer.
     /// - Parameters:
     ///   - window: the window the action is on, whose Open button waits for it.
-    ///   - opens: the action opens `window`, so that window's warning replaces the last open's; the start-up warnings
-    ///     stay either way.
+    ///   - opens: the action opens `window`, so that window's warning replaces its earlier one; other windows' warnings
+    ///     and the start-up warnings stay.
     private func run(_ message: String?, window: String? = nil, opens: Bool = false, _ work: @escaping @Sendable () async throws -> Void) {
         runOpening(message, window: window) {
             try await work()
@@ -523,7 +543,11 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 // Never waits: the manager guards warnings with a lock it holds only while reading or writing them.
-                if let window = try await work() { openWarning = manager.openWarning(of: window) }
+                if let window = try await work() {
+                    let warning = manager.openWarning(of: window)
+                    openWarnings.record(warning, for: window)
+                    remember(warning)
+                }
             } catch { show(error) }
             operations.finish(operation)
             reload()

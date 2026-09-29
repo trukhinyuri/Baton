@@ -267,6 +267,8 @@ struct LimitBanner: View {
     let tired: ProfileStatus
     /// The window to name on the button; `nil` for a plain “Continue work…”.
     let best: String?
+    /// Another window has room, so the banner offers to continue there; without one it only says when this one resets.
+    var canContinue = true
     var note = ""
     let action: () -> Void
 
@@ -286,7 +288,11 @@ struct LimitBanner: View {
             if !note.isEmpty {
                 Text(note.trimmingCharacters(in: CharacterSet(charactersIn: " ·"))).font(.caption).foregroundStyle(Color.secondaryText)
             }
-            Button(best.map { "Continue in \($0)…" } ?? "Continue work…", action: action)
+            if canContinue {
+                Button(best.map { "Continue in \($0)…" } ?? "Continue work…", action: action)
+            } else {
+                Text("No other window has room now").font(.caption).foregroundStyle(Color.secondaryText)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.12)))
@@ -336,12 +342,15 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let tired = model.limitReached, let best = model.bestDestination(excluding: tired.id) {
+            if let tired = model.limitReached {
                 // With folder rules, where work may continue depends on the work; the sheet offers only allowed windows.
+                // The button opens it on the session that hit the limit, headed for the window it names.
+                let best = model.bestDestination(excluding: tired.id)
+                let named = model.folderRules?.isEmpty == true ? best : nil
                 LimitBanner(
-                    tired: tired, best: model.folderRules?.isEmpty == true ? model.buttonLabel(of: best) : nil,
-                    note: model.folderRules?.isEmpty == true ? model.staleNote(best) : ""
-                ) { model.isContinuing = true }
+                    tired: tired, best: named.map(model.buttonLabel(of:)), canContinue: best != nil,
+                    note: named.map(model.staleNote) ?? ""
+                ) { model.continueWork(from: tired.id, to: best) }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 10)
             }
@@ -416,7 +425,7 @@ struct ContentView: View {
                     .foregroundStyle(Color.secondaryText)
             }
             Spacer()
-            Button("Continue work…") { model.isContinuing = true }
+            Button("Continue work…") { model.continueWork() }
             Button {
                 model.isAdding = true
             } label: {

@@ -42,7 +42,7 @@ struct ContinueWorkSheet: View {
     }
 
     /// The window the selected conversation belongs to or last ran in: never offered for it.
-    private var source: String? { selected.flatMap { $0.ownerID ?? $0.runningIn } }
+    private var source: String? { selected?.source }
 
     /// The accounts the folder rules allow for the selected conversation; `nil` when no rule applies.
     private var allowed: (accounts: Set<String>, rules: [FolderRule])? {
@@ -179,8 +179,15 @@ struct ContinueWorkSheet: View {
                     .font(.callout).foregroundStyle(Color.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let selected {
-                Text(explanation(selected)).font(.callout).foregroundStyle(Color.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                if form.destination.isEmpty {
+                    // Windows are listed, but every one is at its limit, so none was chosen.
+                    Label(DestinationRanking.allAtLimitNote(destinations), systemImage: "info.circle")
+                        .font(.callout).foregroundStyle(Color.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(explanation(selected)).font(.callout).foregroundStyle(Color.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let note = form.plan?.model, form.plan?.conversation.id == selected.id, form.plan?.destination == form.destination {
                     Label(note.message(destination: destinationLabel), systemImage: note.isWarning ? "exclamationmark.triangle" : "cpu")
                         .font(.callout).foregroundStyle(note.isWarning ? Color.warningText : Color.secondaryText)
@@ -289,9 +296,7 @@ struct ContinueWorkSheet: View {
         }
         .onChange(of: form.selection) {
             form.problem = nil
-            if !destinations.contains(where: { $0.id == form.destination }) {
-                form.destination = model.bestDestination(excluding: source, accounts: allowed?.accounts) ?? ""
-            }
+            if !destinations.contains(where: { $0.id == form.destination }) { form.destination = defaultDestination }
             refreshPlan()
         }
         .onChange(of: form.destination) { refreshPlan() }
@@ -305,6 +310,8 @@ struct ContinueWorkSheet: View {
                 form.offer = nil
                 if form.offerForAll { goAll(now: true) } else { go(now: true) }
             }
+            // Back to the sheet, to choose another window or session; Esc does the same.
+            Button("Cancel", role: .cancel) { form.offer = nil }
         } message: { offer in
             Text(offer.message())
         }
@@ -336,10 +343,18 @@ struct ContinueWorkSheet: View {
     }
 
     private func chooseDefaults() {
-        if selected == nil { form.selection = ConversationIndex.selection(model.preselectedConversation, in: filtered) }
-        if form.destination.isEmpty || !destinations.contains(where: { $0.id == form.destination }) {
-            form.destination = model.bestDestination(excluding: source, accounts: allowed?.accounts) ?? ""
+        if selected == nil {
+            // From the limit banner: the most recent session of the window at its limit, if one is listed.
+            let latest = model.continueFrom.flatMap { ConversationIndex.latest(from: $0, in: filtered) }
+            form.selection = ConversationIndex.selection(latest, in: filtered)
         }
+        if form.destination.isEmpty || !destinations.contains(where: { $0.id == form.destination }) { form.destination = defaultDestination }
+    }
+
+    /// The window with the most room for the selected conversation, or the one the limit banner named while it has
+    /// room; empty when every window it can go to is at its limit.
+    private var defaultDestination: String {
+        model.bestDestination(excluding: source, accounts: allowed?.accounts, preferring: model.continueTo) ?? ""
     }
 
     /// Model and card details depend on the destination window's own files, so they are read off the main thread.
@@ -423,7 +438,6 @@ struct ContinueWorkSheet: View {
                 case .startedCoworkTask:
                     model.show(notice: "A new Cowork task with the history attached is waiting in Claude \(label). Review it and send it there.")
                 }
-                model.preselectedConversation = nil
                 dismiss()
             } catch {
                 report(error.localizedDescription)
@@ -474,7 +488,6 @@ struct ContinueWorkSheet: View {
                         label: label, opened: plans.count, copies: plans.filter(\.forks).count, newSession: newSession != nil),
                     leftOut: waiting.map { "Left out \($0.names): " + $0.message() }, plans: plans, label: label)
                 model.show(notice: notice.text, isWarning: notice.isWarning)
-                model.preselectedConversation = nil
                 dismiss()
             } catch {
                 report(error.localizedDescription)

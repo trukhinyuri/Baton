@@ -7,6 +7,8 @@ final class AddProfileForm: ObservableObject {
     @Published var label = ""
     @Published var color: String
     var labelEdited = false
+    /// The email field has had the focus and lost it, so its hint may show before an “@” is typed.
+    @Published var emailLeft = false
     let taken: Set<String>
 
     init(taken: Set<String>) {
@@ -16,13 +18,16 @@ final class AddProfileForm: ObservableObject {
 
     var trimmedEmail: String { email.trimmingCharacters(in: .whitespaces) }
     var suggestedLabel: String { trimmedEmail.isEmpty ? "" : Profile.suggestedLabel(for: trimmedEmail, taken: taken) }
-    var isValid: Bool { Profile.isValidEmail(trimmedEmail) && Profile.isValidLabel(label) && Profile.labelHint(label, taken: taken) == nil }
+    var isValid: Bool { Profile.isValidEmail(trimmedEmail) && Profile.isValidLabel(label) && labelHint == nil }
+    var emailHint: String? { Profile.emailHint(email, isTyping: !emailLeft) }
+    var labelHint: String? { Profile.labelHint(label, taken: taken, isEdited: labelEdited) }
 }
 
 struct AddProfileSheet: View {
     @ObservedObject var model: AppModel
     @StateObject private var form: AddProfileForm
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var emailIsFocused: Bool
 
     init(model: AppModel) {
         self.model = model
@@ -51,10 +56,12 @@ struct AddProfileSheet: View {
                         TextField("you@example.com", text: $form.email)
                             .textFieldStyle(.roundedBorder)
                             .accessibilityLabel("Email")
-                            .accessibilityHint(Profile.emailHint(form.email) ?? "")
+                            .accessibilityHint(form.emailHint ?? "")
                             .textContentType(.emailAddress)
+                            .focused($emailIsFocused)
+                            .onChange(of: emailIsFocused) { if !emailIsFocused { form.emailLeft = true } }
                             .onSubmit(create)
-                        if let hint = Profile.emailHint(form.email) {
+                        if let hint = form.emailHint {
                             Text(hint).font(.caption).foregroundStyle(Color.secondaryText)
                         }
                     }
@@ -68,19 +75,23 @@ struct AddProfileSheet: View {
                                 text: Binding(
                                     get: { form.label },
                                     set: {
+                                        // The field stops taking letters at the limit: the count says why, and
+                                        // VoiceOver, which doesn't read the count, says it when a letter is dropped.
+                                        if $0.count > Profile.maxLabelLength {
+                                            AppModel.announce("A Dock label takes up to \(Profile.maxLabelLength) characters.")
+                                        }
                                         form.label = String($0.uppercased().prefix(Profile.maxLabelLength)); form.labelEdited = true
                                     })
                             )
                             .textFieldStyle(.roundedBorder)
                             .frame(minWidth: 100, maxWidth: 140)
-                            .accessibilityLabel("Dock label")
-                            .accessibilityHint(Profile.labelHint(form.label, taken: form.taken) ?? "")
-                            // The field stops taking letters at the limit, so the count says why.
+                            .accessibilityLabel("Dock label, up to \(Profile.maxLabelLength) characters")
+                            .accessibilityHint(form.labelHint ?? "")
                             Text("\(form.label.count) of \(Profile.maxLabelLength)")
                                 .font(.caption).monospacedDigit().foregroundStyle(Color.secondaryText)
                                 .accessibilityHidden(true)
                         }
-                        if let hint = Profile.labelHint(form.label, taken: form.taken) {
+                        if let hint = form.labelHint {
                             Text(hint).font(.caption).foregroundStyle(Color.warningText)
                         }
                     }

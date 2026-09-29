@@ -159,6 +159,9 @@ public struct Paths: Sendable, Equatable {
     public var backupsDir: URL { stateDir.appending(path: "Backups", directoryHint: .isDirectory) }
     /// Histories and files prepared for continuing a conversation in another profile.
     public var handoffsDir: URL { stateDir.appending(path: "Handoffs", directoryHint: .isDirectory) }
+    /// Problem reports too long for the issue link, kept for the user to attach. Baton's own folder, so saving one
+    /// needs no macOS permission, as Downloads would.
+    public var reportsDir: URL { stateDir.appending(path: "Reports", directoryHint: .isDirectory) }
 
     /// Each profile's Claude Desktop data (sign-in, windows, caches) lives in its own directory here.
     public var profilesDir: URL { stateDir.appending(path: "Profiles", directoryHint: .isDirectory) }

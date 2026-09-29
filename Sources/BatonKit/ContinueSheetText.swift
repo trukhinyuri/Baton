@@ -36,11 +36,23 @@ extension ConversationIndex {
         return shown.first?.id
     }
 
+    /// The most recent listed conversation of `window`, which the limit banner's Continue selects: a Code session that
+    /// last ran there or a Cowork task of its account. `nil` when none is listed.
+    public static func latest(from window: String, in shown: [Conversation]) -> String? {
+        shown.first { $0.source == window }?.id
+    }
+
     /// "Showing the 200 most recent of 340. Search to find an older one."; `nil` when everything is listed.
     public static func listNote(shown: Int, matching: Int) -> String? {
         guard matching > shown else { return nil }
         return "Showing the \(shown) most recent of \(matching). Search to find an older one."
     }
+}
+
+extension Conversation {
+    /// The window the conversation belongs to (a Cowork task) or last ran in (a Code session): never offered as the
+    /// place to continue it. `nil` when Baton doesn't know.
+    public var source: String? { ownerID ?? runningIn }
 }
 
 extension DestinationRanking {
@@ -54,6 +66,23 @@ extension DestinationRanking {
             return "No other window is signed in yet. Sign in inside the Claude \(waiting.displayLabel) window, then come back here."
         }
         return "No other signed-in window can take it. Add another subscription with “Add Subscription…” to continue it elsewhere."
+    }
+
+    /// What the Continue sheet says when it lists windows but has chosen none, since every one of them (`listed`) is at
+    /// its limit: which resets first, when Claude said so, and that one can still be picked.
+    public static func allAtLimitNote(
+        _ listed: [ProfileStatus], now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current
+    ) -> String {
+        let resets = listed.compactMap { status -> (status: ProfileStatus, at: Date)? in
+            guard let reset = status.limits.binding(now: now)?.reset, reset.source != .inferred else { return nil }
+            return (status, reset.at)
+        }
+        let soonest = resets.min { $0.at < $1.at }.flatMap { first in
+            LimitText.bindingReset(first.status.limits, now: now, timeZone: timeZone, locale: locale).map {
+                " Claude \(first.status.displayLabel) \($0), the soonest."
+            }
+        }
+        return "Every window it can go to is at its limit.\(soonest ?? "") Pick one to continue there anyway."
     }
 }
 

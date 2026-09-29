@@ -66,6 +66,53 @@ struct ContinueSheetTests {
         #expect(ConversationIndex.listed(all, query: "Session").matching == 5)
     }
 
+    /// The limit banner's Continue selects the most recent session of the window at its limit: a Code session that
+    /// last ran there or a Cowork task of its account, never a more recent one of another window.
+    @Test func theLimitBannerSelectsTheSessionOfTheWindowAtItsLimit() {
+        var lab = conversation("c1", "Newer, in LAB", minutesAgo: 1)
+        lab.runningIn = "lab"
+        var work = conversation("c2", "Hit the limit in WORK", minutesAgo: 5)
+        work.runningIn = "work"
+        let unknown = conversation("c3", "Nobody knows where", minutesAgo: 6)
+        let task = Conversation(
+            kind: .cowork, sessionID: "t1", title: "WORK's task", folders: [], lastActivity: Date().addingTimeInterval(-600),
+            transcript: URL(fileURLWithPath: "/nonexistent/t1.jsonl"), ownerID: "work")
+        let shown = [lab, work, unknown, task]
+
+        #expect(ConversationIndex.latest(from: "work", in: shown) == "c2")
+        #expect(ConversationIndex.latest(from: "work", in: [lab, unknown, task]) == "t1")
+        #expect(ConversationIndex.latest(from: "main", in: shown) == nil)
+        #expect(ConversationIndex.selection(ConversationIndex.latest(from: "work", in: shown), in: shown) == "c2")
+        #expect(ConversationIndex.selection(ConversationIndex.latest(from: "main", in: shown), in: shown) == "c1", "the most recent of any window")
+        #expect(work.source == "work" && task.source == "work" && unknown.source == nil)
+    }
+
+    /// With every window it can go to at its limit, the sheet says so and names the one that resets first.
+    @Test func saysWhenEveryWindowItCanGoToIsAtItsLimit() {
+        let now = Date()
+        func atLimit(_ id: String, resetsIn: TimeInterval?) -> ProfileStatus {
+            let usage = Usage(fiveHour: 100, week: 40, sampledAt: now.addingTimeInterval(-60))
+            var limits = Limits(usage: usage)
+            limits.fiveHour = LimitState(
+                kind: .fiveHour, percent: 100, sampledAt: usage.sampledAt, reachedAt: now.addingTimeInterval(-600),
+                reset: resetsIn.map { LimitReset(at: now.addingTimeInterval($0), source: .exact) })
+            return ProfileStatus(
+                profile: Profile(id: id, label: id.uppercased(), email: nil, color: "#1971C2"), accountID: "account-\(id)",
+                email: nil, usage: usage, isRunning: true, limits: limits)
+        }
+        let listed = [atLimit("lab", resetsIn: 3 * 3600), atLimit("team", resetsIn: 1800), atLimit("home", resetsIn: nil)]
+        #expect(listed.allSatisfy { DestinationRanking.isAtLimit($0, now: now) })
+        #expect(DestinationRanking.best(listed, now: now) == nil, "the sheet chooses none of them")
+
+        let note = DestinationRanking.allAtLimitNote(listed, now: now)
+        #expect(note.hasPrefix("Every window it can go to is at its limit. Claude TEAM resets "))
+        #expect(note.hasSuffix(", the soonest. Pick one to continue there anyway."))
+        #expect(!note.contains("…"))
+        #expect(
+            DestinationRanking.allAtLimitNote([atLimit("home", resetsIn: nil)], now: now)
+                == "Every window it can go to is at its limit. Pick one to continue there anyway.")
+    }
+
     @Test func saysWhyNoWindowIsOffered() {
         let alone = DestinationRanking.noDestinationReason([status("main", signedIn: true)], source: nil)
         #expect(alone.contains("no other subscription"))
@@ -144,13 +191,30 @@ struct ProfileHintsTests {
         #expect(Profile.emailHint("me@gmail") == "Enter the full email address, like you@example.com.")
     }
 
+    /// While the address is typed, the hint waits for an “@”; once the field is left, it shows for any address.
+    @Test func theEmailHintWaitsWhileTheAddressIsTyped() {
+        #expect(Profile.emailHint("a", isTyping: true) == nil)
+        #expect(Profile.emailHint("alex", isTyping: true) == nil)
+        #expect(Profile.emailHint("alex@work", isTyping: true) == "Enter the full email address, like you@example.com.")
+        #expect(Profile.emailHint("alex") == "Enter the full email address, like you@example.com.")
+        #expect(Profile.emailHint("alex@work.example", isTyping: true) == nil)
+    }
+
     @Test func saysWhyALabelIsNotAccepted() {
         #expect(Profile.labelHint("", taken: []) == nil)
         #expect(Profile.labelHint("TEAM-2", taken: []) == nil)
         #expect(Profile.labelHint("WORK TEAM", taken: []) == "Use 1–8 letters, digits, “-” or “_”.")
         #expect(Profile.labelHint("A.B", taken: []) == "Use 1–8 letters, digits, “-” or “_”.")
         #expect(Profile.labelHint("WORK", taken: ["work"]) == "Already used by another subscription.")
-        #expect(Profile.labelHint("MAIN", taken: []) == "Names the main Claude.")
-        #expect(Profile.labelHint("CLAUDE", taken: []) == "Names the main Claude.")
+        #expect(Profile.labelHint("MAIN", taken: []) == "MAIN is reserved for the main Claude window.")
+        #expect(Profile.labelHint("claude", taken: []) == "CLAUDE is reserved for the main Claude window.")
+    }
+
+    /// A label emptied by hand holds Create and Open back, so it says a label is needed; the empty field of a new
+    /// sheet says nothing yet.
+    @Test func anEmptiedLabelSaysOneIsNeeded() {
+        #expect(Profile.labelHint("", taken: [], isEdited: false) == nil)
+        #expect(Profile.labelHint("", taken: [], isEdited: true) == "Enter a Dock label: 1–8 letters, digits, “-” or “_”.")
+        #expect(Profile.labelHint("WORK", taken: [], isEdited: true) == nil)
     }
 }

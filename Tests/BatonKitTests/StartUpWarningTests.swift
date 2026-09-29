@@ -16,7 +16,7 @@ struct StartUpWarningTests {
             }
         }
         let observed = try matches(#"var (\w+)[^\n{]*\{ *(?:didSet|willSet)"#, in: source)
-        #expect(observed.contains("openWarning") && observed.contains("errorMessage"), "the pattern still finds them")
+        #expect(observed.contains("syncError") && observed.contains("errorMessage"), "the pattern still finds them")
 
         let start = try #require(source.range(of: "\n    init() {\n"))
         let end = try #require(source.range(of: "\n    }\n", range: start.upperBound..<source.endIndex))

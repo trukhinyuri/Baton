@@ -39,7 +39,7 @@ struct ReportSharingTests {
         let whatHappenedEncoded = try #require(comps?.percentEncodedQueryItems?.first { $0.name == "what-happened" }?.value)
         #expect(diagnosticsEncoded.count + whatHappenedEncoded.count <= FeedbackReport.urlBodyLimit)
         #expect(diagnostics.hasPrefix("Baton 1.0.0 (abc1234)"))
-        #expect(diagnostics.contains("attach"))
+        #expect(diagnostics.contains("It is on the clipboard: paste it below."), "no file was named, so none is to be attached")
         #expect(query("title", in: longLink.url) == "Problem report")
     }
 
@@ -50,7 +50,7 @@ struct ReportSharingTests {
         var copied: [String] = [], opened: [URL] = []
 
         let long = FeedbackReport(facts: facts(logLines: 200))
-        let shared = try long.share(
+        let shared = long.share(
             title: "", description: "Sessions vanish", saveIn: folder,
             copy: { copied.append($0) }, open: { opened.append($0) })
         let file = try #require(shared.file)
@@ -63,10 +63,44 @@ struct ReportSharingTests {
 
         copied = []; opened = []
         let short = FeedbackReport(facts: facts(logLines: 2))
-        let quick = try short.share(title: "x", description: "", saveIn: folder, copy: { copied.append($0) }, open: { opened.append($0) })
+        let quick = short.share(title: "x", description: "", saveIn: folder, copy: { copied.append($0) }, open: { opened.append($0) })
         #expect(quick.file == nil)
         #expect(copied.isEmpty)
         #expect(opened == [quick.link.url])
+    }
+
+    /// A report that can't be saved, as when macOS refuses a folder, is still copied and the form still opens, saying
+    /// the report is on the clipboard; with no folder it isn't saved at all.
+    @Test func aLongReportThatCanNotBeSavedIsStillCopiedAndOpened() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "report-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // A file where the folder should be: nothing can be saved inside it.
+        let blocked = root.appending(path: "Reports")
+        try Data("not a folder".utf8).write(to: blocked)
+        let long = FeedbackReport(facts: facts(logLines: 200))
+
+        for folder in [blocked, nil] {
+            var copied: [String] = [], opened: [URL] = []
+            let shared = long.share(title: "", description: "", saveIn: folder, copy: { copied.append($0) }, open: { opened.append($0) })
+            #expect(shared.file == nil)
+            #expect((shared.saveProblem != nil) == (folder != nil))
+            #expect(copied == [long.document(description: "")])
+            #expect(opened == [shared.link.url])
+            let diagnostics = try #require(query("diagnostics", in: shared.link.url))
+            #expect(diagnostics.contains("It is on the clipboard: paste it below."))
+        }
+    }
+
+    /// The app saves a long report in Baton's own data folder: writing into Downloads brings up a macOS prompt for
+    /// folder access, and README promises notifications are the only one.
+    @Test func theAppSavesReportsInItsOwnFolder() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let sheet = try String(contentsOf: repo.appending(path: "Sources/BatonApp/ReportSheet.swift"), encoding: .utf8)
+        #expect(!sheet.contains("downloadsDirectory"))
+        #expect(sheet.contains("paths.reportsDir"))
+        let paths = Paths(home: URL(fileURLWithPath: "/Users/robin.k"), claudeApp: URL(fileURLWithPath: "/Applications/Claude.app"))
+        #expect(paths.reportsDir.deletingLastPathComponent().standardizedFileURL == paths.stateDir.standardizedFileURL)
     }
 
     /// A window whose Local only waits for it to close is reported as waiting, not as off.
