@@ -17,6 +17,7 @@ struct BuildInfoTests {
         #expect(helper == BuildInfo(version: "1.0.0", commit: "abc123def456"))
         #expect(main == helper)
         #expect(helper.description == "Baton 1.0.0 (abc123def456)")
+        #expect(AppInstances.version(of: root.appending(path: "Baton.app")) == "1.0.0", "a build without BatonVersion")
     }
 
     @Test func readsTheCommitABuildFromBeforeTheRenameRecorded() throws {
@@ -55,20 +56,32 @@ struct BuildInfoTests {
         let build = BuildInfo.read(executable: app.appending(path: "Helpers/baton"))
         #expect(build == BuildInfo(version: "1.0.0-rc.1", commit: "abc123def456"))
         #expect(build.description == "Baton 1.0.0-rc.1 (abc123def456)")
-        #expect(build.numericVersion == "1.0.0")
+        // Copies of the app are compared by the same full version.
+        #expect(AppInstances.version(of: root.appending(path: "Baton.app")) == "1.0.0-rc.1")
     }
 
-    @Test func numericVersionDropsOnlyThePrereleaseSuffix() {
-        #expect(BuildInfo(version: "1.0.0", commit: "x").numericVersion == "1.0.0")
-        #expect(BuildInfo(version: "1.2.3-rc.12", commit: "x").numericVersion == "1.2.3")
-        #expect(BuildInfo(version: "dev", commit: "x").numericVersion == "dev")
+    /// A release candidate sits between the release before it and its own release, so each replaces the one before.
+    @Test func aReleaseCandidateIsBelowItsRelease() {
+        #expect(AppInstances.isVersion("0.2.0", below: "1.0.0-rc.1"))
+        #expect(AppInstances.isVersion("1.0.0-rc.1", below: "1.0.0-rc.2"))
+        #expect(AppInstances.isVersion("1.0.0-rc.2", below: "1.0.0-rc.10"), "numeric parts compare as numbers")
+        #expect(AppInstances.isVersion("1.0.0-rc.1", below: "1.0.0"))
+        #expect(AppInstances.isVersion("1.0.0-rc.9", below: "1.0.1-rc.1"))
+        #expect(AppInstances.isVersion("1.0.0-rc", below: "1.0.0-rc.1"), "fewer parts are lower when the rest is equal")
+        #expect(!AppInstances.isVersion("1.0.0", below: "1.0.0-rc.1"))
+        #expect(!AppInstances.isVersion("1.0.0-rc.1", below: "1.0.0-rc.1"))
+        #expect(!AppInstances.isVersion("1.0.0-rc.2", below: "1.0.0-rc.1"))
+        #expect(!AppInstances.isVersion("1.0.0-", below: "1.0.0"), "an empty suffix isn't a version")
+        #expect(!AppInstances.isVersion("dev", below: "1.0.0-rc.1"))
     }
 
-    /// An older copy (0.2.0) still counts as outdated next to a release candidate of 1.0.0.
-    @Test func aReleaseCandidateStillReplacesOlderCopies() {
-        let current = BuildInfo(version: "1.0.0-rc.1", commit: "x").numericVersion
-        #expect(AppInstances.isVersion("0.2.0", below: current))
-        #expect(!AppInstances.isVersion("1.0.0", below: current))
+    /// The signed 1.0.0 asks a running 1.0.0-rc.1 to quit instead of handing over to it, and rc.1 hands over to 1.0.0.
+    @Test func theReleaseReplacesARunningReleaseCandidate() {
+        let candidate = AppInstances.RunningCopy(pid: 20, bundle: URL(fileURLWithPath: "/Applications/Baton.app"), version: "1.0.0-rc.1")
+        let release = AppInstances.RunningCopy(pid: 21, bundle: URL(fileURLWithPath: "/Applications/Baton.app"), version: "1.0.0")
+        #expect(AppInstances.handover(others: [candidate], currentVersion: "1.0.0") == .init(terminate: [20], handOverTo: nil))
+        #expect(AppInstances.handover(others: [candidate], currentVersion: "1.0.0-rc.2") == .init(terminate: [20], handOverTo: nil))
+        #expect(AppInstances.handover(others: [release], currentVersion: "1.0.0-rc.1") == .init(terminate: [], handOverTo: 21))
     }
 
     @Test func outsideAnAppReportsDev() {

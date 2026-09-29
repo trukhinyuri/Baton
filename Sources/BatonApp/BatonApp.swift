@@ -21,7 +21,11 @@ struct BatonApp: App {
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About Baton") {
-                    NSApp.orderFrontStandardAboutPanel(options: [.credits: About.credits])
+                    // Baton's own version, with a suffix such as -rc.1, and its commit: AppKit would show
+                    // CFBundleShortVersionString and CFBundleVersion, which hold only the numbers.
+                    NSApp.orderFrontStandardAboutPanel(options: [
+                        .credits: About.credits, .applicationVersion: BuildInfo.current.version, .version: BuildInfo.current.commit,
+                    ])
                     NSApp.activate()
                 }
             }

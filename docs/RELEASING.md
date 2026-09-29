@@ -12,8 +12,8 @@ workflow** with the tag.
 
 The README offers Homebrew as the main way to install, so a final release is tagged only when all three of these are
 in place. Without notarization there is no final tag: Homebrew disables a cask that fails Gatekeeper, and everyone who
-downloads the ZIP would have to override macOS to open it. A release candidate is the exception; see
-[Release candidates](#release-candidates).
+downloads the ZIP would have to override macOS to open it. A release candidate needs step 1 and skips steps 2 and 3;
+see [Release candidates](#release-candidates).
 
 1. **The repository is `trukhinyuri/Baton`.** Rename it on GitHub first; GitHub redirects the old URLs. The cask,
    the README badges, the issue links in the app and `scripts/product.env` already point there.
@@ -34,23 +34,31 @@ downloads the ZIP would have to override macOS to open it. A release candidate i
 A release candidate goes out before the signed release, unsigned (ad-hoc signed, not notarized): `1.0.0-rc.1` comes
 before `1.0.0`.
 
-1. Set `VERSION` to `<major.minor.patch>-rc.<N>`, such as `1.0.0-rc.1`, and head its `CHANGELOG.md` entry
-   `## 1.0.0-rc.1 — 2026-09-29`. The app's `CFBundleShortVersionString` and `CFBundleVersion` get the numbers only
-   (`1.0.0`); `BatonVersion` in its `Info.plist` holds the full version, which `baton --version` and the problem report
-   show. The ZIP is `Baton-v1.0.0-rc.1.zip`.
-2. Run the green bar as for any release (step 4 below), then tag and push the tag: `git tag v1.0.0-rc.1 && git push
+1. Rename the repository to `trukhinyuri/Baton` first (step 1 of [Before the first tag](#before-the-first-tag)) and tag
+   there: the README's download link and clone URL and the app's issue links point to it, so a prerelease published
+   under the old name leaves testers with no working link to the build or to report a problem.
+2. Set `VERSION` to `<major.minor.patch>-rc.<N>`, such as `1.0.0-rc.1`, and head its `CHANGELOG.md` entry
+   `## 1.0.0-rc.1 — 2026-09-29`, with a first line saying it is a release candidate. The app's
+   `CFBundleShortVersionString` and `CFBundleVersion` get the numbers only (`1.0.0`); `BatonVersion` in its
+   `Info.plist` holds the full version, which `baton --version`, the About box and the problem report show. The ZIP is
+   `Baton-v1.0.0-rc.1.zip`. A copy of a later version asks a running candidate to quit, as it does any older version:
+   `1.0.0-rc.1` is below `1.0.0-rc.2`, which is below `1.0.0`.
+3. Run the green bar as for any release (step 4 below), then tag and push the tag: `git tag v1.0.0-rc.1 && git push
    origin v1.0.0-rc.1`. Without the signing secrets that run stops before building.
-3. Run the workflow by hand for the tag: **Actions → Release → Run workflow**, pick the tag, tick `allow_unsigned`.
+4. Run the workflow by hand for the tag: **Actions → Release → Run workflow**, pick the tag, tick `allow_unsigned`.
    It publishes a GitHub prerelease, never marked Latest, titled "Baton 1.0.0-rc.1 — first leg, release candidate",
    with a note on how to open a build that isn't notarized (Open Anyway in System Settings → Privacy & Security, or
    `make install`).
-4. The `tap` job is skipped: the cask follows signed final releases only, and `bump-cask.yml` refuses a `-rc.` tag.
+5. The `tap` job is skipped: the cask follows signed final releases only, and `bump-cask.yml` refuses a `-rc.` tag.
 
 ## Each release
 
 1. Set `VERSION` to the new version. Give its `CHANGELOG.md` entry the release date in the heading, like the entries
-   before it: `## 1.0.0 — unreleased` becomes `## 1.0.0 — 2026-10-05`. The workflow refuses a tag that doesn't match
-   `VERSION` or whose heading has no date.
+   before it: `## 1.0.0 — 2026-10-05`. The workflow refuses a tag that doesn't match `VERSION` or whose heading has no
+   date. The release notes are only the entry headed with the version, so a release that follows its candidates takes
+   their entry over: rename `## 1.0.0-rc.1 — 2026-09-29` to `## 1.0.0 — <date>`, fold in any later candidate's
+   entries and replace the release-candidate line with what changed since. Otherwise the release, and the Homebrew users
+   the tap moves to it, get none of the 1.0 changes and none of the upgrade notes.
 2. Check the release title for the version in `docs/launch/repo-metadata.md` and the workflow's `case`.
 3. Make sure the screenshots in `docs/images` show the current app: after `make app`, run `scripts/screenshots.sh`,
    which draws them from the sample data ([TESTING.md](TESTING.md#checking-a-build)), and look at each one.

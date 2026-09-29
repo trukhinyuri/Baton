@@ -11,10 +11,6 @@ public struct BuildInfo: Equatable, Sendable {
     /// The line `--version` prints and the problem report starts with.
     public var description: String { "Baton \(version) (\(commit))" }
 
-    /// The `major.minor.patch` part of `version`, without a prerelease suffix such as `-rc.1`: what the bundle's
-    /// `CFBundleShortVersionString` holds and what copies of the app are compared by.
-    public var numericVersion: String { String(version.prefix { $0 != "-" }) }
-
     /// Walks up from the executable to the nearest `*.app` and reads its `Contents/Info.plist`.
     public static func read(executable: URL) -> BuildInfo {
         var dir = executable.resolvingSymlinksInPath().deletingLastPathComponent()

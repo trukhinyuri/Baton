@@ -52,7 +52,8 @@ jobs:
             END { if (!found) exit 1 }
           ' CHANGELOG.md > "$notes_file"
           # The entry's heading carries the release date, like the ones before it: "## 1.0.0 — 2026-10-05".
-          # Until then it reads "## 1.0.0 — unreleased". A release candidate is headed the same way: "## 1.0.0-rc.1 — 2026-09-29".
+          # A release candidate is headed the same way: "## 1.0.0-rc.1 — 2026-09-29". Only the entry headed with the version
+          # becomes the notes, so the release after its candidates renames their entry to its own heading (docs/RELEASING.md).
           if ! grep -qE "^## ${version//./\\.} — [0-9]{4}-[0-9]{2}-[0-9]{2}\$" CHANGELOG.md; then
             echo "CHANGELOG.md: the $version heading needs its release date, as in \"## $version — $(date -u +%F)\"." >&2
             exit 1
