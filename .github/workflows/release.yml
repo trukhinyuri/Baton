@@ -20,16 +20,28 @@ jobs:
   release:
     runs-on: macos-15
     env:
-      # Set for every step, so an empty one means the secret is missing and the build stays ad hoc.
-      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      # Only whether the certificate is set, for the steps' conditions: without it the build stays ad hoc. The
+      # certificate itself is given to the one step that imports it, not to every step of the job.
+      HAS_CERT: ${{ secrets.MACOS_CERTIFICATE != '' }}
       ALLOW_UNSIGNED: ${{ inputs.allow_unsigned == true }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # First: the README, the cask, the issue forms and the app's links all point at REPO_SLUG, so a release
+      # published anywhere else leaves its users with dead links (docs/RELEASING.md, Before the first tag).
+      - name: Check the repository
+        run: |
+          . scripts/product.env
+          if [ "$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$REPO_SLUG" | tr '[:upper:]' '[:lower:]')" ]; then
+            echo "::error::This is $GITHUB_REPOSITORY, but scripts/product.env says $REPO_SLUG, where the README, the cask and the app's links point. Rename the repository first (docs/RELEASING.md)."
+            exit 1
+          fi
       - name: Stop without signing secrets
-        if: env.MACOS_CERTIFICATE == '' && env.ALLOW_UNSIGNED != 'true'
+        if: env.HAS_CERT != 'true' && env.ALLOW_UNSIGNED != 'true'
         run: |
           echo "::error::Signing secrets are missing; a release is published only when it can be notarized (docs/RELEASING.md). To publish an ad-hoc build anyway, run this workflow by hand for the tag with allow_unsigned."
           exit 1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.3.app && swift --version
       - name: Validate release version and notes
@@ -69,8 +81,9 @@ jobs:
 
       # Signing: a throwaway keychain holding the Developer ID certificate and the notary credentials.
       - name: Import signing certificate
-        if: env.MACOS_CERTIFICATE != ''
+        if: env.HAS_CERT == 'true'
         env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -106,13 +119,15 @@ jobs:
       - name: Package
         run: scripts/package.sh "$(cat VERSION)" && scripts/verify-build.sh
       - name: Say when the build is not notarized (allow_unsigned)
-        if: env.MACOS_CERTIFICATE == ''
+        if: env.HAS_CERT != 'true'
         run: |
           {
             echo
-            echo "This build is ad-hoc signed and not notarized, so macOS blocks it the first time. To open it: unzip it,"
-            echo "move Baton.app to /Applications, open it once (macOS refuses), then go to System Settings → Privacy & Security"
-            echo "and click Open Anyway next to Baton. Or build it from source with \`make install\`, which isn't quarantined."
+            echo "This build is ad-hoc signed and not notarized, so macOS blocks it the first time. To open it: unzip it and"
+            echo "drag Baton.app to /Applications in Finder before you open it (opened where it was unzipped, it runs from a"
+            echo "temporary copy that its launchers would point into). Open it once (macOS refuses), then go to"
+            echo "System Settings → Privacy & Security and click Open Anyway next to Baton. Or build it from source with"
+            echo "\`make install\`, which isn't quarantined."
           } >> "$RUNNER_TEMP/release-notes.md"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -128,10 +143,13 @@ jobs:
             1.0.0) title="$PRODUCT_NAME $version — first leg" ;;
             *) title="$PRODUCT_NAME $version" ;;
           esac
-          # A release candidate (-rc.N) is a prerelease: never marked Latest, and its title says so.
+          # A release candidate (-rc.N) is a prerelease: never marked Latest, and its title says so. So is a build that
+          # isn't notarized (allow_unsigned): Latest, the README's badge and the cask's livecheck are for signed releases.
           prerelease=()
           if [[ "$version" == *-rc.* ]]; then
             title="$title, release candidate"
+            prerelease=(--prerelease)
+          elif [[ "$HAS_CERT" != true ]]; then
             prerelease=(--prerelease)
           fi
           gh release create "$GITHUB_REF_NAME" "build/$ARCHIVE_STEM-$GITHUB_REF_NAME.zip" build/SHA256SUMS.txt \
@@ -151,4 +169,6 @@ jobs:
     uses: ./.github/workflows/bump-cask.yml
     with:
       tag: ${{ github.ref_name }}
-    secrets: inherit
+    # Only the tap token: the signing and notary secrets stay with the release job.
+    secrets:
+      HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
