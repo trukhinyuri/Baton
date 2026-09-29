@@ -38,8 +38,11 @@ struct MoveWorkSheet: View {
         let moving = plan.sessions.sorted { ($0.cut ? 0 : 1, $1.lastActivity) < ($1.cut ? 0 : 1, $0.lastActivity) }.map { session in
             let folder = session.folders.first.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "No folder"
             let how =
-                session.asCopy
-                ? " · continues as a copy" : later.contains(session.card) ? " · continues in \(model.displayLabel(of: plan.source)) at its reset" : ""
+                later.contains(session.card)
+                ? (session.asCopy
+                    ? " · keeps running in \(model.displayLabel(of: plan.source)) and continues there at its reset; its copy moves"
+                    : " · continues in \(model.displayLabel(of: plan.source)) at its reset")
+                : session.asCopy ? " · continues as a copy" : ""
             return Row(id: session.card, title: session.title, detail: folder + how, resumes: session.cut && !later.contains(session.card))
         }
         let source = model.displayLabel(of: plan.source), destination = model.displayLabel(of: plan.destination)

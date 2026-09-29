@@ -22,7 +22,7 @@ The **Continue work…** sheet is the same operation by hand: one list of what m
 
 ## Consequences
 
-- Claude Code processes stay alive for hours in a running window, so a window at its limit often has live sessions: those continue as copies, and the window is closed later, once nothing works there, never forced.
+- Claude Code processes stay alive for hours in a running window, so a window at its limit often has live sessions: those continue as copies, and the window is closed later, once nothing works there, never forced. A live session the limit cut whose auto-continue is on there keeps running there and continues there at the reset: its copy is made in the destination but never seeded or resumed, so one cut turn never continues twice, and the line names it.
 - A busy destination may wait long; the ranking's preference for closed or idle windows avoids most waits.
 - Whether a seeded auto-continue fires depends on a server flag whose cache key isn't known yet. Baton seeds and then watches: a session that didn't continue is named, never assumed.
 - Revisit if Claude Desktop hands sessions between accounts itself, locks sessions across windows, or changes how its sidebar store and auto-continue entries are kept.

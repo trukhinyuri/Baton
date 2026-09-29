@@ -55,6 +55,10 @@ public enum HandoverLeftover: Codable, Equatable, Sendable {
     /// Code works there, so its own auto-continue for them stays on, and resuming them elsewhere too would put one
     /// session in two windows.
     case resumeInSource(count: Int)
+    /// Sessions the limit cut that a Claude Code process still runs in the window at its limit, with their
+    /// auto-continue on there: they keep running there and continue there at its reset. Their copies are made in the
+    /// destination, so the history is there, but never resumed, or one cut turn would continue twice.
+    case keepRunningInSource(count: Int)
 }
 
 /// What handing a window's work over would do, worked out without changing anything.
@@ -78,15 +82,20 @@ public struct HandoverPlan: Equatable, Sendable {
     /// Sessions that resume in the destination.
     public var cut: [HandoverSession] { sessions.filter(\.cut) }
 
-    /// Sessions the limit cut that continue in the source at its reset instead, while the source stays open: moved as
-    /// themselves and on with their auto-continue there. A busy source is expected to stay open.
+    /// Sessions the limit cut that continue in the source at its reset instead, while the source stays open, with
+    /// their auto-continue on there: moved as themselves (`waitsForSource`), or still running there, whose copies
+    /// move without resuming (`keepsRunning`). A busy source is expected to stay open.
     public var resumeInSource: [HandoverSession] {
-        sourceActivity.isBusy ? sessions.filter(Self.waitsForSource) : []
+        sourceActivity.isBusy ? sessions.filter { Self.waitsForSource($0) || Self.keepsRunning($0) } : []
     }
 
     /// A cut session, not a copy, whose auto-continue is on in the source: the source continues it at its reset if
     /// it is still open then.
     static func waitsForSource(_ session: HandoverSession) -> Bool { session.cut && session.armed && !session.asCopy }
+
+    /// A cut session still running in the source with its auto-continue on there: it continues there, so its copy
+    /// in the destination is never seeded or resumed.
+    static func keepsRunning(_ session: HandoverSession) -> Bool { session.cut && session.armed && session.asCopy }
 }
 
 /// What a handover did.
@@ -175,7 +184,8 @@ public struct HandoverLog: Sendable {
         public var startedAt: Date
         public var finishedAt: Date?
         /// starting (closing the source and making copies; nothing prepared for the destination yet), waiting (ready
-        /// for the destination), done, cancelled or failed.
+        /// for the destination), done, cancelled, failed, or restarted (stopped while starting and taken up afresh:
+        /// kept only for its copies, and not a handover of its episode).
         public var state: String
         public var sessions: Int
         public var resumed: [String] = []
@@ -188,6 +198,9 @@ public struct HandoverLog: Sendable {
         public var pending: Pending?
         /// The cards the handover set out to move, for taking up one that stopped while it started.
         public var cards: [String]? = nil
+        /// The copies made so far, by the source card they copy: the copy's session id. A handover that takes up one
+        /// stopped while it started uses them again instead of making or moving anything else for those sessions.
+        public var copies: [String: String]? = nil
     }
 
     struct State: Codable {
@@ -200,6 +213,8 @@ public struct HandoverLog: Sendable {
     static let keep: TimeInterval = 7 * 86_400
     /// Two resets this close are the same limit.
     static let sameEpisode: TimeInterval = 3600
+    /// The state of a handover stopped while it started and taken up afresh.
+    static let restarted = "restarted"
 
     public init(paths: Paths) { file = paths.stateDir.appending(path: "handovers.json") }
 
@@ -210,7 +225,7 @@ public struct HandoverLog: Sendable {
 
     /// Whether the work of `source` at the limit that resets at `resetsAt` was handed over already, or is being.
     public func handled(source: String, resetsAt: Date?, now: Date = Date()) -> Bool {
-        entries().contains { Self.same($0, source: source, resetsAt: resetsAt, now: now) }
+        entries().contains { $0.state != Self.restarted && Self.same($0, source: source, resetsAt: resetsAt, now: now) }
     }
 
     static func same(_ entry: Entry, source: String, resetsAt: Date?, now: Date) -> Bool {
@@ -261,15 +276,6 @@ public struct HandoverLog: Sendable {
             state.entries = before.filter { !same($0) && now.timeIntervalSince($0.startedAt) < Self.keep }
             state.entries.append(entry)
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder.handovers.encode(state).write(to: file, options: .atomic)
-        }
-    }
-
-    /// Forgets `entry`, a handover stopped before it prepared anything, so its episode can be handed over afresh.
-    func remove(_ entry: Entry) throws {
-        try FileLock.withLock(lock, blocking: true) {
-            var state = State()
-            state.entries = entries().filter { !($0.source == entry.source && abs($0.startedAt.timeIntervalSince(entry.startedAt)) < 1) }
             try JSONEncoder.handovers.encode(state).write(to: file, options: .atomic)
         }
     }
@@ -374,7 +380,9 @@ public enum HandoverText {
         case .done:
             head = "\(first)Your work continues in \(destination)\(resumedText)"
         }
-        let clauses = result.state == .picksUpItself ? [] : plan.leftovers.compactMap { clause($0, source: source, destination: destination) }
+        let at = plan.resetsAt.map { LimitText.time($0, now: now, timeZone: timeZone, locale: locale) }
+        let clauses =
+            result.state == .picksUpItself ? [] : plan.leftovers.compactMap { clause($0, source: source, destination: destination, at: at) }
         var parts = Array(clauses.prefix(maxClauses))
         if clauses.count > maxClauses { parts.append("and more — baton doctor") }
         return ([head] + parts).joined(separator: "; ") + "."
@@ -399,7 +407,8 @@ public enum HandoverText {
     }
 
     /// The clause the line names `leftover` with, such as "3 stay in ROBIN: Remote Control reaches them there".
-    public static func clause(_ leftover: HandoverLeftover, source: String, destination: String) -> String? {
+    /// - Parameter at: when the source's limit resets ("at 19:10"), if known.
+    public static func clause(_ leftover: HandoverLeftover, source: String, destination: String, at: String? = nil) -> String? {
         switch leftover {
         case .folderRule(let count, let folder, let accounts):
             let name = URL(fileURLWithPath: folder).lastPathComponent
@@ -435,6 +444,11 @@ public enum HandoverText {
             return count == 1 ? "the copy made in \(destination) stays there" : "the \(count) copies made in \(destination) stay there"
         case .resumeInSource(let count):
             return "\(count) \(count == 1 ? "continues" : "continue") in \(source) when its limit resets, as Claude Code still works there"
+        case .keepRunningInSource(let count):
+            let when = at ?? "when its limit resets"
+            return count == 1
+                ? "1 keeps running in \(source) and continues there \(when); its copy is in \(destination)"
+                : "\(count) keep running in \(source) and continue there \(when); their copies are in \(destination)"
         }
     }
 
@@ -485,8 +499,10 @@ extension ProfileManager {
             // Sessions a handover of this limit already resumed elsewhere move, but don't resume a second time:
             // that window's auto-continue has them, and one session must not run in two windows.
             let earlier = Set(
-                HandoverLog(paths: paths).entries().filter { HandoverLog.same($0, source: source, resetsAt: resetsAt, now: now) }
-                    .flatMap { $0.cards ?? [] })
+                HandoverLog(paths: paths).entries().filter {
+                    $0.state != HandoverLog.restarted && HandoverLog.same($0, source: source, resetsAt: resetsAt, now: now)
+                }
+                .flatMap { $0.cards ?? [] })
             for i in candidates.indices where earlier.contains(candidates[i].session.card) { candidates[i].session.cut = false }
         }
         let remoteControl = candidates.filter(\.remoteControl).count
@@ -526,7 +542,9 @@ extension ProfileManager {
             leftovers.append(.folderRule(count: found.count, folder: folder, accounts: found.accounts))
         }
         if remoteControl > 0 { leftovers.append(.remoteControl(count: remoteControl)) }
-        let copies = sessions.filter(\.asCopy).count
+        let running = sourceActivity.isBusy ? sessions.filter(HandoverPlan.keepsRunning).count : 0
+        if running > 0 { leftovers.append(.keepRunningInSource(count: running)) }
+        let copies = sessions.filter(\.asCopy).count - running
         if copies > 0 { leftovers.append(.copies(count: copies)) }
         if sourceActivity.isBusy {
             let later = sessions.filter(HandoverPlan.waitsForSource).count
@@ -665,7 +683,15 @@ extension ProfileManager {
         let live =
             sourceClosed
             ? liveBefore.intersection(liveSessionIDs?() ?? LiveSessions.ids(claudeDir: paths.claudeDir)) : liveSessions(in: plan.source)
-        for i in plan.sessions.indices { plan.sessions[i].asCopy = live.contains(plan.sessions[i].transcript) }
+        // Copies an earlier handover of this episode made before it stopped are used again, so no second card appears.
+        let earlier =
+            log.entries().last {
+                $0.state == HandoverLog.restarted && $0.destination == plan.destination
+                    && HandoverLog.same($0, source: plan.source, resetsAt: plan.resetsAt, now: now)
+            }?.copies ?? [:]
+        for i in plan.sessions.indices {
+            plan.sessions[i].asCopy = live.contains(plan.sessions[i].transcript) || earlier[plan.sessions[i].card] != nil
+        }
         if sourceClosed {
             do { _ = try localOnly.reconcile(window: plan.source) } catch {
                 Log.error("handover", "Local only in window \(plan.source): \(error.localizedDescription)")
@@ -677,43 +703,54 @@ extension ProfileManager {
         var renamed: [String: String] = [:]
         var shown: [String: String] = [:]
         var notCopied: [HandoverSession] = []
+        var copies: [String: String] = [:]
         for session in plan.sessions where session.asCopy {
             do {
-                let copy = try makeHandoverCopy(session, from: plan.source, into: plan.destination)
+                let copy =
+                    try reusedHandoverCopy(earlier[session.card], in: plan.destination)
+                    ?? makeHandoverCopy(session, from: plan.source, into: plan.destination)
                 renamed[session.card] = copy.card
                 shown[session.transcript] = copy.transcript
+                copies[session.card] = copy.transcript
             } catch {
                 notCopied.append(session)
                 Log.error("handover", "Couldn't copy a session still open in window \(plan.source): \(error.localizedDescription)")
+                continue
+            }
+            // Noted at once, so a handover taken up after a stop here uses the copy again.
+            entry.copies = copies
+            do { try log.save(entry, now: now) } catch {
+                Log.error("handover", "Couldn't note a copy in the handover log: \(error.localizedDescription)")
             }
         }
         let failed = Set(notCopied.map(\.card))
         plan.sessions.removeAll { failed.contains($0.card) }
 
         // A cut session whose auto-continue stays on in a source that stays open would continue there at its reset
-        // too, so it isn't resumed in the destination: the source continues it then, and its entry stays on.
+        // too, so it isn't resumed in the destination: the source continues it then, and its entry stays on. One
+        // still running there keeps running; its copy is in the destination but never seeded or resumed.
         let armed = AutoResume.armedEntries(in: sourceDir, account: sourceAccount, now: now) ?? []
         let armedCards = Set(armed.map(\.key))
-        var later = Set<String>()
+        var later = Set<String>(), running = Set<String>()
         for i in plan.sessions.indices {
             plan.sessions[i].armed = armedCards.contains(plan.sessions[i].card)
-            if !sourceClosed, HandoverPlan.waitsForSource(plan.sessions[i]) {
-                plan.sessions[i].cut = false
-                later.insert(plan.sessions[i].card)
-            }
+            guard !sourceClosed, plan.sessions[i].cut, plan.sessions[i].armed else { continue }
+            plan.sessions[i].cut = false
+            if renamed[plan.sessions[i].card] != nil { running.insert(plan.sessions[i].card) } else { later.insert(plan.sessions[i].card) }
         }
         plan.leftovers.removeAll {
             switch $0 {
-            case .copies, .resumeInSource: true
+            case .copies, .resumeInSource, .keepRunningInSource: true
             default: false
             }
         }
-        if !renamed.isEmpty { plan.leftovers.append(.copies(count: renamed.count)) }
+        if !running.isEmpty { plan.leftovers.append(.keepRunningInSource(count: running.count)) }
+        if renamed.count > running.count { plan.leftovers.append(.copies(count: renamed.count - running.count)) }
         if !later.isEmpty { plan.leftovers.append(.resumeInSource(count: later.count)) }
         if !notCopied.isEmpty { plan.leftovers.append(.notMoved(titles: notCopied.map(\.title))) }
 
         let handed = Set(plan.sessions.map(\.card))
-        for armedEntry in armed where handed.contains(armedEntry.key) && !later.contains(armedEntry.key) {
+        for armedEntry in armed where handed.contains(armedEntry.key) && !later.contains(armedEntry.key) && !running.contains(armedEntry.key) {
             do {
                 if sourceClosed {
                     try autoResume.turnOff(armedEntry, window: plan.source, account: sourceAccount, now: now)
@@ -828,8 +865,9 @@ extension ProfileManager {
 
     /// Takes up a handover of `source` that stopped while it started (Ctrl-C or a crash while it closed the source or
     /// made copies), before anything was ready for its destination: puts back the auto-continue it turned off in the
-    /// source and drops the turn-offs it left waiting, so its sessions are cut again, then forgets it, so the episode
-    /// is handed over afresh. Copies it made are used again.
+    /// source and drops the turn-offs it left waiting, so its sessions are cut again, then marks it restarted, so the
+    /// episode is handed over afresh. The copies it made are used again by that handover (`HandoverLog.Entry.copies`),
+    /// even with the source closed since, so no second card appears.
     /// - Returns: that handover's destination, or `nil` when no handover of `source` stopped that way.
     public func restartStoppedHandover(source: String) throws -> String? {
         try ensureWritable()
@@ -845,7 +883,10 @@ extension ProfileManager {
                 Log.error("handover", "Couldn't put back auto-continue in window \(source): \(error.localizedDescription)")
             }
         }
-        try log.remove(entry)
+        var restarted = entry
+        restarted.state = HandoverLog.restarted
+        restarted.finishedAt = Date()
+        try log.save(restarted)
         Log.notice("handover", "Starting over the handover from window \(source) that stopped before its destination was ready")
         return entry.destination
     }
@@ -970,7 +1011,13 @@ extension ProfileManager {
         }
         result.state = .resetFirst
         // The copies already written into the destination stay there; nothing else of the plan happened.
-        result.plan.leftovers = result.plan.leftovers.compactMap { if case .copies(let count) = $0 { .copiesStay(count: count) } else { nil } }
+        let copies = result.plan.leftovers.reduce(0) { total, leftover in
+            switch leftover {
+            case .copies(let count), .keepRunningInSource(let count): total + count
+            default: total
+            }
+        }
+        result.plan.leftovers = copies > 0 ? [.copiesStay(count: copies)] : []
         if entry.sourceClosed, activity(of: source) == .closed, let pending, !pending.sourceCut.isEmpty {
             let account = DesktopData.accountID(in: sourceDir) ?? ""
             let autoResume = autoResume
@@ -1000,6 +1047,16 @@ extension ProfileManager {
         result = finished(result, entry: &entry)
         try HandoverLog(paths: paths).save(entry)
         return result
+    }
+
+    /// The copy `copy` (a session id) an earlier handover made in `destination`, while its card and transcript are
+    /// still there.
+    func reusedHandoverCopy(_ copy: String?, in destination: String) -> (card: String, transcript: String)? {
+        guard let copy, ConversationIndex.transcriptFiles(in: paths.claudeProjectsDir)[copy.lowercased()] != nil else { return nil }
+        let name = "local_" + copy
+        guard cardFolders(in: dataDir(of: destination)).contains(where: { FileManager.default.fileExists(atPath: $0.appending(path: name + ".json").path) })
+        else { return nil }
+        return (name, copy)
     }
 
     /// A copy of a session still open in `source`, as `continueAll` makes one, with a card of its own in the
@@ -1157,7 +1214,8 @@ public struct HandoverSummary: Encodable, Equatable {
                 card: $0.card, session: $0.transcript, title: $0.title, folders: $0.folders, resumes: $0.cut && !later.contains($0.card),
                 asCopy: $0.asCopy)
         }
-        leftovers = plan.leftovers.compactMap { HandoverText.clause($0, source: source, destination: destination) }
+        let at = plan.resetsAt.map { LimitText.time($0) }
+        leftovers = plan.leftovers.compactMap { HandoverText.clause($0, source: source, destination: destination, at: at) }
         if plan.picksUpItself { state = HandoverResult.State.picksUpItself.rawValue }
     }
 

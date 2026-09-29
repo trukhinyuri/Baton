@@ -223,7 +223,9 @@ struct HandoverPlanTests {
         #expect(plan.destination == "main")
         #expect(scene.session(plan, S.a)?.asCopy == true && scene.session(plan, S.a)?.cut == true)
         #expect(scene.session(plan, S.b)?.asCopy == true && scene.session(plan, S.b)?.cut == false, "live, so a copy, though nothing is armed")
-        #expect(plan.leftovers.contains(.copies(count: 2)))
+        #expect(plan.leftovers.contains(.copies(count: 1)), "the live-only one continues as a copy")
+        #expect(plan.leftovers.contains(.keepRunningInSource(count: 1)), "the armed one keeps running in WORK")
+        #expect(plan.resumeInSource.map(\.transcript) == [S.a], "its copy isn't to resume")
         #expect(plan.sourceActivity == .busy(live: 2))
     }
 
@@ -496,10 +498,79 @@ struct HandoverRunTests {
         #expect(HandoverLog(paths: scene.box.paths).entries().last?.state == "cancelled")
     }
 
-    @Test func openSourceIsQuitOnceNothingLiveThenPendingApplied() async throws {
+    @Test func liveArmedSessionKeepsRunningInTheSourceAndItsCopyWaits() async throws {
         let scene = try S()
         try scene.session(S.a, title: "Fix CI", extra: #","remoteControlSpawn":{"folder":"/elsewhere"},"bridgeSessionIds":["x"]"#)
         try scene.armed([S.a])
+        scene.world.start("work")
+        scene.world.work(S.a, in: "work")
+
+        let result = try await scene.manager.handOver(try scene.plan(), dwell: 0.3, lastWait: 0.3)
+
+        #expect(result.state == .done && !result.sourceClosed)
+        #expect(result.plan.leftovers.contains(.keepRunningInSource(count: 1)))
+        #expect(!result.plan.leftovers.contains { if case .copies = $0 { true } else { false } }, "no copy continues")
+        let at = LimitText.time(scene.reset)
+        #expect(result.line.contains("1 keeps running in WORK and continues there \(at); its copy is in (main)"), "\(result.line)")
+        let copy = try #require(
+            try FileManager.default.contentsOfDirectory(atPath: scene.mainPair.path).first { $0 != S.card(S.a) + ".json" && $0.hasPrefix("local_") })
+        let card = try #require(ConversationIndex.readCard(scene.mainPair.appending(path: copy)))
+        #expect(card["remoteControlSpawn"] == nil && card["bridgeSessionIds"] == nil, "a copy never carries Remote Control's keys")
+        #expect(card["title"] as? String == "Fix CI · from WORK", "its history is in (main)")
+        let copyID = try #require(card["cliSessionId"] as? String)
+        #expect(result.resumed.isEmpty && scene.world.links.isEmpty, "neither the copy nor the original is shown in (main)")
+        #expect(scene.entry(copyID, in: "main") == nil, "the copy isn't seeded")
+        #expect(scene.entry(S.a, in: "work")?.optedIn == true, "WORK continues it at its reset")
+        #expect(scene.manager.autoResume.pending().isEmpty, "and its entry isn't turned off when WORK closes")
+    }
+
+    /// No copy of a session still running in the source with its auto-continue on is ever seeded or shown, whether
+    /// the destination opens at once or after a wait.
+    @Test(arguments: [false, true]) func copyOfLiveArmedSessionIsNeverSeeded(busyDestination: Bool) async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Running")
+        try scene.session(S.b, title: "Armed, closed")
+        try scene.session(S.c, title: "Running, not armed")
+        try scene.limitHit(S.c)
+        try scene.armed([S.a, S.b])
+        scene.world.start("work")
+        scene.world.work(S.a, in: "work")
+        scene.world.work(S.c, in: "work")
+        if busyDestination {
+            scene.world.start("main")
+            scene.world.work(S.d, in: "main")
+        }
+
+        var result = try await scene.manager.handOver(try scene.plan(), dwell: 0.3, lastWait: 0.3)
+        if busyDestination {
+            #expect(result.state == .waiting)
+            scene.world.stopWork(in: "main")
+            result = try #require(try await scene.manager.finishWaitingHandover(source: "work", poll: 0.1, dwell: 0.3, lastWait: 0.3))
+        }
+
+        #expect(result.state == .done)
+        let copies = scene.manager.cardsBySession(in: scene.box.main).filter { $0.key != S.d }
+        let copyOfA = try #require(
+            copies.keys.first { key in
+                (ConversationIndex.readCard(scene.mainPair.appending(path: copies[key]! + ".json"))?["title"] as? String) == "Running · from WORK"
+            })
+        let copyOfC = try #require(
+            copies.keys.first { key in
+                (ConversationIndex.readCard(scene.mainPair.appending(path: copies[key]! + ".json"))?["title"] as? String)
+                    == "Running, not armed · from WORK"
+            })
+        #expect(scene.entry(copyOfA, in: "main") == nil, "the copy of the running armed session isn't seeded")
+        #expect(!scene.world.links.contains { $0.hasSuffix(copyOfA) } && !result.resumed.contains(copyOfA))
+        #expect(result.resumed.contains(copyOfC), "the copy of a running session nothing continues in WORK resumes")
+        #expect(!result.resumed.contains(S.b) && scene.entry(S.b, in: "main") == nil, "WORK continues the armed one at its reset")
+        #expect(scene.entry(S.a, in: "work")?.optedIn == true && scene.entry(S.b, in: "work")?.optedIn == true)
+        #expect(result.plan.leftovers.contains(.keepRunningInSource(count: 1)) && result.plan.leftovers.contains(.copies(count: 1)))
+    }
+
+    @Test func openSourceIsQuitOnceNothingLiveThenPendingApplied() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.limitHit(S.a)
         scene.world.start("work")
         scene.world.work(S.a, in: "work")
 
@@ -510,13 +581,8 @@ struct HandoverRunTests {
         #expect(result.line.contains("WORK is at its limit until") && !result.line.contains("was closed"))
         let copy = try #require(
             try FileManager.default.contentsOfDirectory(atPath: scene.mainPair.path).first { $0 != S.card(S.a) + ".json" && $0.hasPrefix("local_") })
-        let card = try #require(ConversationIndex.readCard(scene.mainPair.appending(path: copy)))
-        #expect(card["remoteControlSpawn"] == nil && card["bridgeSessionIds"] == nil, "a copy never carries Remote Control's keys")
-        #expect(card["title"] as? String == "Fix CI · from WORK")
-        let copyID = try #require(card["cliSessionId"] as? String)
+        let copyID = try #require(ConversationIndex.readCard(scene.mainPair.appending(path: copy))?["cliSessionId"] as? String)
         #expect(copyID != S.a && result.resumed == [copyID], "the copy resumes, not the session still open in WORK")
-        #expect(scene.entry(S.a, in: "work")?.optedIn == true, "left on while WORK is open")
-        #expect(scene.manager.autoResume.pending().map(\.entry) == [S.card(S.a)])
 
         #expect(HandoverLog(paths: scene.box.paths).unfinished(source: "work").count == 1, "the source still has to be closed")
         let world = scene.world
@@ -527,7 +593,6 @@ struct HandoverRunTests {
         let closed = try await scene.manager.watchHandoverSource("work", poll: 0.1)
 
         #expect(closed && scene.world.events.contains("quit work"))
-        #expect(scene.entry(S.a, in: "work")?.optedIn == false, "turned off once WORK closed")
         #expect(HandoverLog(paths: scene.box.paths).entries().last?.sourceClosed == true)
         #expect(HandoverLog(paths: scene.box.paths).unfinished(source: "work").isEmpty)
     }
@@ -618,13 +683,44 @@ struct HandoverRunTests {
 
         #expect(try scene.manager.restartStoppedHandover(source: "work") == "main")
 
-        #expect(log.entries().isEmpty)
+        #expect(log.entries().map(\.state) == ["restarted"] && log.unfinished(source: "work").isEmpty)
         #expect(scene.entry(S.a, in: "work")?.optedIn == true, "its turn-off is put back, so it is cut again")
         let plan = try scene.plan()
         #expect(plan.cut.map(\.transcript) == [S.a])
         let result = try await scene.manager.handOver(plan, dwell: 0.3, lastWait: 0.3)
         #expect(result.state == .done && result.resumed == [S.a])
         #expect(try scene.manager.restartStoppedHandover(source: "work") == nil)
+    }
+
+    @Test func handoverStoppedAfterItsCopiesUsesThemAgain() async throws {
+        let scene = try S()
+        try scene.session(S.a, title: "Fix CI")
+        try scene.limitHit(S.a)
+        try scene.armed([])
+        scene.world.start("work")
+        scene.world.work(S.a, in: "work")
+        let log = HandoverLog(paths: scene.box.paths)
+        // A handover that made its copy while WORK was busy, then stopped.
+        let copy = try scene.manager.makeHandoverCopy(try #require(scene.session(try scene.plan(), S.a)), from: "work", into: "main")
+        let started = Date(timeIntervalSince1970: (scene.now.timeIntervalSince1970 - 30).rounded(.down))
+        try log.save(
+            HandoverLog.Entry(
+                source: "work", resetsAt: scene.reset, destination: "main", startedAt: started, state: "starting", sessions: 1,
+                cards: [S.card(S.a)], copies: [S.card(S.a): copy.transcript]))
+        let before = scene.manager.cardsBySession(in: scene.box.main)
+        #expect(before.count == 1 && before[copy.transcript] == copy.card)
+        // WORK finished its work meanwhile and was closed, so the session isn't live any more.
+        scene.world.close("work")
+
+        #expect(try scene.manager.restartStoppedHandover(source: "work") == "main")
+        let result = try await scene.manager.handOver(try scene.plan(to: "main"), dwell: 0.3, lastWait: 0.3)
+
+        #expect(result.state == .done && result.resumed == [copy.transcript], "the copy made before the stop resumes")
+        #expect(
+            scene.manager.cardsBySession(in: scene.box.main).filter { $0.key != S.a } == before,
+            "one copy in (main), the one made before the stop; the original's card is only shared there")
+        #expect(!scene.world.links.contains { $0.hasSuffix(S.a) })
+        #expect(log.entries().last?.copies == [S.card(S.a): copy.transcript])
     }
 
     @Test func sessionThatContinuedMeanwhileIsNotResumedAgain() async throws {
@@ -711,6 +807,19 @@ struct HandoverTextTests {
         #expect(
             line(result(.failed, failure: "The app couldn't start."))
                 == "ROBIN is at its limit until 19:10 and was closed. PAY didn't open: The app couldn't start. Your sessions are there when you open it.")
+    }
+
+    @Test func sessionsKeptRunningInTheSourceNameTheReset() {
+        #expect(
+            line(result(.done, leftovers: [.keepRunningInSource(count: 2)], resumed: 3, closed: false))
+                == "ROBIN is at its limit until 19:10. Your work continues in PAY — 3 sessions resumed; "
+                + "2 keep running in ROBIN and continue there at 19:10; their copies are in PAY.")
+        #expect(
+            HandoverText.clause(.keepRunningInSource(count: 1), source: "ROBIN", destination: "PAY", at: "at 19:10")
+                == "1 keeps running in ROBIN and continues there at 19:10; its copy is in PAY")
+        #expect(
+            HandoverText.clause(.keepRunningInSource(count: 1), source: "ROBIN", destination: "PAY")
+                == "1 keeps running in ROBIN and continues there when its limit resets; its copy is in PAY")
     }
 
     @Test func everyClause() {
