@@ -151,6 +151,16 @@ public struct SyncReport: Equatable, Sendable {
 ///    waiting for a file lock, doing I/O or calling out. Across threads of one process the file locks serialize too.
 ///    The one exception is `LimitTracker`'s lock: it is held while reading and writing limit-sightings.json under that
 ///    file's lock and while listing transcripts, and nothing else is taken under it.
+/// How `ProfileManager.open` waits for a copy started without its profile's data to go (`removeStrays`), in seconds.
+struct StrayTiming: Sendable {
+    /// How long a stray gets to quit before one without Claude Code work is force-quit.
+    var grace = 10.0
+    /// How often a stray with Claude Code work is asked again.
+    var every = 5.0
+    /// How often Baton looks whether it is gone.
+    var tick = 0.2
+}
+
 public final class ProfileManager: @unchecked Sendable {
     public let paths: Paths
     public let registry: ProfileRegistry
@@ -487,6 +497,16 @@ public final class ProfileManager: @unchecked Sendable {
     var liveSessionIDs: (@Sendable () -> Set<String>)?
     /// Asks one running copy to quit, as `terminate()` does; tests replace it, since their copies have no process.
     var quitRequester: (@Sendable (RunningClaude) -> Void)?
+    /// Force-quits one running copy, as `forceTerminate()` does; tests replace it, since their copies have no process.
+    var forceQuitter: (@Sendable (RunningClaude) -> Void)?
+    /// How long a stray gets to quit before it may be forced, how often one with Claude Code work is asked again, and
+    /// how often Baton looks whether it is gone; tests shorten them.
+    var strayTiming = StrayTiming()
+    /// Also told every line `removeStrays` logs; tests read them there, since the log is shared.
+    var strayNoted: (@Sendable (String) -> Void)?
+    /// Told the one line to show while a profile waits for a Claude started from its Dock icon to finish its work
+    /// (`strayLine`); the app shows it in its window and the CLI prints it.
+    public var onStrayWait: (@Sendable (_ id: String, _ line: String) -> Void)?
     /// Whether an app is Claude as Anthropic signs it (`ClaudeSource.isSignedByAnthropic`); tests replace it, since a
     /// sandbox's Claude.app isn't signed.
     var signatureCheck: (@Sendable (URL) -> Bool)?
@@ -529,12 +549,9 @@ public final class ProfileManager: @unchecked Sendable {
         let running = runningClaudes()
         // A copy started without the profile's data shows the main account, next to the main app on the same data.
         // A recently opened window may already have restored active work. Never force-quit it just because it is new.
-        let strays = running.filter { $0.isStartedWithoutDataDir(engine: engine) }.compactMap(\.app)
-        if !strays.isEmpty {
-            try await quit(strays, waiting: 10, force: false)
-            guard strays.allSatisfy(\.isTerminated) else { throw ProfileError.windowStillRunning(profile.label) }
-        }
-        if let window = running.first(where: { window(of: profile.id, is: $0) }) {
+        let strays = running.filter { $0.isStartedWithoutDataDir(engine: engine) }
+        if !strays.isEmpty { try await removeStrays(strays, id: profile.id, label: profile.label) }
+        if let window = runningClaudes().first(where: { window(of: profile.id, is: $0) }) {
             noteOpened(profile.id, warning: nil)
             return try await bringForward(window, app: engine, links: links, label: profile.label)
         }
@@ -588,6 +605,69 @@ public final class ProfileManager: @unchecked Sendable {
             await self.waitUntilListed { self.runningClaudes().contains { self.window(of: profile.id, is: $0) } }
             openLock.release()
         }
+    }
+
+    /// The line shown while `label`'s window waits for a Claude started from its Dock icon to finish its work.
+    public static func strayLine(_ label: String) -> String {
+        "\(label) opens when the Claude started from its Dock icon finishes its work."
+    }
+
+    /// Removes copies of the profile's app started without its data (from its Dock icon, or by macOS at login), which
+    /// show the main account on main's data. Each is asked to quit. One still running after `strayTiming.grace` with no
+    /// Claude Code process under it is force-quit; one with Claude Code work is never forced: it is asked again every
+    /// `strayTiming.every` until it is gone, and only then does the profile open. Every decision is logged.
+    private func removeStrays(_ strays: [RunningClaude], id: String, label: String) async throws {
+        let started = Date()
+        let isRunning = { (stray: RunningClaude) -> Bool in
+            if let app = stray.app, app.isTerminated { return false }
+            guard let pid = stray.pid else { return false }
+            return self.runningClaudes().contains { $0.pid == pid && $0.app?.isTerminated != true }
+        }
+        let ask = { (stray: RunningClaude) in if let quitRequester = self.quitRequester { quitRequester(stray) } else { stray.app?.terminate() } }
+        let name = { (stray: RunningClaude) in "stray \(stray.pid.map(String.init) ?? "?")" }
+        for stray in strays {
+            ask(stray)
+            noteStray("\(name(stray)) of \(label) asked to quit: started from its Dock icon without the profile's data")
+        }
+        let ticks = { (seconds: Double) in max(1, Int((seconds / self.strayTiming.tick).rounded())) }
+        for _ in 0..<ticks(strayTiming.grace) where strays.contains(where: isRunning) {
+            try await Task.sleep(for: .seconds(strayTiming.tick))
+        }
+        var kept: [RunningClaude] = []
+        for stray in strays where isRunning(stray) {
+            let work = claudeCodeCount(under: stray)
+            if work == 0 {
+                if let forceQuitter { forceQuitter(stray) } else { stray.app?.forceTerminate() }
+                noteStray("\(name(stray)) force-quit after \(Int(strayTiming.grace)) s: no Claude Code work")
+            } else {
+                kept.append(stray)
+                noteStray("\(name(stray)) kept: \(work) Claude Code process\(work == 1 ? "" : "es") under it")
+            }
+        }
+        guard !kept.isEmpty else { return }
+        onStrayWait?(id, Self.strayLine(label))
+        var sinceAsked = 0.0
+        while kept.contains(where: isRunning) {
+            try await Task.sleep(for: .seconds(strayTiming.tick))
+            sinceAsked += strayTiming.tick
+            if sinceAsked >= strayTiming.every {
+                sinceAsked = 0
+                kept.filter(isRunning).forEach(ask)
+            }
+        }
+        for stray in kept { noteStray("\(name(stray)) gone after \(Int(Date().timeIntervalSince(started).rounded())) s") }
+    }
+
+    private func noteStray(_ message: String) {
+        Log.notice("open", message)
+        strayNoted?(message)
+    }
+
+    /// Claude Code processes that descend from `copy`'s process.
+    private func claudeCodeCount(under copy: RunningClaude) -> Int {
+        guard let pid = copy.pid else { return 0 }
+        let tree = processTree?() ?? .current
+        return tree.claudes.filter { tree.descends($0, from: [pid]) }.count
     }
 
     /// Waits until the copy just started shows up among the running apps, as `isRunning` finds it, for at most

@@ -35,6 +35,8 @@ final class AppModel: ObservableObject {
     var notice: String? { notices.current?.text }
     var noticeIsWarning: Bool { notices.current?.isWarning == true }
     private var noticeTask: Task<Void, Never>?
+    /// The line each window waiting for a Dock-started Claude to finish shows, withdrawn once its open ends.
+    private var strayLines: [String: String] = [:]
     /// Brings the Baton window forward; set by the menu bar icon at launch, by the window and by the menu bar's items.
     /// An error while the window is closed (from the menu bar, or from a copy reopened from its own Dock icon) would
     /// otherwise wait unseen until the window next opens.
@@ -103,6 +105,13 @@ final class AppModel: ObservableObject {
             ? nil
             : LegacyMigration.atAppStart(home: home, app: Bundle.main.bundleURL, cli: cliPath, variables: ProcessInfo.processInfo.environment)
         manager = ProfileManager(cliPath: cliPath, readOnly: isDemo || unreachable != nil, misplaced: misplaced)
+        // A profile that waits for a Claude started from its Dock icon to finish its work says so until it opens.
+        manager.onStrayWait = { [weak self] id, line in
+            Task { @MainActor in
+                self?.strayLines[id] = line
+                self?.show(notice: line, isWarning: true)
+            }
+        }
         reload()
         if let unreachable {
             warnAtStartUp(unreachable.replacingOccurrences(of: "Connect it and try again;", with: "Connect it and open Baton again;"))
@@ -553,6 +562,7 @@ final class AppModel: ObservableObject {
                     remember(warning)
                 }
             } catch { show(error) }
+            if let window, let line = strayLines.removeValue(forKey: window) { notices.withdraw(line) }
             operations.finish(operation)
             reload()
             if statusWindow != nil { refreshStatus() }

@@ -143,6 +143,8 @@ case .manager(let sharedLock):
 
 // Run from inside a Baton.app in Downloads or a temporary copy: no profile is added and no launcher points there.
 let manager = ProfileManager(cliPath: cli, misplaced: AppLocation.problem(app: cli, home: home))
+// A profile waiting for a Claude started from its Dock icon to finish its work says so once; Ctrl-C stops waiting.
+manager.onStrayWait = { _, line in print(line) }
 
 // Re-registers the main Claude if a sign-in hand-off was abandoned, and notes a missing or unsigned Claude Desktop, a
 // version outside the tested range and managed policies. Informational only: it never blocks the command that follows.

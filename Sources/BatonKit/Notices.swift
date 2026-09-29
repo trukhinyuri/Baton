@@ -36,6 +36,12 @@ public struct Notices: Equatable, Sendable {
         }
     }
 
+    /// Takes back `text` once what it says is over (a window that waited has opened), warning or not.
+    public mutating func withdraw(_ text: String) {
+        warnings.removeAll { $0 == text }
+        if passing == text { passing = nil }
+    }
+
     /// A notice that is not a warning goes by itself after a while: `text` goes if it is still the one showing.
     public mutating func expire(_ text: String) {
         if passing == text { passing = nil }
