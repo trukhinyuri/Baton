@@ -34,12 +34,18 @@ check "signature verifies (strict, deep)" codesign --verify --strict --deep "$AP
 check "Info.plist has BatonCommit" has_commit
 check "Info.plist has BatonVersion" /usr/libexec/PlistBuddy -c 'Print :BatonVersion' "$PLIST"
 check "Helpers/claude-profiles links to baton, for 1.x scripts" old_cli_links
-check "helper --version runs natively (arm64)" version_matches arm64
-if arch -x86_64 /usr/bin/true 2>/dev/null; then
-    check "helper --version runs under Rosetta (x86_64)" version_matches x86_64
+# Each slice runs where this Mac can run it: an Intel Mac can't run arm64 code at all, so it checks x86_64 only.
+if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" != 1 ]; then
+    check "helper --version runs natively (x86_64)" version_matches x86_64
+    echo "skip  helper --version as arm64: an Intel Mac can't run it; lipo checked the slice is there"
 else
-    echo "FAIL  helper --version under Rosetta: Rosetta is not installed (softwareupdate --install-rosetta)" >&2
-    failed=1
+    check "helper --version runs natively (arm64)" version_matches arm64
+    if arch -x86_64 /usr/bin/true 2>/dev/null; then
+        check "helper --version runs under Rosetta (x86_64)" version_matches x86_64
+    else
+        echo "FAIL  helper --version under Rosetta: Rosetta is not installed (softwareupdate --install-rosetta)" >&2
+        failed=1
+    fi
 fi
 # The release archive, when one was made next to the app.
 if [ -f build/SHA256SUMS.txt ]; then
