@@ -179,6 +179,30 @@ struct SessionSyncAccountTests {
         #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T3"}"#)
     }
 
+    /// The list is saved before any copy loses a grant, so a first run that stops partway doesn't lose track of a grant
+    /// it already took out of one account.
+    @Test func aFirstRunThatStopsPartwayKeepsTheList() throws {
+        let grants =
+            #""cuAllowedApps":[{"bundleId":"com.apple.Terminal","displayName":"Terminal","grantedAt":1790000000000,"tier":"full"}],"sessionPermissionUpdates":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"git push:*"}]}]"#
+        let box = try Sandbox()
+        let a = try box.pair(box.main, account: Sandbox.accountA)
+        let b = try box.pair(box.work, account: Sandbox.accountB)
+        try box.write(
+            #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"T"}"#, to: a.appending(path: "local_1.json"),
+            modified: Date().addingTimeInterval(-3_600))
+        try box.write(#"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)",\#(grants),"title":"T2"}"#, to: b.appending(path: "local_1.json"))
+        // WORK's session folder can't be written, so the run stops once MAIN's copy has lost the grants.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: b.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: b.path) }
+        #expect(throws: (any Error).self) { try box.sync() }
+        #expect(box.read(a.appending(path: "local_1.json"))?.contains("git push") == false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: b.path)
+
+        _ = try box.sync()
+
+        #expect(box.read(b.appending(path: "local_1.json")) == #"{"sessionId":"local_1","cliSessionId":"\#(Sandbox.cli)","title":"T2"}"#)
+    }
+
     /// Values Claude writes into every card allow nothing and are no sign of a copy from another account; a
     /// permission mode two windows keep by the opt-in isn't either.
     @Test func defaultsAndKeptModesAreNotTakenOut() throws {

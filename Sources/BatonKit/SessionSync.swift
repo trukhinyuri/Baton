@@ -227,7 +227,7 @@ public struct SessionSync: Sendable {
         // Grants and rules that copies by older releases carried into other accounts. Looked for once, in the first
         // run of a release that keeps them apart; each is then taken out of every copy of its card.
         let leakedFile = paths.stateDir.appending(path: "cross-account-grants.json")
-        let savedLeaks = LeakedGrants.load(from: leakedFile)
+        var savedLeaks = LeakedGrants.load(from: leakedFile)
         var leaks = savedLeaks ?? LeakedGrants()
         if savedLeaks == nil {
             for (name, folders) in holders where !accountBound.contains(name) {
@@ -240,6 +240,12 @@ public struct SessionSync: Sendable {
                 }
                 let shared = accounts.filter { $0.value.count > 1 }.keys
                 if !shared.isEmpty { leaks.cards[name] = shared.sorted() }
+            }
+            // Saved before any copy loses a grant: a run that stopped partway would look again and no longer find a
+            // grant it already took out of one of the two accounts.
+            if !dryRun {
+                try leaks.save(to: leakedFile)
+                savedLeaks = leaks
             }
         }
         var live: Set<String>?
