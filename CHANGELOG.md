@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.0 — unreleased
+## 1.0.0-rc.1 — 2026-09-29
+
+A release candidate, not notarized yet: open it once with System Settings → Privacy & Security → Open Anyway, or build it with `make install`. The signed 1.0.0 and the Homebrew cask follow.
 
 **Baton takes the track.** Claude Profiles is now Baton: same app, same windows, a name that keeps "Claude", Anthropic's trademark, out of the product's own name. Your profiles and sessions carry over; what changes for you is listed under "Upgrading from Claude Profiles" just below.
 
@@ -15,7 +17,7 @@ Baton now covers local work only: local Claude Code sessions and Cowork tasks fo
 - The command is now `baton`, and `baton pass` works too. Homebrew links it; a link you made yourself to the old `claude-profiles` stops working once the old app is gone: `ln -sf ~/Applications/Baton/Baton.app/Contents/Helpers/baton /usr/local/bin/baton`. Scripts that still call `claude-profiles` can link `Contents/Helpers/claude-profiles`, which 1.x keeps
 - Installed Claude Profiles from the ZIP? Quit it and move `Claude Profiles.app` to the Trash. If it was inside `~/Applications/Claude Profiles`, put `Baton.app` in `/Applications` (or run `make install`); otherwise put it where the old app was. If Claude Profiles is in your Dock, remove it and add Baton. If Claude Profiles opens at login, replace it with Baton in System Settings → General → Login Items
 - An older copy that still starts (from a Login Item, the ZIP or the Trash) is asked to quit when Baton starts, instead of Baton handing over to it
-- The app keeps its bundle id, `io.github.trukhinyuri.claudeprofiles`, so macOS keeps treating it as the same app. The Homebrew cask is `baton`; if you had the `claude-profiles` cask, `brew update && brew upgrade` moves you to it (the tap's `cask_renames.json`); don't install `baton` next to it
+- The app keeps its bundle id, `io.github.trukhinyuri.claudeprofiles`, so macOS keeps treating it as the same app. The Homebrew cask is `baton`, from the signed 1.0.0; if you had the `claude-profiles` cask, `brew update && brew upgrade` moves you to it then (the tap's `cask_renames.json`); don't install `baton` next to it
 
 ### Continue work
 

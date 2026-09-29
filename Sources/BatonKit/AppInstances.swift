@@ -44,7 +44,7 @@ public enum AppInstances {
     public struct RunningCopy: Sendable, Equatable {
         public var pid: pid_t
         public var bundle: URL?
-        /// Its `CFBundleShortVersionString`, read from its bundle on disk.
+        /// Its version, read from its bundle on disk (see `version(of:)`).
         public var version: String?
 
         public init(pid: pid_t, bundle: URL?, version: String?) {
@@ -82,26 +82,45 @@ public enum AppInstances {
         }
     }
 
-    /// Compares dotted version numbers part by part, missing parts as 0. A version that isn't numbers, such as `dev`,
-    /// is below none and nothing is below it.
+    /// Compares dotted version numbers part by part, missing parts as 0, then a prerelease suffix as SemVer does:
+    /// `1.0.0-rc.1` is below `1.0.0-rc.2`, which is below `1.0.0`. A version that isn't numbers, such as `dev`, is below
+    /// none and nothing is below it.
     static func isVersion(_ version: String, below other: String) -> Bool {
-        func parts(_ text: String) -> [Int]? {
-            let numbers = text.split(separator: ".").map { Int($0) }
-            return numbers.isEmpty || numbers.contains(nil) ? nil : numbers.compactMap { $0 }
+        func parts(_ text: String) -> (numbers: [Int], prerelease: [Substring]?)? {
+            let dash = text.firstIndex(of: "-")
+            let numbers = text[..<(dash ?? text.endIndex)].split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+            guard !numbers.isEmpty, !numbers.contains(nil) else { return nil }
+            guard let dash else { return (numbers.compactMap { $0 }, nil) }
+            let prerelease = text[text.index(after: dash)...].split(separator: ".", omittingEmptySubsequences: false)
+            return prerelease.contains(where: \.isEmpty) ? nil : (numbers.compactMap { $0 }, prerelease)
         }
         guard let lhs = parts(version), let rhs = parts(other) else { return false }
-        for index in 0..<max(lhs.count, rhs.count) {
-            let (a, b) = (index < lhs.count ? lhs[index] : 0, index < rhs.count ? rhs[index] : 0)
+        for index in 0..<max(lhs.numbers.count, rhs.numbers.count) {
+            let (a, b) = (index < lhs.numbers.count ? lhs.numbers[index] : 0, index < rhs.numbers.count ? rhs.numbers[index] : 0)
             if a != b { return a < b }
         }
-        return false
+        switch (lhs.prerelease, rhs.prerelease) {
+        case (nil, _): return false
+        case (.some, nil): return true
+        case (.some(let a), .some(let b)):
+            for (x, y) in zip(a, b) where x != y {
+                switch (Int(x), Int(y)) {
+                case (let m?, let n?): return m < n
+                case (.some, nil): return true
+                case (nil, .some): return false
+                case (nil, nil): return x < y
+                }
+            }
+            return a.count < b.count
+        }
     }
 
-    /// `CFBundleShortVersionString` of the app at `bundle`, read from disk.
+    /// Baton's version of the app at `bundle`, read from disk: `BatonVersion`, which keeps a suffix such as `-rc.1`,
+    /// or `CFBundleShortVersionString` for a build made before that key existed.
     public static func version(of bundle: URL) -> String? {
         guard let data = try? Data(contentsOf: bundle.appending(path: "Contents/Info.plist")),
             let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         else { return nil }
-        return info["CFBundleShortVersionString"] as? String
+        return info["BatonVersion"] as? String ?? info["CFBundleShortVersionString"] as? String
     }
 }

@@ -21,7 +21,9 @@ public struct BuildInfo: Equatable, Sendable {
                     let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
                 {
                     return BuildInfo(
-                        version: info["CFBundleShortVersionString"] as? String ?? "dev",
+                        // BatonVersion is the full version, with a suffix such as -rc.1; Apple's keys hold only the
+                        // numbers. Builds made before it existed have only CFBundleShortVersionString.
+                        version: info["BatonVersion"] as? String ?? info["CFBundleShortVersionString"] as? String ?? "dev",
                         // Builds made before the rename recorded ClaudeProfilesCommit.
                         commit: info["BatonCommit"] as? String ?? info["ClaudeProfilesCommit"] as? String ?? "dev")
                 }

@@ -20,8 +20,8 @@ old_cli_links() { [ -L "$OLD_CLI" ] && [ "$(readlink "$OLD_CLI")" = baton ]; }
 universal() { [ "$(lipo -archs "$1" 2>/dev/null | tr ' ' '\n' | sort | tr '\n' ' ')" = "arm64 x86_64 " ]; }
 hardened() { codesign -dv "$1" 2>&1 | grep -Eq 'flags=0x[0-9a-f]*\(.*runtime'; }
 has_commit() { commit="$(/usr/libexec/PlistBuddy -c 'Print :BatonCommit' "$PLIST" 2>/dev/null)" && [ -n "$commit" ]; }
-version_matches() { # the helper reports the bundle's version under the named architecture
-    expected="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+version_matches() { # the helper reports the bundle's full version (BatonVersion) under the named architecture
+    expected="$(/usr/libexec/PlistBuddy -c 'Print :BatonVersion' "$PLIST")"
     arch "-$1" "$CLI" --version | grep -q "^$PRODUCT_NAME $expected ("
 }
 
@@ -32,6 +32,7 @@ check "app is signed with the hardened runtime" hardened "$APP"
 check "helper is signed with the hardened runtime" hardened "$CLI"
 check "signature verifies (strict, deep)" codesign --verify --strict --deep "$APP"
 check "Info.plist has BatonCommit" has_commit
+check "Info.plist has BatonVersion" /usr/libexec/PlistBuddy -c 'Print :BatonVersion' "$PLIST"
 check "Helpers/claude-profiles links to baton, for 1.x scripts" old_cli_links
 check "helper --version runs natively (arm64)" version_matches arm64
 if arch -x86_64 /usr/bin/true 2>/dev/null; then
