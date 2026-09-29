@@ -28,6 +28,8 @@ struct ContinueWorkSheet: View {
 
     /// How far back “Continue All” looks for sessions in the selected session's folder.
     static let folderWindow: TimeInterval = 24 * 3600
+    /// The widest a window to continue in is drawn: its usage or its reset fits, and so does the sheet at its narrowest.
+    static let destinationWidth: CGFloat = 560
 
     private var listing: (shown: [Conversation], matching: Int) { ConversationIndex.listed(model.conversations, query: form.search) }
 
@@ -138,7 +140,15 @@ struct ContinueWorkSheet: View {
                         Text("Continue in")
                         Picker("Continue in", selection: $form.destination) {
                             ForEach(destinations) { status in
-                                Text(destinationTitle(status)).tag(status.id)
+                                // One line each however many windows there are; a long one is cut in the middle, and
+                                // its help tag and VoiceOver give it whole.
+                                let title = destinationTitle(status)
+                                Text(title)
+                                    .lineLimit(1).truncationMode(.middle)
+                                    .frame(maxWidth: Self.destinationWidth, alignment: .leading)
+                                    .help(title)
+                                    .accessibilityLabel(title)
+                                    .tag(status.id)
                             }
                         }
                         .pickerStyle(.radioGroup)
